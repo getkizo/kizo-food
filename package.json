@@ -1,0 +1,7 @@
+{
+  "name": "@getkizo/kizo-retail",
+  "version": "0.0.1",
+  "description": "Kizo sector for apparel, accessories, and boutiques",
+  "private": true,
+  "workspaces": ["apps/*", "modules/*", "packages/*", "adapters/*"]
+}
