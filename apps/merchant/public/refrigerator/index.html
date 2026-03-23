@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Refrigerator Log</title>
+  <link rel="stylesheet" href="/refrigerator/css/refrigerator.css?v=1">
+</head>
+<body>
+  <header class="app-header">
+    <h1 id="app-title">Refrigerator Log</h1>
+    <div class="header-actions">
+      <button type="button" id="lang-btn" class="icon-btn" title="Language">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/></svg>
+      </button>
+      <button type="button" id="settings-btn" class="icon-btn" title="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main view -->
+  <main id="main-view">
+    <section id="ingredient-buttons" class="ingredient-grid" aria-label="Ingredients">
+      <!-- Buttons injected by JS -->
+    </section>
+
+    <section id="log-section" class="log-section">
+      <h2 id="log-title" class="log-heading">Log</h2>
+      <table id="log-table" class="log-table">
+        <tbody id="log-body">
+          <!-- Rows injected by JS -->
+        </tbody>
+      </table>
+      <p id="log-empty" class="log-empty" hidden>No entries yet. Tap an ingredient above to record a timestamp.</p>
+    </section>
+  </main>
+
+  <!-- Settings panel (hidden by default) -->
+  <div id="settings-panel" class="settings-panel" hidden>
+    <div class="settings-header">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" id="settings-close-btn" class="icon-btn" title="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <div class="settings-body">
+      <label id="fridge-name-label" class="settings-label">Refrigerator Name</label>
+      <input type="text" id="fridge-name-input" class="settings-input" placeholder="e.g. Proteins, Produce" maxlength="40">
+
+      <label id="ingredients-label" class="settings-label">Ingredients</label>
+      <p id="ingredients-hint" class="settings-hint">Tap a suggestion or type a custom ingredient and press Enter.</p>
+
+      <div id="suggestions-section" class="suggestions-section">
+        <div id="suggestions-grid" class="suggestions-grid">
+          <!-- Suggestion chips injected by JS -->
+        </div>
+      </div>
+
+      <div class="add-ingredient-row">
+        <input type="text" id="add-ingredient-input" class="settings-input" placeholder="Custom ingredient…" maxlength="60">
+        <button type="button" id="add-ingredient-btn" class="btn btn-primary btn-sm">Add</button>
+      </div>
+
+      <div id="active-ingredients" class="active-ingredients">
+        <!-- Active ingredient chips injected by JS -->
+      </div>
+
+      <div class="settings-danger-zone">
+        <button type="button" id="clear-log-btn" class="btn btn-danger btn-sm" style="margin-top:1rem">Clear All Entries</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/refrigerator/js/refrigerator.js?v=1"></script>
+</body>
+</html>

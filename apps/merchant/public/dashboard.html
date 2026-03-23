@@ -1,0 +1,2985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Dashboard - Kizo Register</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1a1a2e">
+
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Merchant">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="/css/styles.css?v=3">
+  <link rel="stylesheet" href="/css/dashboard.css?v=67">
+  <link rel="stylesheet" href="/css/order-entry.css?v=23">
+  <link rel="stylesheet" href="/css/payment-modal.css?v=10">
+
+  <style>
+    /* View Transitions API — smooth tab switching */
+    @view-transition { navigation: auto; }
+
+    /* Connection status banner */
+    #connection-banner {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 9999;
+      padding: 8px 16px;
+      background: #f97316;
+      color: white;
+      font-size: 13px;
+      text-align: center;
+    }
+    #connection-banner.visible { display: block; }
+    #connection-banner.offline { background: #dc2626; }
+
+    /* Push permission prompt */
+    #push-prompt {
+      display: none;
+      position: fixed;
+      bottom: 24px; right: 24px;
+      z-index: 1000;
+      background: #1a1a2e;
+      color: white;
+      padding: 16px 20px;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      max-width: 320px;
+    }
+    #push-prompt.visible { display: block; }
+    #push-prompt p { margin: 0 0 12px; font-size: 14px; }
+    #push-prompt-actions { display: flex; gap: 8px; }
+    #push-prompt-actions button { flex: 1; padding: 8px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    #push-allow { background: #f97316; color: white; }
+    #push-deny { background: rgba(255,255,255,0.1); color: white; }
+  </style>
+</head>
+<body class="dashboard-layout">
+
+  <!-- Sidebar -->
+  <nav id="sidebar" class="sidebar" aria-label="Dashboard navigation">
+    <div class="sidebar-header">
+      <span class="sidebar-logo">Kizo</span>
+    </div>
+    <ul class="sidebar-nav" role="list">
+      <li>
+        <a href="#profile" class="sidebar-link active" data-section="profile">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          Store Profile
+        </a>
+      </li>
+      <li>
+        <a href="#menu" class="sidebar-link" data-section="menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
+          Menu Items
+        </a>
+      </li>
+      <li>
+        <a href="#order" class="sidebar-link" data-section="order">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 13h4"/><circle cx="17" cy="17" r="3" fill="currentColor" stroke="none"/><path d="M16 17h2M17 16v2" stroke="#fff" stroke-width="1.5"/></svg>
+          Order Entry
+        </a>
+      </li>
+      <li>
+        <a href="#modifiers" class="sidebar-link" data-section="modifiers">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
+          Modifiers
+        </a>
+      </li>
+      <li>
+        <a href="#orders" class="sidebar-link" data-section="orders">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+          Orders
+        </a>
+      </li>
+      <li>
+        <a href="#employees" class="sidebar-link" data-section="employees">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          Employees
+        </a>
+      </li>
+      <li>
+        <a href="#timesheet" class="sidebar-link" data-section="timesheet">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Timesheet
+        </a>
+      </li>
+      <li>
+        <a href="#reports" class="sidebar-link" data-section="reports">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          Reports
+        </a>
+      </li>
+      <li>
+        <a href="#backup" class="sidebar-link" data-section="backup">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Backup
+        </a>
+      </li>
+      <li>
+        <a href="#feedback" class="sidebar-link" data-section="feedback">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          Feedback
+        </a>
+      </li>
+      <li>
+        <a href="#reservations" class="sidebar-link" data-section="reservations">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Reservations
+        </a>
+      </li>
+      <li>
+        <a href="#gift-cards" class="sidebar-link" data-section="gift-cards">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="1" y="9" width="22" height="13" rx="2"/><path d="M16 2l-4 7-4-7"/><line x1="12" y1="9" x2="12" y2="22"/></svg>
+          Gift Cards
+        </a>
+      </li>
+      <li>
+        <a href="#maintenance" class="sidebar-link" data-section="maintenance">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+          Maintenance
+        </a>
+      </li>
+      <li>
+        <a href="#health" class="sidebar-link" data-section="health">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Health
+        </a>
+      </li>
+    </ul>
+    <!-- Background sync status indicator -->
+    <div id="sync-indicator" class="sync-indicator" role="status" aria-live="polite" aria-atomic="true" hidden>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      <span id="sync-indicator-text">Syncing…</span>
+    </div>
+    <div class="sidebar-footer">
+      <button id="emp-return-keypad-btn" class="sidebar-link sidebar-return-keypad" type="button" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        Return to Keypad
+      </button>
+      <button id="logout-btn" class="sidebar-link sidebar-logout" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Log out
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <div class="dashboard-main">
+    <header class="dashboard-topbar">
+      <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" type="button"
+              aria-label="Toggle sidebar" aria-expanded="true" aria-controls="sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <h1 id="section-title" class="topbar-title">Store Profile</h1>
+      <div class="topbar-actions" id="topbar-actions">
+        <!-- Employee mode: current employee chip + clock-out button (server/manager only) -->
+        <div id="emp-topbar-chip" class="emp-topbar-chip" hidden>
+          <span id="emp-topbar-name" class="emp-topbar-name"></span>
+          <button type="button" class="btn btn-sm emp-topbar-clockout" id="emp-topbar-clockout-btn"
+                  aria-label="Clock out">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Clock Out
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="dashboard-content" aria-live="polite">
+
+      <!-- ================================================================ -->
+      <!-- STORE PROFILE                                                      -->
+      <!-- ================================================================ -->
+      <section id="section-profile" class="dash-section" aria-label="Store profile">
+
+        <div class="card dash-card">
+          <div class="card-header">
+            <h2 class="card-title">Store Details</h2>
+            <div class="card-header-actions">
+              <button class="btn btn-secondary" id="deploy-btn" type="button">Deploy Update</button>
+              <button class="btn btn-primary" id="save-profile-btn" type="button">Save Changes</button>
+            </div>
+          </div>
+
+          <form id="profile-form" novalidate>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="store-name">Store Name</label>
+                <input type="text" id="store-name" class="input" autocomplete="organization">
+              </div>
+
+              <div class="form-group">
+                <label for="store-phone">Phone Number</label>
+                <input type="tel" id="store-phone" class="input" autocomplete="tel">
+                <small class="helper-text">Used to send or confirm orders</small>
+              </div>
+
+              <div class="form-group">
+                <label for="store-email">Contact Email</label>
+                <input type="email" id="store-email" class="input" autocomplete="email">
+              </div>
+
+              <div class="form-group">
+                <label for="store-website">Website</label>
+                <input type="url" id="store-website" class="input" placeholder="https://" autocomplete="url">
+              </div>
+
+              <div class="form-group">
+                <label for="store-tax-rate">Tax Rate</label>
+                <div class="input-with-suffix">
+                  <input type="number" id="store-tax-rate" class="input" min="0" max="100" step="0.01" placeholder="0.00" autocomplete="off">
+                  <span class="input-suffix">%</span>
+                </div>
+                <small class="helper-text">e.g. 8.75 for 8.75% sales tax</small>
+              </div>
+
+              <!-- ── Payment Integrations ──────────────────────────────── -->
+              <div class="form-group full-width payment-integrations">
+                <label class="payment-integrations-label">Payment Integrations</label>
+
+                <!-- Active provider selector — hidden until at least one provider is configured -->
+                <div class="payment-active-provider" id="payment-active-provider-row" hidden>
+                  <label for="payment-active-provider" class="payment-active-label">Active Pay Button</label>
+                  <select id="payment-active-provider" class="input payment-provider-select">
+                    <option value="">— None (disable Pay button) —</option>
+                    <option value="stax">Stax (Fattmerchant)</option>
+                    <option value="converge">Converge (Elavon)</option>
+                    <option value="finix">Finix</option>
+                  </select>
+                  <small class="helper-text">Which provider powers the 💳 Pay button on orders. Saved with Store Profile.</small>
+                </div>
+
+                <!-- Stax -->
+                <div class="payment-provider-card">
+                  <div class="payment-provider-header">
+                    <span class="payment-provider-name">Stax (Fattmerchant)</span>
+                    <span id="stax-status-badge" class="payment-status-badge badge-inactive">Not configured</span>
+                  </div>
+                  <div class="form-group" style="margin-bottom:0">
+                    <label for="store-stax-token">Web Payments Token</label>
+                    <input type="text" id="store-stax-token" class="input" placeholder="e.g. Your-Cafe-10891e921cda" autocomplete="off" spellcheck="false">
+                    <small class="helper-text">Your public Stax token. Leave blank to disable.</small>
+                  </div>
+                </div>
+
+                <!-- Converge / Elavon -->
+                <div class="payment-provider-card" id="converge-provider-card">
+                  <div class="payment-provider-header">
+                    <span class="payment-provider-name">Converge (Elavon)</span>
+                    <span id="converge-status-badge" class="payment-status-badge badge-inactive">Not configured</span>
+                  </div>
+
+                  <!-- Configured state -->
+                  <div id="converge-configured-view" hidden>
+                    <p class="converge-configured-info">
+                      Account: <strong id="converge-account-display"></strong>
+                      &nbsp;&middot;&nbsp; User: <strong id="converge-user-display"></strong>
+                    </p>
+                    <div class="converge-configured-actions">
+                      <label class="profile-toggle-row" for="store-converge-sandbox">
+                        <input type="checkbox" id="store-converge-sandbox" class="profile-toggle-check">
+                        <span class="profile-toggle-knob" aria-hidden="true"></span>
+                        <span>Use demo/sandbox environment</span>
+                      </label>
+                      <button type="button" class="btn btn-danger btn-sm" id="converge-remove-btn">Remove credentials</button>
+                    </div>
+                  </div>
+
+                  <!-- Setup state -->
+                  <div id="converge-setup-view">
+                    <div class="converge-fields">
+                      <div class="form-group">
+                        <label for="converge-account-id-input">Account ID <code class="label-code">ssl_merchant_id</code></label>
+                        <input type="text" id="converge-account-id-input" class="input" placeholder="e.g. 0022458" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="form-group">
+                        <label for="converge-user-id-input">User ID <code class="label-code">ssl_user_id</code></label>
+                        <input type="text" id="converge-user-id-input" class="input" placeholder="e.g. apiuser" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="form-group converge-pin-group">
+                        <label for="converge-pin-input">PIN <code class="label-code">ssl_pin</code></label>
+                        <input type="password" id="converge-pin-input" class="input" placeholder="Stored encrypted on the appliance" autocomplete="new-password" spellcheck="false">
+                      </div>
+                    </div>
+                    <label class="profile-toggle-row" for="converge-sandbox-input">
+                      <input type="checkbox" id="converge-sandbox-input" class="profile-toggle-check" checked>
+                      <span class="profile-toggle-knob" aria-hidden="true"></span>
+                      <span>Use demo/sandbox environment</span>
+                    </label>
+                    <div class="converge-ip-notice">
+                      <span class="converge-ip-label">Server IP (must be whitelisted):</span>
+                      <span id="converge-server-ip" class="converge-ip-value">Loading…</span>
+                      <button type="button" class="btn-copy-ip" id="converge-copy-ip-btn" title="Copy IP address" hidden>Copy</button>
+                      <a id="converge-whitelist-link" href="#" target="_blank" rel="noopener" class="converge-ip-link">Whitelist →</a>
+                    </div>
+                    <div class="converge-save-row">
+                      <button type="button" class="btn btn-primary btn-sm" id="converge-save-btn">Save Converge credentials</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Finix -->
+                <div class="payment-provider-card" id="finix-provider-card">
+                  <div class="payment-provider-header">
+                    <span class="payment-provider-name">Finix</span>
+                    <span id="finix-status-badge" class="payment-status-badge badge-inactive">Not configured</span>
+                  </div>
+
+                  <!-- Configured state -->
+                  <div id="finix-configured-view" hidden>
+                    <p class="finix-configured-info">
+                      Username: <strong id="finix-username-display"></strong>
+                      &nbsp;&middot;&nbsp; Merchant: <strong id="finix-merchant-display"></strong>
+                    </p>
+                    <div class="finix-configured-actions">
+                      <label class="profile-toggle-row" for="store-finix-sandbox">
+                        <input type="checkbox" id="store-finix-sandbox" class="profile-toggle-check">
+                        <span class="profile-toggle-knob" aria-hidden="true"></span>
+                        <span>Use sandbox/test environment</span>
+                      </label>
+                      <label class="profile-toggle-row" for="store-finix-refund-local">
+                        <input type="checkbox" id="store-finix-refund-local" class="profile-toggle-check" checked>
+                        <span class="profile-toggle-knob" aria-hidden="true"></span>
+                        <span>Accounting-only refunds <small style="opacity:.7">(process reversals in Finix dashboard)</small></span>
+                      </label>
+                      <button type="button" class="btn btn-danger btn-sm" id="finix-remove-btn">Remove credentials</button>
+                    </div>
+                  </div>
+
+                  <!-- Setup state -->
+                  <div id="finix-setup-view">
+                    <div class="finix-fields">
+                      <div class="form-group">
+                        <label for="finix-username-input">API Username <code class="label-code">US…</code></label>
+                        <input type="text" id="finix-username-input" class="input" placeholder="e.g. USsRhsHYZGBPnQw8CByJyEQW" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="form-group">
+                        <label for="finix-app-id-input">Application ID <code class="label-code">AP…</code></label>
+                        <input type="text" id="finix-app-id-input" class="input" placeholder="e.g. APgPDQrLD52TYvqazjHJJchM" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="form-group">
+                        <label for="finix-merchant-id-input">Merchant ID <code class="label-code">MU…</code></label>
+                        <input type="text" id="finix-merchant-id-input" class="input" placeholder="e.g. MUeDVrf2ahuKc9Eg5TeZugvs" autocomplete="off" spellcheck="false">
+                      </div>
+                      <div class="form-group finix-password-group">
+                        <label for="finix-password-input">API Password <code class="label-code">UUID</code></label>
+                        <input type="password" id="finix-password-input" class="input" placeholder="Stored encrypted on the appliance" autocomplete="new-password" spellcheck="false">
+                      </div>
+                    </div>
+                    <label class="profile-toggle-row" for="finix-sandbox-input">
+                      <input type="checkbox" id="finix-sandbox-input" class="profile-toggle-check" checked>
+                      <span class="profile-toggle-knob" aria-hidden="true"></span>
+                      <span>Use sandbox/test environment</span>
+                    </label>
+                    <div class="finix-save-row">
+                      <button type="button" class="btn btn-primary btn-sm" id="finix-save-btn">Save Finix credentials</button>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+              <!-- /Payment Integrations -->
+
+              <!-- ── Terminals ──────────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label class="section-label">Terminals</label>
+                <small class="helper-text" style="display:block;margin-bottom:12px">
+                  PAX payment terminals at this location. Used to record counter payments.
+                </small>
+                <table class="terminals-table">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Nickname</th>
+                      <th>Serial #</th>
+                      <th>Finix Device ID</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="terminals-list">
+                    <tr class="terminals-empty-row"><td colspan="5">No terminals yet — add one below.</td></tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td>
+                        <select id="term-new-model" class="input input-sm">
+                          <option value="pax_a920_pro">Pax A920 Pro</option>
+                          <option value="pax_a800">Pax A800</option>
+                          <option value="pax_d135">Pax D135</option>
+                          <option value="pax_a920_emu" class="term-emu-option" hidden>Pax A920 Pro (Emulator)</option>
+                        </select>
+                      </td>
+                      <td>
+                        <input type="text" id="term-new-nickname" class="input input-sm"
+                          placeholder="e.g. Counter 1" maxlength="64">
+                      </td>
+                      <td id="term-new-serial-cell">
+                        <input type="text" id="term-new-serial" class="input input-sm"
+                          placeholder="Optional serial #" maxlength="64">
+                      </td>
+                      <td id="term-new-device-cell">
+                        <small class="helper-text" id="term-new-device-hint">Auto-resolved from serial #</small>
+                      </td>
+                      <td>
+                        <button type="button" class="btn btn-secondary btn-sm" id="terminal-add-btn">Add</button>
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <!-- /Terminals -->
+
+              <!-- ── Counter App ────────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label class="section-label">Counter App</label>
+                <small class="helper-text" style="display:block;margin-bottom:12px">
+                  Connect the Kizo Counter Android app (Lenovo Tab + PAX D135) to accept counter payments.
+                </small>
+
+                <div class="counter-setup-grid">
+                  <!-- Merchant ID -->
+                  <div class="counter-setup-row">
+                    <label class="counter-setup-label">Merchant ID</label>
+                    <div class="counter-setup-value-row">
+                      <code id="counter-merchant-id" class="counter-setup-code">—</code>
+                      <button type="button" class="btn btn-secondary btn-sm counter-copy-btn"
+                        data-copy-target="counter-merchant-id" title="Copy Merchant ID">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- WebSocket URL -->
+                  <div class="counter-setup-row">
+                    <label class="counter-setup-label">WebSocket URL</label>
+                    <div class="counter-setup-value-row">
+                      <code id="counter-ws-url" class="counter-setup-code counter-setup-code--url">
+                        <span class="counter-ws-url-placeholder">Click "Show" to reveal</span>
+                      </code>
+                      <button type="button" class="btn btn-secondary btn-sm" id="counter-show-url-btn">Show</button>
+                      <button type="button" class="btn btn-secondary btn-sm counter-copy-btn"
+                        data-copy-target="counter-ws-url" title="Copy WebSocket URL" hidden id="counter-copy-url-btn">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Live status -->
+                  <div class="counter-setup-row">
+                    <label class="counter-setup-label">Status</label>
+                    <div class="counter-setup-value-row" id="counter-live-status">
+                      <span class="printer-status-dot" id="counter-app-dot" style="background:var(--clr-neutral-300)"></span>
+                      <span id="counter-app-status-label" style="font-size:13px;color:var(--clr-text-muted)">Not connected</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- /Counter App -->
+
+              <!-- Printer discovery -->
+              <div class="form-group full-width">
+                <div class="printer-discover-row">
+                  <button type="button" class="btn btn-secondary btn-sm" id="scan-printers-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                    Scan for printers
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="diagnose-printer-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                    Diagnose printer
+                  </button>
+                  <span id="scan-printers-status" class="scan-status" hidden></span>
+                </div>
+                <div id="scan-printers-results" class="scan-results" hidden></div>
+                <div id="diagnose-printer-results" class="scan-results" hidden></div>
+              </div>
+
+              <div class="form-group">
+                <div class="printer-label-row">
+                  <label for="store-kitchen-printer-ip">Kitchen Printer IP <span class="printer-status-dot" id="kitchen-printer-status" title="Status unknown"></span></label>
+                </div>
+                <div class="printer-input-row">
+                  <input type="text" id="store-kitchen-printer-ip" class="input" placeholder="e.g. 192.168.1.50" autocomplete="off" spellcheck="false" inputmode="decimal">
+                  <select id="store-kitchen-printer-protocol" class="printer-protocol-select" title="Print protocol">
+                    <option value="star-line">Star Line (TSP700II)</option>
+                    <option value="star-line-tsp100">TSP100 III (TCP)</option>
+                    <option value="star-graphic">Star Graphic — TSP143 III</option>
+                    <option value="webprnt">WebPRNT (HTTP)</option>
+                    <option value="generic-escpos">Generic ESC/POS</option>
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm btn-test-print" data-printer="kitchen" aria-label="Send test print to kitchen printer">Test</button>
+                </div>
+                <small class="helper-text"><strong>Star Graphic</strong> = TSP143 III (raster, recommended) · <strong>WebPRNT</strong> = TSP100 III via HTTP · <strong>Star Line</strong> = TSP700II. Leave blank to disable.</small>
+              </div>
+
+              <div class="form-group">
+                <div class="printer-label-row">
+                  <label for="store-counter-printer-ip">Counter Printer IP <span class="printer-status-dot" id="counter-printer-status" title="Status unknown"></span></label>
+                  <label class="printer-same-toggle">
+                    <input type="checkbox" id="store-counter-printer-same" checked>
+                    <span>Same as Kitchen</span>
+                  </label>
+                </div>
+                <div class="printer-input-row">
+                  <input type="text" id="store-counter-printer-ip" class="input" placeholder="e.g. 192.168.1.51" autocomplete="off" spellcheck="false" inputmode="decimal" disabled>
+                  <select id="store-counter-printer-protocol" class="printer-protocol-select" title="Print protocol" disabled>
+                    <option value="star-line">Star Line (TSP700II)</option>
+                    <option value="star-line-tsp100">TSP100 III (TCP)</option>
+                    <option value="star-graphic">Star Graphic — TSP143 III</option>
+                    <option value="webprnt">WebPRNT (HTTP)</option>
+                    <option value="generic-escpos">Generic ESC/POS</option>
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm btn-test-print" data-printer="counter" aria-label="Send test print to counter printer">Test</button>
+                </div>
+                <small class="helper-text">Prints a packing/serving copy for the server. Defaults to kitchen printer when left blank.</small>
+              </div>
+
+              <div class="form-group">
+                <div class="printer-label-row">
+                  <label for="store-receipt-printer-ip">Receipt Printer IP <span class="printer-status-dot" id="receipt-printer-status" title="Status unknown"></span></label>
+                  <label class="printer-same-toggle">
+                    <input type="checkbox" id="store-receipt-printer-same" checked>
+                    <span>Same as Kitchen</span>
+                  </label>
+                </div>
+                <div class="printer-input-row">
+                  <input type="text" id="store-receipt-printer-ip" class="input" placeholder="e.g. 192.168.1.52" autocomplete="off" spellcheck="false" inputmode="decimal" disabled>
+                  <select id="store-receipt-printer-protocol" class="printer-protocol-select" title="Print protocol" disabled>
+                    <option value="star-line">Star Line (TSP700II)</option>
+                    <option value="star-line-tsp100">TSP100 III (TCP)</option>
+                    <option value="star-graphic">Star Graphic — TSP143 III</option>
+                    <option value="webprnt">WebPRNT (HTTP)</option>
+                    <option value="generic-escpos">Generic ESC/POS</option>
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm btn-test-print" data-printer="receipt" aria-label="Send test print to receipt printer">Test</button>
+                </div>
+                <small class="helper-text">Prints the customer receipt after payment. Defaults to kitchen printer when left blank.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label for="store-receipt-style">Ticket Style</label>
+                <select id="store-receipt-style" class="select">
+                  <option value="classic">Classic (Monospace)</option>
+                  <option value="html">Beautiful (HTML)</option>
+                </select>
+                <small class="helper-text">HTML style renders tickets with proportional fonts and elegant typography via Puppeteer. Requires Star Graphic or WebPRNT protocol.</small>
+              </div>
+
+              <!-- ── Server ────────────────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label class="section-label">Server</label>
+                <div id="server-local-ips" class="server-ip-list" aria-label="Server local IP addresses">
+                  <span class="helper-text">Loading…</span>
+                </div>
+                <small class="helper-text">Local network address — click to copy for SSH access.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label>Suggested Tips</label>
+                <div class="tip-selector" role="group" aria-label="Suggested tip percentages">
+                  <button type="button" class="tip-option-btn" data-tip="10" aria-pressed="false">10%</button>
+                  <button type="button" class="tip-option-btn" data-tip="15" aria-pressed="true">15%</button>
+                  <button type="button" class="tip-option-btn" data-tip="18" aria-pressed="false">18%</button>
+                  <button type="button" class="tip-option-btn" data-tip="20" aria-pressed="true">20%</button>
+                  <button type="button" class="tip-option-btn" data-tip="25" aria-pressed="true">25%</button>
+                </div>
+                <small class="helper-text">Select 2 to 4 tip percentages to offer customers.</small>
+              </div>
+
+              <!-- ── Tip on Terminal ──────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label>Tip on Terminal</label>
+                <label class="profile-toggle-row" for="store-tip-on-terminal">
+                  <input type="checkbox" id="store-tip-on-terminal" class="profile-toggle-check">
+                  <span class="profile-toggle-knob" aria-hidden="true"></span>
+                  <span>Let customers add tip directly on the PAX A920 terminal</span>
+                </label>
+                <div id="tip-on-terminal-pcts" style="margin-top:0.75rem;display:none">
+                  <label style="font-size:0.85rem;color:var(--color-gray-600);margin-bottom:0.5rem;display:block">
+                    Terminal tip options
+                  </label>
+                  <div class="tip-selector" role="group" aria-label="Terminal tip percentages">
+                    <button type="button" class="tip-option-btn terminal-tip-btn" data-tip="10" aria-pressed="false">10%</button>
+                    <button type="button" class="tip-option-btn terminal-tip-btn" data-tip="15" aria-pressed="true">15%</button>
+                    <button type="button" class="tip-option-btn terminal-tip-btn" data-tip="18" aria-pressed="false">18%</button>
+                    <button type="button" class="tip-option-btn terminal-tip-btn" data-tip="20" aria-pressed="true">20%</button>
+                    <button type="button" class="tip-option-btn terminal-tip-btn" data-tip="25" aria-pressed="true">25%</button>
+                  </div>
+                  <small class="helper-text">Select 2 to 4 tip percentages shown on the terminal screen.</small>
+                </div>
+              </div>
+
+              <!-- ── Discount Presets ────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label>Discount Presets</label>
+                <table class="discount-table" id="discount-levels-table">
+                  <thead>
+                    <tr>
+                      <th>Label</th>
+                      <th>Value</th>
+                      <th>Type</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="discount-levels-list">
+                    <!-- rows injected by JS -->
+                  </tbody>
+                  <tfoot>
+                    <tr class="discount-add-row">
+                      <td><input type="text"   id="dl-new-label" class="input discount-add-input" placeholder="Label (e.g. Happy Hour)"></td>
+                      <td><input type="number" id="dl-new-value" class="input discount-add-input" placeholder="0" min="0" step="0.01" inputmode="decimal"></td>
+                      <td>
+                        <select id="dl-new-type" class="input discount-add-input">
+                          <option value="percent">%</option>
+                          <option value="fixed">$</option>
+                        </select>
+                      </td>
+                      <td><button type="button" class="btn btn-sm btn-primary" id="discount-add-btn">Add</button></td>
+                    </tr>
+                  </tfoot>
+                </table>
+                <small class="helper-text">Discounts staff can apply to unpaid orders. % = percentage off subtotal, $ = fixed amount.</small>
+              </div>
+
+              <!-- ── Service Charge Presets ──────────────────────────────── -->
+              <div class="form-group full-width">
+                <label>Service Charge Presets</label>
+                <table class="discount-table" id="service-charge-presets-table">
+                  <thead>
+                    <tr>
+                      <th>Label</th>
+                      <th>Value</th>
+                      <th>Type</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="service-charge-presets-list">
+                    <!-- rows injected by JS -->
+                  </tbody>
+                  <tfoot>
+                    <tr class="discount-add-row">
+                      <td><input type="text"   id="sc-new-label" class="input discount-add-input" placeholder="Label (e.g. Party of 6+)"></td>
+                      <td><input type="number" id="sc-new-value" class="input discount-add-input" placeholder="0" min="0" step="0.01" inputmode="decimal"></td>
+                      <td>
+                        <select id="sc-new-type" class="input discount-add-input">
+                          <option value="percent">%</option>
+                          <option value="fixed">$</option>
+                        </select>
+                      </td>
+                      <td><button type="button" class="btn btn-sm btn-primary" id="service-charge-add-btn">Add</button></td>
+                    </tr>
+                  </tfoot>
+                </table>
+                <small class="helper-text">Taxable surcharges staff can add to dine-in orders. % = percentage of subtotal, $ = fixed amount.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label>Employee Sales Sharing</label>
+                <label class="profile-toggle-row" for="store-show-employee-sales">
+                  <input type="checkbox" id="store-show-employee-sales" class="profile-toggle-check" checked>
+                  <span class="profile-toggle-knob" aria-hidden="true"></span>
+                  <span>Show servers their collected sales and tips when clocking out</span>
+                </label>
+              </div>
+
+              <div class="form-group full-width">
+                <label for="store-pay-period-type">Pay Period</label>
+                <select id="store-pay-period-type" class="input">
+                  <option value="biweekly">Biweekly (every 2 weeks)</option>
+                  <option value="semimonthly">Semimonthly (1–15 and 16–end of month)</option>
+                </select>
+                <div id="pay-period-anchor-row" class="pay-period-anchor-row" style="margin-top:0.5rem">
+                  <label for="store-pay-period-anchor" style="font-size:0.8rem;color:var(--color-gray-500);margin-bottom:0.25rem;display:block">First period start date</label>
+                  <input type="date" id="store-pay-period-anchor" class="input" style="max-width:180px">
+                </div>
+                <small class="helper-text">Used to compute pay periods in shift and tip reports.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label>Break Rule</label>
+                <label class="profile-toggle-row" for="store-break-rule-enabled">
+                  <input type="checkbox" id="store-break-rule-enabled" class="profile-toggle-check">
+                  <span class="profile-toggle-knob" aria-hidden="true"></span>
+                  <span>Auto-deduct unpaid break from shift hours</span>
+                </label>
+                <div id="break-rule-detail" class="break-rule-detail" hidden>
+                  <div class="break-rule-row">
+                    <span>If shift exceeds</span>
+                    <input type="number" id="store-break-threshold" class="input input-inline" min="1" max="24" step="0.5" value="5">
+                    <span>hours, deduct</span>
+                    <input type="number" id="store-break-deduction" class="input input-inline" min="1" max="120" step="1" value="30">
+                    <span>minutes</span>
+                  </div>
+                </div>
+                <small class="helper-text">Automatically deducts an unpaid break when computing shift hours in reports.</small>
+              </div>
+
+              <div class="form-group">
+                <label for="store-prep-time">Kitchen Prep Time (minutes)</label>
+                <input type="number" id="store-prep-time" class="input" min="5" max="120" step="5" placeholder="20">
+                <small class="helper-text">How many minutes before a scheduled pickup time to fire the order to the kitchen. Default: 20 min.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label>Refund Permissions</label>
+                <label class="profile-toggle-row" for="store-staff-can-refund">
+                  <input type="checkbox" id="store-staff-can-refund" class="profile-toggle-check">
+                  <span class="profile-toggle-knob" aria-hidden="true"></span>
+                  <span>Allow staff to record refunds (managers and owners can always refund)</span>
+                </label>
+              </div>
+
+              <div class="form-group">
+                <label for="store-notification-sound">New Order Sound</label>
+                <div class="notification-sound-row">
+                  <select id="store-notification-sound" class="input">
+                    <option value="chime">Chime (default)</option>
+                    <option value="bell">Bell</option>
+                    <option value="double-beep">Double Beep</option>
+                    <option value="ding">Ding</option>
+                  </select>
+                  <button type="button" id="preview-sound-btn" class="btn btn-secondary btn-sm">Preview</button>
+                </div>
+                <small class="helper-text">Sound played when a new online order arrives in the dashboard.</small>
+              </div>
+
+              <!-- ── Email Receipts ──────────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label>Email Receipts</label>
+                <p id="email-receipts-status" class="helper-text" style="margin-bottom:0.5rem"></p>
+                <div class="email-receipts-grid">
+                  <div>
+                    <label for="store-receipt-email-from" style="font-size:0.85rem;color:var(--color-gray-500)">Gmail Address</label>
+                    <input type="email" id="store-receipt-email-from" class="input" placeholder="yourrestaurant@gmail.com" autocomplete="off">
+                  </div>
+                  <div>
+                    <label for="store-receipt-email-password" style="font-size:0.85rem;color:var(--color-gray-500)">App Password <span style="font-weight:400">(leave blank to keep existing)</span></label>
+                    <input type="password" id="store-receipt-email-password" class="input" placeholder="xxxx xxxx xxxx xxxx" autocomplete="new-password">
+                  </div>
+                </div>
+                <small class="helper-text">When a customer provides their email at checkout, a receipt is emailed after payment. Requires a Gmail <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> (16-character code from Google Account → Security → 2-Step Verification → App Passwords). Leave both fields blank to disable.</small>
+              </div>
+
+              <!-- ── Online Reservations ──────────────────────────────────── -->
+              <div class="form-group full-width">
+                <label>Online Reservations</label>
+                <div class="reservation-settings-grid">
+                  <label class="toggle-label">
+                    <input type="checkbox" id="store-reservation-enabled" class="toggle-input">
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    <span>Enable customer-facing reservation form at <code>/reserve</code></span>
+                  </label>
+                  <div class="reservation-fields" id="reservation-fields">
+                    <div class="form-row" style="gap:12px;margin-top:10px">
+                      <div class="form-group" style="flex:1;margin:0">
+                        <label for="store-reservation-slot-minutes" style="font-size:0.85rem;color:var(--color-gray-500)">Slot duration (min)</label>
+                        <input type="number" id="store-reservation-slot-minutes" class="input" min="15" max="480" step="15" value="120">
+                      </div>
+                      <div class="form-group" style="flex:1;margin:0">
+                        <label for="store-reservation-cutoff-minutes" style="font-size:0.85rem;color:var(--color-gray-500)">Cutoff before close (min)</label>
+                        <input type="number" id="store-reservation-cutoff-minutes" class="input" min="0" max="480" step="15" value="75">
+                      </div>
+                      <div class="form-group" style="flex:1;margin:0">
+                        <label for="store-reservation-advance-days" style="font-size:0.85rem;color:var(--color-gray-500)">Advance booking (days)</label>
+                        <input type="number" id="store-reservation-advance-days" class="input" min="1" max="90" value="7">
+                      </div>
+                      <div class="form-group" style="flex:1;margin:0">
+                        <label for="store-reservation-max-party" style="font-size:0.85rem;color:var(--color-gray-500)">"Please call" party size ≥</label>
+                        <input type="number" id="store-reservation-max-party" class="input" min="1" max="100" value="12">
+                      </div>
+                      <div class="form-group" style="flex:1;margin:0">
+                        <label for="store-reservation-start-time" style="font-size:0.85rem;color:var(--color-gray-500)">First bookable slot</label>
+                        <input type="time" id="store-reservation-start-time" class="input">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <small class="helper-text">Customers can book at <code>/reserve</code> or embed it as an iframe. Parties at or above the "please call" size are redirected to call instead of booking online.</small>
+              </div>
+
+              <div class="form-group full-width">
+                <label for="store-address">Address</label>
+                <input type="text" id="store-address" class="input" autocomplete="street-address">
+              </div>
+
+              <div class="form-group full-width">
+                <label for="store-description">Description</label>
+                <textarea id="store-description" class="input textarea" rows="3" placeholder="Tell customers about your restaurant…"></textarea>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <!-- Brand Images -->
+        <div class="card dash-card">
+          <div class="card-header">
+            <h2 class="card-title">Brand Images</h2>
+            <button class="btn btn-primary" id="save-images-btn" type="button">Save Images</button>
+          </div>
+          <div class="brand-images-grid">
+
+            <!-- Logo -->
+            <div class="brand-image-field">
+              <label class="brand-image-label">
+                Logo
+                <span class="label-hint">1024 × 1024 px — square</span>
+              </label>
+              <div class="brand-upload-area brand-upload-logo" id="logo-upload-area"
+                   role="button" tabindex="0" aria-label="Upload store logo">
+                <div id="logo-upload-placeholder" class="photo-upload-placeholder">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  <span>Click or drag to upload</span>
+                  <span class="photo-upload-hint">Square logo, 1024 × 1024</span>
+                </div>
+                <img id="logo-upload-preview" src="" alt="" class="photo-upload-preview" hidden>
+              </div>
+              <input type="file" id="logo-file-input" accept="image/*" class="visually-hidden" tabindex="-1">
+              <div class="photo-action-row">
+                <button type="button" class="photo-remove-btn" id="logo-remove-btn" hidden>Remove logo</button>
+                <button type="button" class="btn-camera" id="logo-camera-btn" data-target-w="1024" data-target-h="1024" aria-label="Take photo with camera for logo" hidden>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Camera
+                </button>
+              </div>
+            </div>
+
+            <!-- Banner -->
+            <div class="brand-image-field">
+              <label class="brand-image-label">
+                Banner
+                <span class="label-hint">1280 × 768 px — wide</span>
+              </label>
+              <div class="brand-upload-area brand-upload-banner" id="banner-upload-area"
+                   role="button" tabindex="0" aria-label="Upload store banner">
+                <div id="banner-upload-placeholder" class="photo-upload-placeholder">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  <span>Click or drag to upload</span>
+                  <span class="photo-upload-hint">Wide banner, 1280 × 768</span>
+                </div>
+                <img id="banner-upload-preview" src="" alt="" class="photo-upload-preview" hidden>
+              </div>
+              <input type="file" id="banner-file-input" accept="image/*" class="visually-hidden" tabindex="-1">
+              <div class="photo-action-row">
+                <button type="button" class="photo-remove-btn" id="banner-remove-btn" hidden>Remove banner</button>
+                <button type="button" class="btn-camera" id="banner-camera-btn" data-target-w="1280" data-target-h="768" aria-label="Take photo with camera for banner" hidden>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Camera
+                </button>
+              </div>
+            </div>
+
+            <!-- Splash (phone only) -->
+            <div class="brand-image-field">
+              <label class="brand-image-label">
+                Splash Screen
+                <span class="label-hint">1080 × 1920 px — portrait · phone only</span>
+              </label>
+              <div class="brand-upload-area brand-upload-splash" id="splash-upload-area"
+                   role="button" tabindex="0" aria-label="Upload phone splash screen">
+                <div id="splash-upload-placeholder" class="photo-upload-placeholder">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+                  <span>Click or drag to upload</span>
+                  <span class="photo-upload-hint">Portrait splash, 1080 × 1920</span>
+                  <span class="photo-upload-hint">Shown on phones only — replaces dish collage</span>
+                </div>
+                <img id="splash-upload-preview" src="" alt="" class="photo-upload-preview" hidden>
+              </div>
+              <input type="file" id="splash-file-input" accept="image/*" class="visually-hidden" tabindex="-1">
+              <div class="photo-action-row">
+                <button type="button" class="photo-remove-btn" id="splash-remove-btn" hidden>Remove splash</button>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Welcome Message -->
+          <div class="form-group" style="margin-top: 1.25rem">
+            <label for="welcome-message-input" class="brand-image-label">
+              Welcome Message
+              <span class="label-hint">Shown once to each customer on their first visit</span>
+            </label>
+            <textarea id="welcome-message-input" class="input textarea" rows="3"
+              placeholder="e.g. Welcome to our restaurant! We're so happy you're here. Check out today's specials."></textarea>
+            <p class="field-hint" style="margin-top:.375rem">Leave blank to show no welcome message.</p>
+          </div>
+
+        </div>
+
+        <div class="card dash-card">
+          <div class="card-header">
+            <h2 class="card-title">Pickup Instructions</h2>
+            <button type="button" id="save-instructions-btn" class="btn btn-primary">Save Instructions</button>
+          </div>
+
+          <form id="instructions-form" novalidate>
+            <div class="form-grid">
+              <div class="form-group full-width">
+                <label for="parking-instructions">Parking Instructions</label>
+                <textarea id="parking-instructions" class="input textarea" rows="2" placeholder="Where can customers park?"></textarea>
+              </div>
+
+              <div class="form-group full-width">
+                <label for="pickup-instructions">Pickup Instructions</label>
+                <textarea id="pickup-instructions" class="input textarea" rows="2" placeholder="How do customers collect their order?"></textarea>
+              </div>
+
+              <div class="form-group full-width">
+                <label for="additional-notes">Additional Notes</label>
+                <textarea id="additional-notes" class="input textarea" rows="3" placeholder="Anything else customers should know?"></textarea>
+              </div>
+            </div>
+          </form>
+        </div>
+
+        <!-- Table Layout -->
+        <div class="card dash-card">
+          <div class="card-header">
+            <h2 class="card-title">Table Layout</h2>
+            <div class="card-header-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="add-room-btn">+ Add Room</button>
+              <button type="button" class="btn btn-primary" id="save-layout-btn">Save Layout</button>
+            </div>
+          </div>
+
+          <!-- Room tabs -->
+          <div class="layout-room-tabs" id="layout-room-tabs" role="tablist" aria-label="Rooms"></div>
+
+          <!-- Table type toolbar -->
+          <div class="layout-toolbar" role="toolbar" aria-label="Add tables">
+            <span class="layout-toolbar-label">Add table:</span>
+            <button type="button" class="layout-table-btn" data-shape="rect2" title="2-person table" aria-label="Add 2-person rectangular table">
+              <span class="layout-table-icon rect2">2</span>
+              <span>2-seat</span>
+            </button>
+            <button type="button" class="layout-table-btn" data-shape="rect4" title="4-person table" aria-label="Add 4-person rectangular table">
+              <span class="layout-table-icon rect4">4</span>
+              <span>4-seat</span>
+            </button>
+            <button type="button" class="layout-table-btn" data-shape="round" title="Round table" aria-label="Add round table">
+              <span class="layout-table-icon round">R</span>
+              <span>Round</span>
+            </button>
+            <div class="layout-toolbar-sep" aria-hidden="true"></div>
+            <button type="button" class="layout-delete-btn" id="layout-delete-selected" aria-label="Delete selected table" hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+              Delete selected
+            </button>
+          </div>
+
+          <!-- Canvas area -->
+          <div class="layout-canvas-wrap">
+            <div class="layout-canvas" id="layout-canvas" role="region" aria-label="Table layout canvas">
+              <!-- Tables rendered here as positioned divs -->
+            </div>
+            <div class="layout-empty" id="layout-empty">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--color-neutral)" stroke-width="1.5" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M7 8V5a2 2 0 014 0v3"/><path d="M13 8V5a2 2 0 014 0v3"/></svg>
+              <p>Click a table type above to add it to this room.</p>
+            </div>
+          </div>
+
+          <!-- Selected table editor -->
+          <div class="layout-table-editor" id="layout-table-editor" hidden>
+            <label for="layout-table-label">Label</label>
+            <input type="text" id="layout-table-label" class="input layout-label-input" maxlength="20" autocomplete="off">
+            <label for="layout-table-seats" style="margin-left:12px">Seats</label>
+            <input type="number" id="layout-table-seats" class="input layout-label-input" min="1" max="99" step="1" style="width:64px">
+            <button type="button" class="btn btn-secondary btn-sm" id="layout-label-apply">Apply</button>
+            <button type="button" class="btn btn-secondary btn-sm layout-rotate-btn" id="layout-rotate-btn" aria-label="Rotate table 90°" title="Rotate 90°">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/></svg>
+              Rotate
+            </button>
+          </div>
+
+          <!-- Table Groups — combinable tables for large parties -->
+          <div class="layout-groups-section">
+            <div class="layout-groups-header">
+              <span class="layout-groups-title">Table Groups</span>
+              <small class="helper-text" style="flex:1;margin-left:8px">Combine adjacent tables for large parties.</small>
+              <button type="button" class="btn btn-secondary btn-sm" id="layout-add-group-btn">+ Add Group</button>
+            </div>
+            <div id="layout-groups-list" class="layout-groups-list">
+              <!-- Groups rendered here by JS -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Store Hours -->
+        <div class="card dash-card" id="hours-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Store Hours</h2>
+              <p class="card-subtitle">Set weekly hours for your dining room and catering service. Multiple slots per day for split hours (e.g. lunch &amp; dinner).</p>
+            </div>
+            <button class="btn btn-primary" id="save-hours-btn" type="button">Save Hours</button>
+          </div>
+
+          <!-- Service type tabs -->
+          <div class="hours-tabs" role="tablist" aria-label="Service type">
+            <button class="hours-tab active" role="tab" aria-selected="true"  data-service="regular"  id="tab-regular"  aria-controls="hours-panel-regular">Dining Room</button>
+            <button class="hours-tab"        role="tab" aria-selected="false" data-service="catering" id="tab-catering" aria-controls="hours-panel-catering">Catering</button>
+          </div>
+
+          <!-- Regular hours panel -->
+          <div class="hours-panel" id="hours-panel-regular" role="tabpanel" aria-labelledby="tab-regular">
+            <div class="hours-days" id="hours-days-regular">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Catering hours panel -->
+          <div class="hours-panel" id="hours-panel-catering" role="tabpanel" aria-labelledby="tab-catering" hidden>
+            <div class="hours-days" id="hours-days-catering">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Scheduled Closures -->
+        <div class="card dash-card" id="closures-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Scheduled Closures</h2>
+              <p class="card-subtitle">Holidays, vacations, or any day you're closed. Applies to both dining and catering.</p>
+            </div>
+            <button class="btn btn-primary" id="add-closure-btn" type="button">+ Add Closure</button>
+          </div>
+
+          <ul class="closures-list" id="closures-list" aria-label="Scheduled closures">
+            <!-- Populated by JS -->
+          </ul>
+
+          <p class="closures-empty" id="closures-empty" hidden>No closures scheduled.</p>
+        </div>
+
+        <!-- Menu Import -->
+        <div class="card dash-card">
+          <div class="card-header">
+            <h2 class="card-title">Menu Import</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="menu-import-provider">POS Provider</label>
+              <select id="menu-import-provider" class="input">
+                <option value="clover">Clover</option>
+                <option value="toast">Toast (coming soon)</option>
+                <option value="square">Square (coming soon)</option>
+              </select>
+              <small class="helper-text">Imports categories, items, and modifier groups from your POS. Existing items are updated; local additions are preserved.</small>
+            </div>
+          </div>
+          <div style="margin-top: 1rem;">
+            <button class="btn btn-primary" id="import-menu-btn" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+              Import Menu
+            </button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- ORDER ENTRY — two-column landscape layout (tablet)               -->
+      <!-- ================================================================ -->
+      <section id="section-order" class="dash-section" aria-label="Order entry" hidden>
+
+        <!-- Top bar: type toggle · room pills · edit state · language — one compact row -->
+        <div class="oe-top-bar">
+          <div class="oe-type-bar" role="group" aria-label="Order type">
+            <button class="oe-type-pill active" data-type="dine_in" aria-pressed="true">Dine-in</button>
+            <button class="oe-type-pill" data-type="pickup" aria-pressed="false">Takeout</button>
+          </div>
+          <div class="oe-room-pills" id="oe-room-pills"></div>
+          <div class="oe-edit-banner" id="oe-edit-banner" hidden>
+            <span class="oe-edit-banner-text">Editing <strong id="oe-edit-order-id"></strong></span>
+            <button type="button" class="oe-edit-cancel-btn" id="oe-edit-cancel-btn">Cancel Edit</button>
+          </div>
+          <div class="oe-lang-bar" role="group" aria-label="Ticket language">
+            <button type="button" class="oe-lang-btn" data-lang="en" aria-pressed="true">EN</button>
+            <button type="button" class="oe-lang-btn" data-lang="es" aria-pressed="false">ES</button>
+          </div>
+        </div>
+
+        <!-- Table grid + action buttons — full-width strip below top bar -->
+        <div class="oe-table-section" id="oe-table-section">
+          <div class="oe-table-grid" id="oe-table-grid"></div>
+          <div class="oe-action-btns">
+            <div class="oe-coursing-row" id="oe-coursing-row">
+              <span class="oe-coursing-label">Course</span>
+              <button type="button" class="toggle-switch" id="oe-coursing-toggle"
+                      role="switch" aria-checked="false" aria-label="Course the meal">
+                <span class="toggle-thumb" aria-hidden="true"></span>
+              </button>
+            </div>
+            <button type="button" class="oe-fire-btn" id="oe-fire-btn" disabled>
+              🔥 Fire to Kitchen
+            </button>
+            <button type="button" class="oe-pay-btn" id="oe-pay-btn" disabled hidden>
+              📞 Pay over the phone
+            </button>
+          </div>
+        </div>
+
+        <!-- Two-column body: left = menu browser, right = current order -->
+        <div class="oe-body">
+
+          <!-- Left column: category tabs + scrollable item grid -->
+          <div class="oe-left-col">
+            <div class="oe-category-tabs" id="oe-category-tabs" role="tablist" aria-label="Menu categories"></div>
+            <div class="oe-items-grid" id="oe-items-grid" role="list" aria-label="Menu items"></div>
+          </div>
+
+          <!-- Right column: order panel -->
+          <div class="oe-right-col">
+            <div class="oe-order-panel">
+
+              <div class="oe-order-header">
+                <h2 class="oe-order-title">Current Order</h2>
+                <button type="button" class="oe-order-clear-btn" id="oe-clear-btn" title="Cancel this order">Cancel Order</button>
+              </div>
+
+              <div class="oe-order-items" id="oe-order-items" aria-label="Order items" aria-live="polite">
+                <div class="oe-order-empty" id="oe-order-empty">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+                  Tap an item to add it
+                </div>
+              </div>
+
+              <div class="oe-order-footer">
+                <div class="oe-footer-field" id="oe-customer-name-row">
+                  <label class="oe-footer-label" id="oe-customer-name-label" for="oe-customer-name">Customer name</label>
+                  <input type="text" class="oe-footer-input" id="oe-customer-name" placeholder="Name…" autocomplete="off">
+                </div>
+                <div class="oe-footer-field">
+                  <label class="oe-footer-label" for="oe-kitchen-note">Kitchen note</label>
+                  <input type="text" class="oe-footer-input" id="oe-kitchen-note" placeholder="Allergy, special request…" autocomplete="off">
+                </div>
+                <div class="oe-footer-field" id="oe-scheduled-row" hidden>
+                  <label class="oe-footer-label" for="oe-scheduled-time">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px;vertical-align:middle;margin-right:3px"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                    Ready by
+                  </label>
+                  <input type="time" class="oe-footer-input" id="oe-scheduled-time" autocomplete="off">
+                </div>
+                <div class="oe-totals">
+                  <div class="oe-total-row">
+                    <span>Subtotal</span>
+                    <span id="oe-subtotal">$0.00</span>
+                  </div>
+                  <div class="oe-total-row" id="oe-tax-row" hidden>
+                    <span>Tax</span>
+                    <span id="oe-tax">$0.00</span>
+                  </div>
+                  <div class="oe-total-row grand">
+                    <span>Total</span>
+                    <span id="oe-total">$0.00</span>
+                  </div>
+                </div>
+              </div>
+
+            </div><!-- /oe-order-panel -->
+          </div><!-- /oe-right-col -->
+
+        </div><!-- /oe-body -->
+
+        <!-- Confirm-cancel dialog — fixed overlay, shown only when needed -->
+        <div class="oe-confirm-overlay" id="oe-confirm-overlay" hidden aria-modal="true" role="alertdialog" aria-labelledby="oe-confirm-title">
+          <div class="oe-confirm-dialog">
+            <p class="oe-confirm-title" id="oe-confirm-title">Cancel this order?</p>
+            <p class="oe-confirm-body">All items will be removed.</p>
+            <div class="oe-confirm-actions">
+              <button type="button" class="btn btn-secondary oe-confirm-btn-cancel" id="oe-confirm-btn-cancel">Keep order</button>
+              <button type="button" class="btn btn-danger oe-confirm-btn-ok" id="oe-confirm-btn-ok">Cancel order</button>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- MENU ITEMS                                                         -->
+      <!-- ================================================================ -->
+      <section id="section-menu" class="dash-section" aria-label="Menu items" hidden>
+
+        <!-- ── Menu browser ──────────────────────────────────────────────── -->
+        <div class="menu-split-left">
+
+          <!-- Toolbar -->
+          <div class="menu-toolbar">
+            <div>
+              <p id="menu-last-synced" class="card-subtitle"></p>
+            </div>
+            <div class="menu-toolbar-actions">
+              <button class="btn btn-secondary" id="new-category-btn" type="button">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New category
+              </button>
+              <button class="btn btn-secondary" id="oos-btn" type="button" aria-haspopup="dialog" hidden>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                Out of stock
+                <span class="oos-badge" id="oos-count" aria-label="items out of stock">0</span>
+              </button>
+              <!-- Voice command button (press V or tap) -->
+              <button class="btn btn-secondary voice-btn" id="voice-btn" type="button"
+                      aria-label="Voice command — say item name then out or back"
+                      aria-pressed="false" title="Voice command (press V)">
+                <svg class="voice-btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+                Voice
+              </button>
+            </div>
+          </div>
+
+          <!-- Loading state -->
+          <div id="menu-loading" class="menu-state" hidden aria-live="polite">
+            <div class="spinner" aria-label="Loading menu…"></div>
+            <p>Loading menu…</p>
+          </div>
+
+          <!-- Empty state -->
+          <div id="menu-empty" class="menu-state" hidden>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-neutral)" stroke-width="1.5" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+            <p>No menu yet. Go to <strong>Store Profile → Menu Import</strong> to import your menu.</p>
+          </div>
+
+          <!-- Menu content -->
+          <div id="menu-content" hidden>
+            <div id="menu-categories" class="menu-categories"></div>
+          </div>
+
+        </div><!-- /menu-split-left -->
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- MODIFIERS                                                          -->
+      <!-- ================================================================ -->
+      <section id="section-modifiers" class="dash-section" aria-label="Modifier groups" hidden>
+
+        <div class="menu-toolbar">
+          <div class="menu-toolbar-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="modifier-new-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              New modifier group
+            </button>
+          </div>
+        </div>
+
+        <div id="modifiers-loading" class="menu-state" hidden>
+          <div class="spinner"></div>
+          <p>Loading modifiers…</p>
+        </div>
+
+        <div id="modifiers-empty" class="menu-state" hidden>
+          <p>No modifier groups yet. Create one or sync your menu from Clover.</p>
+        </div>
+
+        <div id="modifiers-content" hidden>
+          <div id="modifier-groups-list" class="modifier-groups-list"></div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- ORDERS                                                             -->
+      <!-- ================================================================ -->
+      <section id="section-orders" class="dash-section" aria-label="Orders" hidden>
+
+        <!-- Toolbar: date range + sync -->
+        <div class="orders-toolbar">
+          <div class="orders-date-range" role="group" aria-label="Date range">
+            <button type="button" class="date-preset-btn active" data-preset="today">Today</button>
+            <button type="button" class="date-preset-btn" data-preset="yesterday">Yesterday</button>
+            <button type="button" class="date-preset-btn" data-preset="week">Last 7 days</button>
+            <span class="date-range-sep" aria-hidden="true">or</span>
+            <div class="date-range-custom">
+              <label for="orders-from" class="visually-hidden">From</label>
+              <input type="date" id="orders-from" class="input date-input" aria-label="From date">
+              <span aria-hidden="true">–</span>
+              <label for="orders-to" class="visually-hidden">To</label>
+              <input type="date" id="orders-to" class="input date-input" aria-label="To date">
+              <button type="button" class="btn btn-secondary btn-sm" id="orders-custom-apply">Apply</button>
+            </div>
+          </div>
+          <!-- Sync from Clover button hidden — backend code retained for future use -->
+          <button type="button" class="btn btn-primary btn-sm" id="sync-orders-btn" hidden>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            Sync from Clover
+          </button>
+        </div>
+
+        <!-- Order source tabs -->
+        <div class="orders-tabs" role="tablist" aria-label="Order source filter">
+          <button type="button" class="orders-tab active" role="tab"
+                  aria-selected="true" data-tab="in-store" id="tab-in-store">
+            Dine In / Takeout
+          </button>
+          <button type="button" class="orders-tab" role="tab"
+                  aria-selected="false" data-tab="online" id="tab-online">
+            Online Orders
+            <span class="orders-tab-badge" id="online-orders-badge" hidden>0</span>
+          </button>
+          <button type="button" class="orders-tab" role="tab"
+                  aria-selected="false" data-tab="payments" id="tab-payments">
+            Payments
+            <span class="orders-tab-badge orders-tab-badge--alert" id="payments-alert-badge" hidden>!</span>
+          </button>
+        </div>
+
+        <!-- Payments tab content -->
+        <div id="payments-panel" hidden>
+          <div id="payments-loading" class="orders-loading" hidden>Loading payments…</div>
+          <div id="payments-empty" class="orders-empty" hidden>No payments found for this period.</div>
+          <div id="payments-summary" class="payments-summary" hidden></div>
+          <div id="payments-list" class="payments-list" hidden></div>
+        </div>
+
+        <!-- Summary bar -->
+        <div id="orders-summary" class="orders-summary" hidden>
+          <div class="orders-summary-row">
+            <span id="orders-count-label" class="orders-summary-stat"></span>
+          </div>
+          <!-- Financial breakdown — manager / owner only -->
+          <div class="orders-summary-financials" id="orders-financials" hidden>
+            <span class="orders-fin-item">
+              <span class="orders-fin-label">Items</span>
+              <span class="orders-fin-value" id="orders-fin-items"></span>
+            </span>
+            <span class="orders-fin-sep" aria-hidden="true">·</span>
+            <span class="orders-fin-item" id="orders-fin-svc-wrap" hidden>
+              <span class="orders-fin-label">Service</span>
+              <span class="orders-fin-value" id="orders-fin-svc"></span>
+            </span>
+            <span class="orders-fin-sep" id="orders-fin-svc-sep" aria-hidden="true" hidden>·</span>
+            <span class="orders-fin-item">
+              <span class="orders-fin-label">Tax</span>
+              <span class="orders-fin-value" id="orders-fin-tax"></span>
+            </span>
+            <span class="orders-fin-sep" aria-hidden="true">·</span>
+            <span class="orders-fin-item" id="orders-fin-discounts-wrap" hidden>
+              <span class="orders-fin-label orders-fin-discount-label">Discounts</span>
+              <span class="orders-fin-value orders-fin-discount-value" id="orders-fin-discounts"></span>
+            </span>
+            <span class="orders-fin-sep orders-fin-discount-sep" id="orders-fin-discounts-sep" aria-hidden="true" hidden>·</span>
+            <span class="orders-fin-item">
+              <span class="orders-fin-label">Tips</span>
+              <span class="orders-fin-value" id="orders-fin-tips"></span>
+            </span>
+            <span class="orders-fin-sep" aria-hidden="true">·</span>
+            <span class="orders-fin-item orders-fin-item--total">
+              <span class="orders-fin-label">Total</span>
+              <span class="orders-fin-value" id="orders-fin-total"></span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Loading -->
+        <div id="orders-loading" class="menu-state" hidden>
+          <div class="spinner"></div>
+          <p>Loading orders…</p>
+        </div>
+
+        <!-- Empty -->
+        <div id="orders-empty" class="menu-state" hidden>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-neutral)" stroke-width="1.5" aria-hidden="true"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+          <p>No orders in this period.</p>
+        </div>
+
+        <!-- Order list -->
+        <div id="orders-list" class="orders-list" hidden aria-live="polite"></div>
+
+        <!-- Gift card purchases (shown in Online Orders tab only) -->
+        <div id="gc-purchases-section" hidden>
+          <h3 class="gc-purchases-heading">Gift Card Sales</h3>
+          <div id="gc-purchases-loading" class="orders-loading" hidden>Loading gift card sales…</div>
+          <div id="gc-purchases-empty" class="orders-empty" hidden>No gift card sales in this period.</div>
+          <div id="gc-purchases-list" class="payments-list" hidden></div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- EMPLOYEES                                                          -->
+      <!-- ================================================================ -->
+      <section id="section-employees" class="dash-section" aria-label="Employees" hidden>
+
+        <div class="section-header-row">
+          <div>
+            <h2 class="section-heading">Employee Management</h2>
+            <p class="section-subheading">Manage staff access codes, roles, and schedules.</p>
+          </div>
+          <div class="section-header-actions">
+            <label class="emp-mode-toggle-row">
+              <span class="emp-mode-label">Employee Mode</span>
+              <button type="button" id="emp-mode-toggle" class="toggle-btn" role="switch" aria-checked="false"
+                      aria-label="Toggle employee mode">
+                <span class="toggle-thumb"></span>
+              </button>
+            </label>
+            <button type="button" class="btn btn-primary btn-sm" id="add-employee-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Employee
+            </button>
+          </div>
+        </div>
+
+        <!-- Employee list -->
+        <div id="employees-loading" class="menu-state" hidden>
+          <div class="spinner"></div><p>Loading employees…</p>
+        </div>
+        <div id="employees-empty" class="menu-state" hidden>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-neutral)" stroke-width="1.5" aria-hidden="true"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+          <p>No employees yet. Add one to enable employee mode.</p>
+        </div>
+        <ul id="employees-list" class="employees-list" aria-label="Employee list" hidden></ul>
+
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- TIMESHEET                                                          -->
+      <!-- ================================================================ -->
+      <section id="section-timesheet" class="dash-section" aria-label="Timesheet" hidden>
+
+        <div class="section-header-row">
+          <div>
+            <h2 class="section-heading">Timesheet</h2>
+            <p class="section-subheading">Employee clock-in and clock-out records.</p>
+          </div>
+          <div class="section-header-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="ts-filter-apply">Refresh</button>
+          </div>
+        </div>
+
+        <!-- Date filter -->
+        <div class="ts-toolbar">
+          <label for="ts-date-from" class="visually-hidden">From</label>
+          <input type="date" id="ts-date-from" class="input date-input" aria-label="From date">
+          <span aria-hidden="true">–</span>
+          <label for="ts-date-to" class="visually-hidden">To</label>
+          <input type="date" id="ts-date-to" class="input date-input" aria-label="To date">
+          <button type="button" class="btn btn-secondary btn-sm" id="ts-apply-btn">Apply</button>
+        </div>
+
+        <div id="ts-loading" class="menu-state" hidden>
+          <div class="spinner"></div><p>Loading timesheets…</p>
+        </div>
+        <div id="ts-empty" class="menu-state" hidden>
+          <p>No clock-in records for this period.</p>
+        </div>
+        <table id="ts-table" class="ts-table" hidden>
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Role</th>
+              <th>Date</th>
+              <th>Clock In</th>
+              <th>Clock Out</th>
+              <th>Hours</th>
+            </tr>
+          </thead>
+          <tbody id="ts-tbody"></tbody>
+        </table>
+
+      </section>
+
+      <!-- ================================================================
+           Reports
+           ================================================================ -->
+      <section id="section-reports" class="dash-section" aria-label="Reports" hidden>
+
+        <div class="section-header-row">
+          <div>
+            <h2 class="section-heading">Reports</h2>
+            <p class="section-subheading">Sales, shifts, and tip summaries.</p>
+          </div>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="reports-subtabs" role="tablist" aria-label="Report type">
+          <button class="reports-subtab-btn active" data-report="sales"  role="tab" aria-selected="true"  aria-controls="reports-panel-sales">Sales</button>
+          <button class="reports-subtab-btn"         data-report="shifts" role="tab" aria-selected="false" aria-controls="reports-panel-shifts">Shifts</button>
+          <button class="reports-subtab-btn"         data-report="tips"   role="tab" aria-selected="false" aria-controls="reports-panel-tips">Tips</button>
+        </div>
+
+        <!-- Shared date/preset controls -->
+        <div class="reports-controls">
+          <div class="reports-preset-bar" role="group" aria-label="Date range presets">
+            <button type="button" class="reports-preset-btn" data-preset="today">Today</button>
+            <button type="button" class="reports-preset-btn" data-preset="yesterday">Yesterday</button>
+            <button type="button" class="reports-preset-btn" data-preset="this-month">This month</button>
+            <button type="button" class="reports-preset-btn" data-preset="last-month">Last month</button>
+            <button type="button" class="reports-preset-btn active" data-preset="last30">Last 30 days</button>
+            <button type="button" class="reports-preset-btn" data-preset="this-period">This pay period</button>
+            <button type="button" class="reports-preset-btn" data-preset="last-period">Last pay period</button>
+          </div>
+          <div class="reports-date-range">
+            <label for="reports-from" class="visually-hidden">From</label>
+            <input type="date" id="reports-from" aria-label="From date">
+            <span aria-hidden="true">–</span>
+            <label for="reports-to" class="visually-hidden">To</label>
+            <input type="date" id="reports-to" aria-label="To date">
+            <button type="button" class="btn btn-secondary btn-sm" id="reports-apply-btn">Apply</button>
+          </div>
+        </div>
+
+        <!-- ── Sales panel ───────────────────────────────────────────── -->
+        <div id="reports-panel-sales" class="reports-panel active" role="tabpanel" aria-label="Sales report">
+          <!-- Summary block and detail table are rendered by renderSalesReport() -->
+          <div id="sales-summary-block"></div>
+          <div id="sales-detail-wrap">
+            <div class="reports-empty" id="sales-empty" hidden>No paid orders in this period.</div>
+          </div>
+        </div>
+
+        <!-- ── Shifts panel ──────────────────────────────────────────── -->
+        <div id="reports-panel-shifts" class="reports-panel" role="tabpanel" aria-label="Shifts report" hidden>
+          <div class="reports-summary-cards">
+            <div class="reports-summary-card">
+              <div class="rsc-label">Total Hours</div>
+              <div class="rsc-value" id="shifts-total-hours">—</div>
+            </div>
+            <div class="reports-summary-card">
+              <div class="rsc-label">Employees</div>
+              <div class="rsc-value" id="shifts-emp-count">—</div>
+            </div>
+            <div class="reports-summary-card" id="shifts-break-card" hidden>
+              <div class="rsc-label">Break Rule</div>
+              <div class="rsc-value" id="shifts-break-rule">—</div>
+            </div>
+          </div>
+          <div class="reports-table-wrap">
+            <table class="reports-table" id="shifts-table" hidden>
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Role</th>
+                  <th>Date</th>
+                  <th>Clock In</th>
+                  <th>Clock Out</th>
+                  <th class="num">Hours</th>
+                </tr>
+              </thead>
+              <tbody id="shifts-tbody"></tbody>
+            </table>
+            <div class="reports-empty" id="shifts-empty" hidden>No shifts recorded in this period.</div>
+          </div>
+        </div>
+
+        <!-- ── Tips panel ────────────────────────────────────────────── -->
+        <div id="reports-panel-tips" class="reports-panel" role="tabpanel" aria-label="Tips report" hidden>
+          <div class="reports-summary-cards">
+            <div class="reports-summary-card">
+              <div class="rsc-label">Total Tips</div>
+              <div class="rsc-value" id="tips-total">—</div>
+            </div>
+            <div class="reports-summary-card">
+              <div class="rsc-label">Servers with Tips</div>
+              <div class="rsc-value" id="tips-emp-count">—</div>
+            </div>
+          </div>
+          <div class="reports-table-wrap">
+            <table class="reports-table" id="tips-table" hidden>
+              <thead>
+                <tr>
+                  <th>Server</th>
+                  <th class="num">Orders</th>
+                  <th class="num">Total Tips</th>
+                  <th class="num">Avg Tip</th>
+                </tr>
+              </thead>
+              <tbody id="tips-tbody"></tbody>
+            </table>
+            <div class="reports-empty" id="tips-empty" hidden>No tips recorded in this period.</div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================
+           Backup
+           ================================================================ -->
+      <section id="section-backup" class="dash-section" aria-label="Backup &amp; Restore" hidden>
+
+        <div class="section-header-row">
+          <h1 class="section-title">Backup &amp; Restore</h1>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="bkp-tabs" role="tablist">
+          <button class="bkp-tab active" data-bkp-tab="backup" role="tab" aria-selected="true">Export to Device</button>
+          <button class="bkp-tab" data-bkp-tab="restore" role="tab" aria-selected="false">Restore</button>
+          <button class="bkp-tab" data-bkp-tab="wipe" role="tab" aria-selected="false">Start Fresh</button>
+          <button class="bkp-tab" data-bkp-tab="s3" role="tab" aria-selected="false">Cloud (S3)</button>
+        </div>
+
+        <!-- ── Backup panel ──────────────────────────────────────────────── -->
+        <div id="bkp-panel-backup" class="bkp-panel" role="tabpanel">
+          <div class="card dash-card">
+            <h2 class="card-title">Export to Device</h2>
+            <p class="bkp-hint">Download a JSON backup file directly to your device. This is independent of S3 — use it for one-off exports or to migrate data.</p>
+
+            <div class="form-group">
+              <label for="bkp-type">Include</label>
+              <select id="bkp-type" class="form-control">
+                <option value="full">Everything</option>
+                <option value="menu">Menu (categories, items, modifiers)</option>
+                <option value="orders">Orders</option>
+                <option value="employees">Employees &amp; Shifts</option>
+                <option value="profile">Store Profile</option>
+              </select>
+            </div>
+
+            <!-- Date range — shown for orders and employees -->
+            <div id="bkp-date-row" class="form-row" hidden>
+              <div class="form-group">
+                <label for="bkp-from">From</label>
+                <input type="date" id="bkp-from" class="form-control">
+              </div>
+              <div class="form-group">
+                <label for="bkp-to">To</label>
+                <input type="date" id="bkp-to" class="form-control">
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="bkp-download-btn">Download Backup</button>
+          </div>
+        </div>
+
+        <!-- ── Restore panel ─────────────────────────────────────────────── -->
+        <div id="bkp-panel-restore" class="bkp-panel" role="tabpanel" hidden>
+          <div class="card dash-card">
+            <h2 class="card-title">Restore from Backup</h2>
+            <p class="bkp-hint">Select a backup file produced by this system. Existing data of the same type will be <strong>replaced</strong>.</p>
+
+            <div class="form-group">
+              <label for="bkp-file">Backup file (.json)</label>
+              <input type="file" id="bkp-file" class="form-control" accept=".json,application/json">
+            </div>
+
+            <div id="bkp-restore-preview" class="bkp-preview" hidden>
+              <p id="bkp-restore-preview-text"></p>
+            </div>
+
+            <button class="btn btn-danger" id="bkp-restore-btn" disabled>Restore</button>
+          </div>
+        </div>
+
+        <!-- ── Wipe panel ────────────────────────────────────────────────── -->
+        <div id="bkp-panel-wipe" class="bkp-panel" role="tabpanel" hidden>
+          <div class="card dash-card">
+            <h2 class="card-title">Start Fresh</h2>
+            <p class="bkp-hint bkp-hint-danger">This permanently deletes data. Download a backup first if you want to keep a copy.</p>
+
+            <div class="bkp-wipe-options">
+              <div class="bkp-wipe-option">
+                <div class="bkp-wipe-info">
+                  <strong>Menu</strong>
+                  <span>Delete all categories, items, and modifiers</span>
+                </div>
+                <button class="btn btn-danger btn-sm" data-wipe="menu">Delete Menu</button>
+              </div>
+              <div class="bkp-wipe-option">
+                <div class="bkp-wipe-info">
+                  <strong>Employees &amp; Shifts</strong>
+                  <span>Delete all employee records and timesheet history</span>
+                </div>
+                <button class="btn btn-danger btn-sm" data-wipe="employees">Delete Employees</button>
+              </div>
+              <div class="bkp-wipe-option bkp-wipe-option-full">
+                <div class="bkp-wipe-info">
+                  <strong>Everything</strong>
+                  <span>Full factory reset — menu, orders, employees, shifts, and store profile</span>
+                </div>
+                <button class="btn btn-danger btn-sm" data-wipe="full">Factory Reset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── S3 Cloud panel ────────────────────────────────────────────── -->
+        <div id="bkp-panel-s3" class="bkp-panel" role="tabpanel" hidden>
+          <div class="card dash-card">
+            <h2 class="card-title">Nightly Cloud Backup (S3)</h2>
+            <p class="bkp-hint">Orders are automatically backed up every night at 2 AM to your S3 bucket. Credentials are encrypted and never exported.</p>
+
+            <div id="bkp-s3-form">
+              <div class="form-group">
+                <label for="bkp-s3-key-id">Access Key ID</label>
+                <input type="text" id="bkp-s3-key-id" class="form-control" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="form-group">
+                <label for="bkp-s3-secret">Secret Access Key</label>
+                <input type="password" id="bkp-s3-secret" class="form-control" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label for="bkp-s3-bucket">Bucket</label>
+                <input type="text" id="bkp-s3-bucket" class="form-control" placeholder="my-restaurant-backups">
+              </div>
+              <div class="form-group">
+                <label for="bkp-s3-region">Region</label>
+                <input type="text" id="bkp-s3-region" class="form-control" placeholder="us-east-1">
+              </div>
+
+              <div class="bkp-s3-actions">
+                <button class="btn btn-primary" id="bkp-s3-save-btn">Save Credentials</button>
+                <button class="btn btn-secondary" id="bkp-s3-trigger-btn">Run Now</button>
+                <button class="btn btn-danger btn-sm" id="bkp-s3-delete-btn">Remove</button>
+              </div>
+
+              <div id="bkp-s3-status" class="bkp-s3-status" hidden></div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================
+           Feedback
+           ================================================================ -->
+      <section id="section-feedback" class="dash-section" aria-label="Customer Feedback" hidden>
+
+        <div class="section-header-row">
+          <div>
+            <h1 class="section-title">Customer Feedback</h1>
+            <p class="section-subtitle">Reviews submitted through the online store</p>
+          </div>
+        </div>
+
+        <!-- Toolbar: type filter + date range (matches Orders tab style) -->
+        <div class="orders-toolbar fb-toolbar" role="toolbar" aria-label="Feedback filters">
+          <div class="orders-date-range" role="group" aria-label="Type filter">
+            <button type="button" class="date-preset-btn active" data-fb-type="">All</button>
+            <button type="button" class="date-preset-btn" data-fb-type="order">Order</button>
+            <button type="button" class="date-preset-btn" data-fb-type="app">App</button>
+            <span class="date-range-sep" aria-hidden="true">|</span>
+            <button type="button" class="date-preset-btn active" data-fb-days="">All time</button>
+            <button type="button" class="date-preset-btn" data-fb-days="7">Last 7 days</button>
+            <button type="button" class="date-preset-btn" data-fb-days="30">Last 30 days</button>
+            <span class="date-range-sep" aria-hidden="true">or</span>
+            <div class="date-range-custom">
+              <label for="fb-from" class="visually-hidden">From</label>
+              <input type="date" id="fb-from" class="input date-input" aria-label="From date">
+              <span aria-hidden="true">–</span>
+              <label for="fb-to" class="visually-hidden">To</label>
+              <input type="date" id="fb-to" class="input date-input" aria-label="To date">
+              <button type="button" class="btn btn-sm" id="fb-date-apply-btn">Apply</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats cards — always visible, populated by loadFeedbackStats() -->
+        <div id="feedback-stats" class="fb-stats">
+          <div class="fb-stats-row">
+            <div class="fb-stat-card">
+              <div class="fb-stat-label">Overall</div>
+              <div class="fb-stat-value" id="fb-stat-overall">—</div>
+              <div class="fb-stat-count" id="fb-stat-overall-count">Loading…</div>
+            </div>
+            <div class="fb-stat-card">
+              <div class="fb-stat-label">Order reviews</div>
+              <div class="fb-stat-value" id="fb-stat-order">—</div>
+              <div class="fb-stat-count" id="fb-stat-order-count"></div>
+            </div>
+            <div class="fb-stat-card">
+              <div class="fb-stat-label">App reviews</div>
+              <div class="fb-stat-value" id="fb-stat-app">—</div>
+              <div class="fb-stat-count" id="fb-stat-app-count"></div>
+            </div>
+          </div>
+          <div class="fb-stats-row fb-stats-dishes">
+            <div class="fb-dish-card fb-dish-card--liked">
+              <h3 class="fb-dish-card-title">👍 Most liked dishes</h3>
+              <table class="fb-dish-table" aria-label="Most liked dishes">
+                <thead>
+                  <tr><th class="fb-dish-th-rank">#</th><th class="fb-dish-th-name">Dish</th><th class="fb-dish-th-count">Likes</th></tr>
+                </thead>
+                <tbody id="fb-top-liked">
+                  <tr><td colspan="3" class="fb-dish-table-empty">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="fb-dish-card fb-dish-card--disliked">
+              <h3 class="fb-dish-card-title">👎 Most disliked dishes</h3>
+              <table class="fb-dish-table" aria-label="Most disliked dishes">
+                <thead>
+                  <tr><th class="fb-dish-th-rank">#</th><th class="fb-dish-th-name">Dish</th><th class="fb-dish-th-count">Dislikes</th></tr>
+                </thead>
+                <tbody id="fb-top-disliked">
+                  <tr><td colspan="3" class="fb-dish-table-empty">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <h2 class="fb-reviews-title">Reviews</h2>
+
+        <div id="feedback-list-container" class="feedback-list-container">
+          <div id="feedback-list-loading" class="feedback-list-loading">Loading…</div>
+          <ul id="feedback-list" class="feedback-list" aria-label="Feedback entries"></ul>
+          <div id="feedback-list-empty" class="feedback-list-empty" hidden>
+            <p>No feedback yet.</p>
+          </div>
+          <div id="feedback-list-load-more" class="feedback-list-load-more" hidden>
+            <button class="btn btn-secondary" id="feedback-load-more-btn">Load more</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- RESERVATIONS                                                        -->
+      <!-- ================================================================== -->
+      <section id="section-reservations" class="dash-section" hidden>
+
+        <!-- Upcoming reminder strip -->
+        <div id="res-upcoming-strip" class="res-upcoming-strip" hidden>
+          <strong>Upcoming:</strong>
+          <span id="res-upcoming-list"></span>
+        </div>
+
+        <!-- Date navigation + header actions -->
+        <div class="res-date-nav">
+          <button type="button" class="btn btn-secondary btn-sm" id="res-prev-day" aria-label="Previous day">&#8592;</button>
+          <span class="res-date-label" id="res-date-label"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="res-next-day" aria-label="Next day">&#8594;</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="res-today-btn">Today</button>
+          <div style="flex:1"></div>
+          <button type="button" class="btn btn-primary btn-sm" id="res-add-btn">+ Add Reservation</button>
+        </div>
+
+        <!-- Reservation list -->
+        <div id="res-list-loading" class="res-list-loading" hidden>
+          <span class="spinner-sm"></span> Loading…
+        </div>
+        <div id="res-list-empty" class="res-empty" hidden>
+          <p>No reservations for this day.</p>
+        </div>
+        <div id="res-list" class="res-list">
+          <!-- Rows rendered by JS -->
+        </div>
+
+        <!-- Add / Edit reservation modal -->
+        <div id="res-modal" class="res-modal-backdrop" hidden>
+          <div class="res-modal" role="dialog" aria-modal="true" aria-labelledby="res-modal-title">
+            <div class="res-modal-header">
+              <h3 class="res-modal-title" id="res-modal-title">New Reservation</h3>
+              <button type="button" class="res-modal-close" id="res-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="res-modal-body">
+              <div class="form-group">
+                <label for="res-m-name">Name <span class="required">*</span></label>
+                <input type="text" id="res-m-name" class="input" maxlength="100" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label for="res-m-phone">Phone</label>
+                <input type="tel" id="res-m-phone" class="input" maxlength="20" autocomplete="off">
+              </div>
+              <div class="form-group">
+                <label for="res-m-email">Email</label>
+                <input type="email" id="res-m-email" class="input" maxlength="100" autocomplete="off">
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="res-m-date">Date <span class="required">*</span></label>
+                  <input type="date" id="res-m-date" class="input">
+                </div>
+                <div class="form-group">
+                  <label for="res-m-time">Time <span class="required">*</span></label>
+                  <input type="time" id="res-m-time" class="input">
+                </div>
+                <div class="form-group">
+                  <label for="res-m-party">Party Size <span class="required">*</span></label>
+                  <input type="number" id="res-m-party" class="input" min="1" max="99" value="2">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="res-m-table">Table</label>
+                <select id="res-m-table" class="input">
+                  <option value="">Unassigned</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="res-m-notes">Notes</label>
+                <textarea id="res-m-notes" class="input" rows="2" maxlength="500"></textarea>
+              </div>
+              <p id="res-m-error" class="error-text" hidden></p>
+            </div>
+            <div class="res-modal-footer">
+              <button type="button" class="btn btn-secondary" id="res-m-cancel">Cancel</button>
+              <button type="button" class="btn btn-primary" id="res-m-save">Save Reservation</button>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- GIFT CARDS                                                          -->
+      <!-- ================================================================== -->
+      <section id="section-gift-cards" class="dash-section" aria-label="Gift cards" hidden>
+
+        <!-- Stats strip -->
+        <div class="gc-dash-stats" id="gc-dash-stats" hidden>
+          <div class="gc-dash-stat">
+            <span class="gc-dash-stat-val" id="gc-stat-active">—</span>
+            <span class="gc-dash-stat-lbl">Active</span>
+          </div>
+          <div class="gc-dash-stat">
+            <span class="gc-dash-stat-val" id="gc-stat-depleted">—</span>
+            <span class="gc-dash-stat-lbl">Depleted</span>
+          </div>
+          <div class="gc-dash-stat">
+            <span class="gc-dash-stat-val" id="gc-stat-expired">—</span>
+            <span class="gc-dash-stat-lbl">Expired</span>
+          </div>
+          <div class="gc-dash-stat">
+            <span class="gc-dash-stat-val" id="gc-stat-outstanding">—</span>
+            <span class="gc-dash-stat-lbl">Outstanding Balance</span>
+          </div>
+        </div>
+
+        <!-- Toolbar: filter + search -->
+        <div class="gc-dash-toolbar">
+          <div class="btn-group" role="group" aria-label="Filter by status">
+            <button type="button" class="btn btn-sm btn-secondary gc-filter-btn active" data-status="">All</button>
+            <button type="button" class="btn btn-sm btn-secondary gc-filter-btn" data-status="active">Active</button>
+            <button type="button" class="btn btn-sm btn-secondary gc-filter-btn" data-status="depleted">Depleted</button>
+            <button type="button" class="btn btn-sm btn-secondary gc-filter-btn" data-status="expired">Expired</button>
+          </div>
+          <input type="search" id="gc-search" class="gc-search-input" placeholder="Search code or email…" aria-label="Search gift cards">
+        </div>
+
+        <!-- Table -->
+        <div class="table-responsive">
+          <table class="data-table" id="gc-table" aria-label="Gift cards">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Face Value</th>
+                <th>Balance</th>
+                <th>Buyer</th>
+                <th>Recipient</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Expires</th>
+                <th>Issued</th>
+                <th aria-label="Print"></th>
+              </tr>
+            </thead>
+            <tbody id="gc-table-body">
+              <tr id="gc-table-loading">
+                <td colspan="10" class="table-empty"><span class="spinner-sm"></span> Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Load more -->
+        <div class="gc-load-more-wrap" id="gc-load-more-wrap" hidden>
+          <button type="button" class="btn btn-secondary btn-sm" id="gc-load-more-btn">Load more</button>
+        </div>
+
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- MAINTENANCE                                                         -->
+      <!-- ================================================================== -->
+      <section id="section-maintenance" class="dash-section" aria-label="Maintenance" hidden>
+
+        <div class="section-header-row">
+          <h2 class="section-heading">Maintenance Log</h2>
+          <a href="/fog-report" target="_blank" class="btn btn-secondary btn-sm">View City Report ↗</a>
+        </div>
+
+        <!-- ── Grease Trap ─────────────────────────────────────────────── -->
+        <h3 class="fog-subsection-heading">Grease Trap</h3>
+
+        <form id="fog-form" class="fog-form">
+          <div class="fog-form-fields">
+            <label class="fog-label">
+              Date
+              <input type="date" id="fog-date" class="input" required>
+            </label>
+            <label class="fog-label">
+              Cleaned By
+              <input type="text" id="fog-cleaned-by" class="input" placeholder="Company or person name" maxlength="120" required>
+            </label>
+            <label class="fog-label">
+              Grease (gal)
+              <input type="number" id="fog-grease" class="input" placeholder="0" min="0" step="0.1" required>
+            </label>
+            <label class="fog-label">
+              Solids (gal)
+              <input type="number" id="fog-solids" class="input" placeholder="0" min="0" step="0.1" required>
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary" id="fog-submit-btn">Log Grease Trap Cleaning</button>
+        </form>
+
+        <table class="data-table fog-table" style="margin-top:1.25rem">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Cleaned By</th>
+              <th>Grease (gal)</th>
+              <th>Solids (gal)</th>
+              <th>Logged</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="fog-tbody">
+            <tr id="fog-empty-row"><td colspan="6" style="text-align:center;color:#888;font-style:italic;padding:1.25rem">No cleaning records yet.</td></tr>
+          </tbody>
+        </table>
+
+        <!-- ── Exhaust Hood ────────────────────────────────────────────── -->
+        <h3 class="fog-subsection-heading" style="margin-top:2rem">Exhaust Hood</h3>
+
+        <form id="fog-hood-form" class="fog-form">
+          <div class="fog-form-fields">
+            <label class="fog-label">
+              Date
+              <input type="date" id="fog-hood-date" class="input" required>
+            </label>
+            <label class="fog-label">
+              Cleaned By (Company)
+              <input type="text" id="fog-hood-cleaned-by" class="input" placeholder="Company name" maxlength="120" required>
+            </label>
+            <label class="fog-label" style="flex:2">
+              Notes
+              <input type="text" id="fog-hood-notes" class="input" placeholder="Optional notes" maxlength="240">
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary" id="fog-hood-submit-btn">Log Hood Cleaning</button>
+        </form>
+
+        <table class="data-table fog-table" style="margin-top:1.25rem">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Cleaned By</th>
+              <th>Notes</th>
+              <th>Logged</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="fog-hood-tbody">
+            <tr id="fog-hood-empty-row"><td colspan="5" style="text-align:center;color:#888;font-style:italic;padding:1.25rem">No hood cleaning records yet.</td></tr>
+          </tbody>
+        </table>
+
+      </section>
+
+      <!-- ================================================================== -->
+      <!-- HEALTH                                                              -->
+      <!-- ================================================================== -->
+      <section id="section-health" class="dash-section" aria-label="System Health" hidden>
+
+        <!-- ── Metric cards ─────────────────────────────────────────────── -->
+        <div id="health-cards" class="health-cards-grid">
+          <div class="health-card">
+            <div class="health-card-label">Uptime</div>
+            <div class="health-card-value" id="hc-uptime">—</div>
+            <div class="health-card-sub" id="hc-started">started —</div>
+          </div>
+          <div class="health-card">
+            <div class="health-card-label">CPU Load (1 min)</div>
+            <div class="health-card-value" id="hc-cpu">—</div>
+            <div class="health-card-sub" id="hc-cpu-model">—</div>
+          </div>
+          <div class="health-card">
+            <div class="health-card-label">Memory — System</div>
+            <div class="health-card-value" id="hc-mem-sys">—</div>
+            <div class="health-card-sub" id="hc-mem-proc">process —</div>
+          </div>
+          <div class="health-card">
+            <div class="health-card-label">Disk Space</div>
+            <div class="health-card-value" id="hc-disk">—</div>
+            <div class="health-card-sub" id="hc-disk-free">— free</div>
+          </div>
+        </div>
+
+        <!-- ── Charts ───────────────────────────────────────────────────── -->
+        <div class="health-charts-row">
+          <div class="health-chart-card">
+            <div class="health-chart-title">CPU Usage % <span class="health-chart-window">(last 5 min)</span></div>
+            <div id="health-cpu-chart" class="health-chart-area" role="img" aria-label="CPU usage chart"></div>
+          </div>
+          <div class="health-chart-card">
+            <div class="health-chart-title">Memory <span class="health-chart-window">(last 5 min)</span></div>
+            <div id="health-mem-chart" class="health-chart-area" role="img" aria-label="Memory usage chart"></div>
+          </div>
+        </div>
+
+        <!-- ── Printers & Terminals ──────────────────────────────────────── -->
+        <div class="health-devices-row">
+
+          <div class="health-device-card">
+            <h3 class="health-device-title">Printers</h3>
+            <div id="health-printers">
+              <p class="health-empty">No printers configured</p>
+            </div>
+          </div>
+
+          <div class="health-device-card">
+            <h3 class="health-device-title">Terminals</h3>
+            <div id="health-terminals">
+              <p class="health-empty">No terminals configured</p>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ── Recent errors ─────────────────────────────────────────────── -->
+        <div class="health-errors-card">
+          <div class="health-errors-header">
+            <h3 class="health-device-title" style="margin:0">Recent Server Errors</h3>
+            <span id="health-last-refresh" class="health-last-refresh">—</span>
+          </div>
+          <div id="health-errors-list" class="health-errors-list">
+            <p class="health-empty">No errors recorded</p>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Toast notifications -->
+  <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
+
+  <!-- Item edit panel (slide-in from right) -->
+  <div id="item-panel" class="item-panel" role="dialog" aria-modal="true" aria-labelledby="item-panel-title" hidden>
+    <div class="item-panel-inner">
+      <div class="item-panel-header">
+        <h2 id="item-panel-title" class="item-panel-title">Edit Item</h2>
+        <button class="btn-close" id="item-panel-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="item-panel-body">
+        <input type="hidden" id="edit-item-id">
+        <input type="hidden" id="edit-item-category-id">
+
+        <div class="form-group">
+          <label for="edit-item-name">Name</label>
+          <input type="text" id="edit-item-name" class="input">
+        </div>
+
+        <div class="form-group">
+          <label for="edit-item-price">Price</label>
+          <input type="number" id="edit-item-price" class="input" min="0" step="0.01" placeholder="0.00">
+        </div>
+
+        <div class="form-group">
+          <label for="edit-item-description">Description</label>
+          <textarea id="edit-item-description" class="input textarea" rows="3" placeholder="Describe this item…"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Photo</label>
+          <div class="photo-upload-area" id="photo-upload-area" role="button" tabindex="0" aria-label="Upload item photo">
+            <div id="photo-upload-placeholder" class="photo-upload-placeholder">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+              <span>Click or drag to upload photo</span>
+              <span class="photo-upload-hint">Will be cropped to 1024 × 768 px</span>
+            </div>
+            <img id="photo-upload-preview" src="" alt="" class="photo-upload-preview" hidden>
+          </div>
+          <input type="file" id="photo-file-input" accept="image/*" class="visually-hidden" aria-label="Choose photo file" tabindex="-1">
+          <div class="photo-action-row">
+            <button type="button" class="photo-remove-btn" id="photo-remove-btn" hidden>Remove photo</button>
+            <button type="button" class="btn-camera" id="photo-camera-btn" data-target-w="1024" data-target-h="768" aria-label="Take photo with camera for menu item" hidden>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              Camera
+            </button>
+          </div>
+        </div>
+
+        <!-- Stock status -->
+        <div class="form-group">
+          <label class="form-label-row">Stock status</label>
+          <div class="stock-picker" id="edit-item-stock" role="group" aria-label="Stock status">
+            <button type="button" class="stock-btn" data-status="in_stock" aria-pressed="true">
+              <span class="stock-dot in_stock" aria-hidden="true"></span>In stock
+            </button>
+            <button type="button" class="stock-btn" data-status="out_today" aria-pressed="false">
+              <span class="stock-dot out_today" aria-hidden="true"></span>Out today
+            </button>
+            <button type="button" class="stock-btn" data-status="out_indefinitely" aria-pressed="false">
+              <span class="stock-dot out_indefinitely" aria-hidden="true"></span>Out of stock
+            </button>
+          </div>
+        </div>
+
+        <!-- Dietary tags -->
+        <div class="form-group">
+          <label class="form-label-row">Dietary tags</label>
+          <div class="dietary-tags" id="edit-item-dietary" role="group" aria-label="Dietary tags">
+            <button type="button" class="dietary-btn" data-tag="vegan" aria-pressed="false">🌱 Vegan</button>
+            <button type="button" class="dietary-btn" data-tag="vegetarian" aria-pressed="false">🥦 Vegetarian</button>
+            <button type="button" class="dietary-btn" data-tag="gluten_free" aria-pressed="false">🌾 Gluten-free</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label-row">Modifier Groups</label>
+          <div id="edit-item-modifier-chips" class="modifier-chips" aria-label="Assigned modifier groups"></div>
+          <button type="button" class="modifier-add-btn" id="modifier-add-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add modifier group
+          </button>
+        </div>
+
+        <div class="form-group">
+          <div class="toggle-row">
+            <label class="toggle-label" for="edit-item-available-online">
+              Available online
+              <span class="toggle-hint">Show this item to customers ordering online</span>
+            </label>
+            <button type="button" role="switch" id="edit-item-available-online"
+                    class="toggle-switch" aria-checked="true">
+              <span class="toggle-thumb" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="toggle-row">
+            <label class="toggle-label" for="edit-item-is-popular">
+              Most popular
+              <span class="toggle-hint">Show in the Most Popular section at the top of the menu</span>
+            </label>
+            <button type="button" role="switch" id="edit-item-is-popular"
+                    class="toggle-switch" aria-checked="false">
+              <span class="toggle-thumb" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="item-panel-footer">
+          <!-- Move row: always visible in edit mode -->
+          <div id="item-panel-duplicate-row" class="item-panel-duplicate-row" hidden>
+            <span class="item-dup-label">Move to</span>
+            <select id="item-dup-cat" class="item-dup-select"></select>
+            <button type="button" class="btn btn-primary btn-sm" id="item-dup-confirm">Move here</button>
+          </div>
+          <!-- Main footer row -->
+          <div class="item-panel-footer-main">
+            <div class="item-panel-footer-left">
+              <button type="button" class="btn btn-danger btn-sm" id="item-panel-delete" hidden>Delete</button>
+            </div>
+            <div class="item-panel-footer-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="item-panel-copy" hidden>Duplicate</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="item-panel-cancel">Cancel</button>
+              <button type="button" class="btn btn-primary btn-sm" id="item-panel-save">Save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="item-panel-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Modifier group edit panel -->
+  <div id="modifier-panel" class="item-panel" role="dialog" aria-modal="true" aria-labelledby="modifier-panel-title" hidden>
+    <div class="item-panel-inner">
+      <div class="item-panel-header">
+        <h2 id="modifier-panel-title" class="item-panel-title">Edit Modifier Group</h2>
+        <button class="btn-close" id="modifier-panel-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="item-panel-body">
+        <input type="hidden" id="edit-group-id">
+
+        <div class="form-group">
+          <label class="form-label" for="edit-group-name">Group name</label>
+          <input type="text" class="input" id="edit-group-name" placeholder="e.g. Protein choice" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <div class="form-inline-toggle">
+            <label class="form-label" for="edit-group-takeout">Available for takeout</label>
+            <button type="button" class="toggle-switch" id="edit-group-takeout"
+              role="switch" aria-checked="true" aria-label="Available for takeout">
+              <span class="toggle-thumb"></span>
+            </button>
+          </div>
+          <p class="form-hint">When off, this modifier group is hidden in takeout and delivery orders (e.g. "To Go" for dine-in use only).</p>
+        </div>
+
+        <div class="form-group">
+          <div class="form-inline-toggle">
+            <label class="form-label" for="edit-group-mandatory">Required</label>
+            <button type="button" class="toggle-switch" id="edit-group-mandatory"
+              role="switch" aria-checked="false" aria-label="Required modifier">
+              <span class="toggle-thumb"></span>
+            </button>
+          </div>
+          <p class="form-hint">When on, staff and customers must choose an option before adding the item to their order (e.g. protein, spice level).</p>
+        </div>
+
+        <div class="form-group">
+          <div class="form-row-pair">
+            <div>
+              <label class="form-label" for="edit-group-min">Min selections</label>
+              <input type="number" class="input input-sm" id="edit-group-min" min="0" value="0">
+            </div>
+            <div>
+              <label class="form-label" for="edit-group-max">Max selections</label>
+              <input type="number" class="input input-sm" id="edit-group-max" min="1" placeholder="Unlimited">
+            </div>
+          </div>
+          <p class="form-hint">Max 1 = single-choice (spice level). Leave max blank to allow multiple selections (e.g. remove ingredients).</p>
+        </div>
+
+        <!-- Options editor -->
+        <div class="form-group">
+          <label class="form-label-row">Options</label>
+          <ol class="mod-options-list" id="mod-options-list" aria-label="Modifier options"></ol>
+          <button type="button" class="modifier-add-btn" id="mod-option-add-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add option
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label-row">Assigned dishes</label>
+          <div id="edit-modifier-dish-chips" class="modifier-chips" aria-label="Dishes using this modifier group"></div>
+          <button type="button" class="modifier-add-btn" id="modifier-dish-add-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add dish
+          </button>
+        </div>
+
+        <div class="item-panel-footer">
+          <button type="button" class="btn btn-secondary" id="modifier-panel-cancel">Cancel</button>
+
+          <button type="button" class="btn btn-primary" id="modifier-panel-save">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="modifier-panel-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Modifier group picker modal -->
+  <div id="modifier-picker-modal" class="picker-modal" role="dialog" aria-modal="true" aria-labelledby="picker-modal-title" hidden>
+    <div class="picker-modal-inner">
+      <div class="picker-modal-header">
+        <h2 id="picker-modal-title" class="picker-modal-title">Add Modifier Group</h2>
+        <button type="button" class="btn-close" id="picker-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="picker-modal-search">
+        <input type="search" id="picker-search" class="input picker-search-input" placeholder="Search modifier groups…" autocomplete="off" aria-label="Search modifier groups">
+      </div>
+      <ul id="picker-list" class="picker-list" role="listbox" aria-label="Modifier groups"></ul>
+    </div>
+  </div>
+  <div id="picker-modal-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Dish picker modal (for assigning dishes to a modifier group) -->
+  <div id="dish-picker-modal" class="picker-modal" role="dialog" aria-modal="true" aria-labelledby="dish-picker-title" hidden>
+    <div class="picker-modal-inner">
+      <div class="picker-modal-header">
+        <h2 id="dish-picker-title" class="picker-modal-title">Add Dish</h2>
+        <button type="button" class="btn-close" id="dish-picker-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="picker-modal-search">
+        <input type="search" id="dish-picker-search" class="input picker-search-input" placeholder="Search dishes…" autocomplete="off" aria-label="Search dishes">
+      </div>
+      <ul id="dish-picker-list" class="picker-list" role="listbox" aria-multiselectable="true" aria-label="Dishes"></ul>
+      <div class="picker-modal-footer">
+        <span class="picker-selected-count" id="dish-picker-count">0 selected</span>
+        <button type="button" class="btn btn-primary" id="dish-picker-confirm" disabled>Add dishes</button>
+      </div>
+    </div>
+  </div>
+  <div id="dish-picker-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Out-of-stock modal -->
+  <div id="oos-modal" class="picker-modal" role="dialog" aria-modal="true" aria-labelledby="oos-modal-title" hidden>
+    <div class="picker-modal-inner oos-modal-inner">
+      <div class="picker-modal-header">
+        <h2 id="oos-modal-title" class="picker-modal-title">Out of stock</h2>
+        <button type="button" class="btn-close" id="oos-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="oos-modal-body" id="oos-modal-body">
+        <!-- Populated by JS -->
+      </div>
+      <div class="picker-modal-footer">
+        <span class="picker-selected-count" id="oos-modal-hint">Select items to restore</span>
+        <button type="button" class="btn btn-primary" id="oos-restore-all-btn">Restore all</button>
+      </div>
+    </div>
+  </div>
+  <div id="oos-modal-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Camera capture modal -->
+  <div id="camera-modal" class="camera-modal" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title" hidden>
+    <div class="camera-modal-inner">
+      <div class="camera-modal-header">
+        <h2 id="camera-modal-title" class="camera-modal-title">Take a Photo</h2>
+        <button type="button" class="btn-close" id="camera-close-btn" aria-label="Close camera">&times;</button>
+      </div>
+      <div class="camera-viewport" id="camera-viewport">
+        <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
+        <div class="camera-overlay" aria-hidden="true"></div>
+      </div>
+      <div class="camera-modal-footer">
+        <button type="button" class="btn btn-secondary" id="camera-switch-btn" aria-label="Switch between front and rear camera">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+          Flip
+        </button>
+        <button type="button" class="btn btn-primary camera-snap-btn" id="camera-snap-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg>
+          Snap
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image crop modal -->
+  <div id="crop-modal" class="crop-modal" role="dialog" aria-modal="true" aria-labelledby="crop-modal-title" hidden>
+    <div class="crop-modal-inner">
+      <div class="crop-modal-header">
+        <h2 id="crop-modal-title" class="crop-modal-title">Choose photo area</h2>
+        <p class="crop-modal-hint">Drag the image to position it within the crop window</p>
+      </div>
+      <div class="crop-viewport" id="crop-viewport" aria-label="Crop preview area">
+        <!-- The crop window — the visible 1024×768 region at display scale -->
+        <div class="crop-window" id="crop-window" aria-hidden="true"></div>
+        <!-- The full image, draggable behind the crop window -->
+        <img id="crop-img" src="" alt="" class="crop-img" draggable="false">
+      </div>
+      <div class="crop-modal-footer">
+        <button type="button" class="btn btn-secondary" id="crop-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-primary" id="crop-confirm-btn">Use this crop</button>
+      </div>
+    </div>
+  </div>
+  <!-- Hidden canvas used for resizing / cropping (never added to DOM visibly) -->
+  <canvas id="image-canvas" style="display:none" aria-hidden="true"></canvas>
+
+  <!-- Connection quality banner -->
+  <div id="connection-banner" role="status" aria-live="polite"></div>
+
+  <!-- Push notification permission prompt -->
+  <div id="push-prompt" role="dialog" aria-labelledby="push-prompt-title" aria-modal="false">
+    <p id="push-prompt-title"><strong>Enable order alerts?</strong><br>Get notified instantly when new orders arrive.</p>
+    <div id="push-prompt-actions">
+      <button id="push-allow" type="button">Enable Notifications</button>
+      <button id="push-deny" type="button">Not now</button>
+    </div>
+  </div>
+
+  <!-- Voice command transcript feedback (bottom-left, non-intrusive) -->
+  <div id="voice-feedback" class="voice-feedback" role="status" aria-live="assertive" aria-atomic="true"></div>
+
+  <!-- Order Entry item customization modal -->
+  <div id="oe-item-modal" class="oe-item-modal" role="dialog" aria-modal="true" aria-labelledby="oe-modal-item-name" hidden>
+    <div class="oe-item-modal-backdrop" id="oe-item-modal-backdrop"></div>
+    <div class="oe-item-modal-inner">
+
+      <!-- Header -->
+      <div class="oe-modal-header">
+        <img id="oe-modal-item-img" class="oe-modal-item-img" src="" alt="" hidden>
+        <div class="oe-modal-item-info">
+          <p class="oe-modal-item-name" id="oe-modal-item-name"></p>
+          <p class="oe-modal-item-desc" id="oe-modal-item-desc" hidden></p>
+          <p class="oe-modal-item-price" id="oe-modal-item-price"></p>
+        </div>
+        <button type="button" class="oe-modal-close" id="oe-modal-close-btn" aria-label="Close">&times;</button>
+      </div>
+
+      <!-- Body: modifier groups + note + course -->
+      <div class="oe-modal-body">
+        <div id="oe-modal-mod-body">
+          <!-- Populated by JS -->
+        </div>
+
+        <label class="oe-modal-note-label" for="oe-modal-note">Kitchen note</label>
+        <div class="oe-allergy-btns" role="group" aria-label="Common allergies">
+          <button type="button" class="oe-allergy-btn" data-allergy="Peanut allergy">🥜 Peanut</button>
+          <button type="button" class="oe-allergy-btn" data-allergy="Gluten allergy">🌾 Gluten</button>
+          <button type="button" class="oe-allergy-btn" data-allergy="Sesame allergy">🫙 Sesame</button>
+          <button type="button" class="oe-allergy-btn" data-allergy="Mushroom allergy">🍄 Mushroom</button>
+        </div>
+        <textarea class="oe-modal-note" id="oe-modal-note" rows="2" placeholder="e.g. no onions, extra sauce…"></textarea>
+
+        <!-- Course selector (hidden unless coursing is ON) -->
+        <div id="oe-modal-course-section" class="oe-course-section" hidden>
+          <span class="oe-course-label">Course</span>
+          <div class="oe-course-options" role="group" aria-label="Course">
+            <button type="button" class="oe-course-btn" data-course="first">1st Course</button>
+            <button type="button" class="oe-course-btn" data-course="main">Main</button>
+            <button type="button" class="oe-course-btn" data-course="dessert">Dessert</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="oe-modal-footer">
+        <button type="button" class="btn btn-secondary" id="oe-modal-cancel-btn">Cancel</button>
+        <button type="button" class="oe-modal-delete-btn" id="oe-modal-delete-btn" hidden>Remove</button>
+        <button type="button" class="btn btn-primary" id="oe-modal-add-btn">Add to Order</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Print error alert modal -->
+  <div id="print-error-overlay" class="od-overlay" hidden>
+    <div class="od-modal print-error-modal">
+      <div class="od-header print-error-header">
+        <h2 class="od-title">&#9888;&#65039; Ticket Not Printed</h2>
+      </div>
+      <div class="od-body print-error-body">
+        <p class="print-error-desc">A kitchen or counter ticket failed to print. Please check the printer and reprint manually if needed.</p>
+        <p id="print-error-detail" class="print-error-detail"></p>
+      </div>
+      <div class="print-error-footer">
+        <button class="btn btn-primary" id="print-error-dismiss-btn">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- New online order alert modal -->
+  <div id="new-order-overlay" class="od-overlay" hidden>
+    <div class="od-modal new-order-modal">
+      <div class="od-header new-order-header">
+        <h2 class="od-title">🔔 New Online Order</h2>
+        <button class="od-close" id="new-order-dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+      <div id="new-order-body" class="od-body">
+        <p class="od-loading">Loading…</p>
+      </div>
+      <div class="new-order-footer">
+        <div class="new-order-prep-row">
+          <label for="new-order-prep-select">Prep</label>
+          <select id="new-order-prep-select" class="order-prep-select">
+            <option value="15">15 min</option>
+            <option value="20" selected>20 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+          </select>
+        </div>
+        <div class="new-order-actions">
+          <button class="btn btn-secondary" id="new-order-dismiss-btn">Dismiss</button>
+          <button class="btn btn-primary" id="new-order-accept-btn">Accept Order</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reservation notification modal -->
+  <div id="res-notify-overlay" class="od-overlay" hidden>
+    <div class="od-modal notify-modal">
+      <div class="od-header notify-header notify-header--res">
+        <h2 class="od-title">📅 New Reservation</h2>
+        <button class="od-close" id="res-notify-dismiss-x" aria-label="Dismiss">&times;</button>
+      </div>
+      <div id="res-notify-body" class="od-body notify-body">
+        <p class="od-loading">Loading…</p>
+      </div>
+      <div class="od-footer notify-footer">
+        <button class="btn btn-primary notify-ack-btn" id="res-notify-ack-btn">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gift card purchase notification modal -->
+  <div id="gc-notify-overlay" class="od-overlay" hidden>
+    <div class="od-modal notify-modal">
+      <div class="od-header notify-header notify-header--gc">
+        <h2 class="od-title">🎁 Gift Card Sold</h2>
+        <button class="od-close" id="gc-notify-dismiss-x" aria-label="Dismiss">&times;</button>
+      </div>
+      <div id="gc-notify-body" class="od-body notify-body">
+        <p class="od-loading">Loading…</p>
+      </div>
+      <div class="od-footer notify-footer">
+        <button class="btn btn-primary notify-ack-btn" id="gc-notify-ack-btn">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Order detail modal (opened from Payments tab) -->
+  <div id="order-detail-overlay" class="od-overlay" hidden>
+    <div class="od-modal">
+      <div class="od-header">
+        <h2 class="od-title">Order Detail</h2>
+        <button class="od-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="order-detail-body" class="od-body">
+        <p class="od-loading">Loading…</p>
+      </div>
+      <div class="od-footer">
+        <div id="od-link-row" class="od-email-row" hidden>
+          <input id="od-link-input" type="text" class="od-email-input" placeholder="Finix Transfer ID (e.g. TRxxx)">
+          <button id="od-link-btn" class="btn btn-secondary">🔗 Link</button>
+        </div>
+        <div id="od-email-row" class="od-email-row" hidden>
+          <input id="od-email-input" type="email" class="od-email-input" placeholder="Customer email">
+          <button id="od-email-receipt-btn" class="btn btn-secondary">📧 Email</button>
+        </div>
+        <button id="od-print-receipt-btn" class="btn btn-secondary" hidden>🖨 Print Receipt</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/qr.js?v=2"></script>
+  <script src="/js/webauthn.js?v=2"></script>
+  <!--
+    Finix.js — tokenization hosted fields for phone/MOTO payments.
+    applicationId and merchantId are public; API password stays server-side.
+  -->
+  <script src="https://js.finix.com/v/2/finix.js" defer></script>
+  <script src="/js/dashboard.js?v=122"></script>
+  <script src="/js/payment-modal.js?v=35"></script>
+  <script src="/js/order-entry.js?v=41"></script>
+  <script src="/js/pwa.js?v=3"></script>
+  <script src="/js/sync.js?v=3"></script>
+  <script src="/js/voice.js?v=2"></script>
+  <script src="/js/camera.js?v=2" defer></script>
+
+  <!-- ── Payment preview modal ──────────────────────────────────────────── -->
+  <div id="pay-preview-modal" class="ppr-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="pay-preview-title" hidden>
+    <div class="ppr-inner">
+
+      <div class="ppr-header">
+        <h2 id="pay-preview-title" class="ppr-title">Review &amp; Pay</h2>
+        <button type="button" class="btn-close" id="pay-preview-close" aria-label="Close">&times;</button>
+      </div>
+
+      <!-- Scrollable receipt + tip section -->
+      <div class="ppr-body">
+
+        <!-- Customer name line -->
+        <div class="ppr-customer" id="ppr-customer"></div>
+
+        <!-- Line items -->
+        <ul class="ppr-items" id="ppr-items" aria-label="Order items"></ul>
+
+        <!-- Subtotal / Tax (before tip) -->
+        <div class="ppr-subtotals" id="ppr-subtotals"></div>
+
+        <!-- Tip selector -->
+        <div class="ppr-tip-section">
+          <div class="ppr-section-label">Add a tip?</div>
+          <div class="ppr-tip-btns" id="ppr-tip-btns" role="group" aria-label="Tip options"></div>
+          <div class="ppr-custom-tip" id="ppr-custom-tip" hidden>
+            <span class="ppr-currency">$</span>
+            <input type="number" id="ppr-tip-input" class="input ppr-tip-input"
+                   placeholder="0.00" min="0" step="0.01" inputmode="decimal">
+          </div>
+        </div>
+
+        <!-- Grand total -->
+        <div class="ppr-grand-total" id="ppr-grand-total"></div>
+
+      </div>
+
+      <div class="ppr-footer">
+        <button type="button" class="btn btn-secondary" id="pay-preview-cancel">Cancel</button>
+        <button type="button" class="btn btn-success ppr-pay-btn" id="pay-preview-confirm">Pay</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Discount modal ───────────────────────────────────────────────────── -->
+  <div id="discount-modal" class="ppr-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="discount-modal-title" hidden>
+    <div class="ppr-inner">
+      <div class="ppr-header">
+        <h2 id="discount-modal-title" class="ppr-title">Apply Discount</h2>
+        <button type="button" class="btn-close" id="discount-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="ppr-body">
+        <!-- Current discount badge (shown when order already has a discount) -->
+        <div id="discount-current" class="discount-current" hidden></div>
+        <!-- Preset chips injected by JS (shown only when presets are configured) -->
+        <div id="discount-preset-btns" class="discount-preset-btns ppr-tip-btns"></div>
+        <!-- Amount input — always visible -->
+        <div class="discount-input-row">
+          <input type="number" id="discount-custom-value" class="input discount-amount-input"
+                 placeholder="0" min="0" step="0.01" inputmode="decimal" autofocus>
+          <div class="discount-type-toggle">
+            <button type="button" class="btn" id="discount-type-pct" aria-pressed="true">%</button>
+            <button type="button" class="btn" id="discount-type-fixed" aria-pressed="false">$</button>
+          </div>
+        </div>
+        <!-- Live preview -->
+        <div id="discount-preview" class="discount-preview"></div>
+      </div>
+      <div class="ppr-footer">
+        <button type="button" class="btn btn-secondary" id="discount-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger"  id="discount-remove-btn" hidden>Remove Discount</button>
+        <button type="button" class="btn btn-primary" id="discount-apply-btn">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Service Charge modal ─────────────────────────────────────────────── -->
+  <div id="service-charge-modal" class="ppr-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="service-charge-modal-title" hidden>
+    <div class="ppr-inner">
+      <div class="ppr-header">
+        <h2 id="service-charge-modal-title" class="ppr-title">Apply Service Charge</h2>
+        <button type="button" class="btn-close" id="service-charge-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="ppr-body">
+        <!-- Current service charge badge (shown when order already has one) -->
+        <div id="service-charge-current" class="discount-current" hidden></div>
+        <!-- Preset chips injected by JS (shown only when presets are configured) -->
+        <div id="service-charge-preset-btns" class="discount-preset-btns ppr-tip-btns"></div>
+        <!-- Amount input — always visible -->
+        <div class="discount-input-row">
+          <input type="number" id="service-charge-custom-value" class="input discount-amount-input"
+                 placeholder="0" min="0" step="0.01" inputmode="decimal" autofocus>
+          <div class="discount-type-toggle">
+            <button type="button" class="btn" id="service-charge-type-pct" aria-pressed="true">%</button>
+            <button type="button" class="btn" id="service-charge-type-fixed" aria-pressed="false">$</button>
+          </div>
+        </div>
+        <!-- Live preview -->
+        <div id="service-charge-preview" class="discount-preview"></div>
+      </div>
+      <div class="ppr-footer">
+        <button type="button" class="btn btn-secondary" id="service-charge-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger"  id="service-charge-remove-btn" hidden>Remove Charge</button>
+        <button type="button" class="btn btn-primary" id="service-charge-apply-btn">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Refund modal ─────────────────────────────────────────────────────── -->
+  <div id="refund-modal" class="ppr-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="refund-modal-title" hidden>
+    <div class="ppr-inner">
+      <div class="ppr-header">
+        <h2 id="refund-modal-title" class="ppr-title">Refund Order</h2>
+        <button type="button" class="btn-close" id="refund-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="ppr-body" id="refund-modal-body">
+        <!-- Built by JS: type selector (Full / By Item), item list (partial), notes -->
+      </div>
+      <div class="ppr-footer">
+        <button type="button" class="btn btn-secondary" id="refund-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger"    id="refund-modal-confirm" disabled>Confirm Refund</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Employee form modal ──────────────────────────────────────────────── -->
+  <div id="emp-form-modal" class="emp-modal-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="emp-form-title" hidden>
+    <div class="emp-modal-inner">
+      <div class="emp-modal-header">
+        <h2 id="emp-form-title" class="emp-modal-title">Add Employee</h2>
+        <button type="button" class="btn-close" id="emp-form-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="emp-modal-body">
+        <input type="hidden" id="emp-form-id">
+
+        <div class="form-group">
+          <label for="emp-form-nickname">Nickname</label>
+          <input type="text" id="emp-form-nickname" class="input" placeholder="e.g. Alex" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="emp-form-code">4-Digit Access Code</label>
+          <input type="text" id="emp-form-code" class="input" placeholder="e.g. 1234"
+                 maxlength="4" pattern="\d{4}" inputmode="numeric" autocomplete="off">
+          <small class="helper-text">Leave blank when editing to keep the current code.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="emp-form-role">Role</label>
+          <select id="emp-form-role" class="input">
+            <option value="server">Server</option>
+            <option value="chef">Chef</option>
+            <option value="manager">Manager</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Schedule</label>
+          <div class="emp-schedule-grid" id="emp-schedule-grid">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <div class="form-group" id="emp-form-active-row" hidden>
+          <label class="printer-same-toggle" style="gap:0.5rem">
+            <input type="checkbox" id="emp-form-active" checked>
+            <span>Active</span>
+          </label>
+        </div>
+      </div>
+      <div class="emp-modal-footer">
+        <button type="button" class="btn btn-secondary" id="emp-form-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="emp-form-save">Save Employee</button>
+      </div>
+    </div>
+  </div>
+  <div id="emp-form-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- ── Employee Mode PIN overlay ────────────────────────────────────────── -->
+  <div id="emp-pin-overlay" class="emp-pin-overlay" hidden aria-modal="true" role="dialog"
+       aria-labelledby="emp-pin-title">
+    <div class="emp-pin-box">
+      <div class="emp-pin-logo" id="emp-pin-logo">Kizo</div>
+      <h2 id="emp-pin-title" class="emp-pin-title">Enter your code</h2>
+
+      <div class="emp-pin-dots" aria-label="Code entry progress">
+        <span class="emp-pin-dot" data-index="0"></span>
+        <span class="emp-pin-dot" data-index="1"></span>
+        <span class="emp-pin-dot" data-index="2"></span>
+        <span class="emp-pin-dot" data-index="3"></span>
+      </div>
+
+      <div class="emp-pin-error" id="emp-pin-error" hidden>Invalid code</div>
+
+      <div class="emp-pin-keypad" role="group" aria-label="PIN keypad">
+        <button class="emp-pin-key" data-key="1">1</button>
+        <button class="emp-pin-key" data-key="2">2</button>
+        <button class="emp-pin-key" data-key="3">3</button>
+        <button class="emp-pin-key" data-key="4">4</button>
+        <button class="emp-pin-key" data-key="5">5</button>
+        <button class="emp-pin-key" data-key="6">6</button>
+        <button class="emp-pin-key" data-key="7">7</button>
+        <button class="emp-pin-key" data-key="8">8</button>
+        <button class="emp-pin-key" data-key="9">9</button>
+        <button class="emp-pin-key emp-pin-key--clear" data-key="clear">⌫</button>
+        <button class="emp-pin-key" data-key="0">0</button>
+        <button class="emp-pin-key emp-pin-key--empty" disabled></button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Clock In / Clock Out modal ───────────────────────────────────────── -->
+  <div id="emp-clock-modal" class="emp-modal-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="emp-clock-title" hidden>
+    <div class="emp-modal-inner emp-clock-inner">
+      <div class="emp-clock-icon" id="emp-clock-icon">🟢</div>
+      <h2 id="emp-clock-title" class="emp-clock-title">Clock In</h2>
+      <p class="emp-clock-name" id="emp-clock-name"></p>
+      <p class="emp-clock-time" id="emp-clock-time"></p>
+      <p class="emp-clock-worked" id="emp-clock-worked" hidden></p>
+      <!-- Sales summary — shown on clock-out only -->
+      <div class="emp-clock-sales" id="emp-clock-sales" hidden>
+        <p class="emp-clock-sales-title">My Sales</p>
+        <div class="emp-clock-sales-grid">
+          <div class="emp-clock-sales-col">
+            <span class="emp-clock-sales-label">Today</span>
+            <span class="emp-clock-sales-amount" id="emp-sales-today-total">—</span>
+            <span class="emp-clock-sales-orders" id="emp-sales-today-count"></span>
+            <span class="emp-clock-sales-tips" id="emp-sales-today-tips" hidden></span>
+          </div>
+          <div class="emp-clock-sales-divider" aria-hidden="true"></div>
+          <div class="emp-clock-sales-col">
+            <span class="emp-clock-sales-label">Last 14 days</span>
+            <span class="emp-clock-sales-amount" id="emp-sales-fort-total">—</span>
+            <span class="emp-clock-sales-orders" id="emp-sales-fort-count"></span>
+            <span class="emp-clock-sales-tips" id="emp-sales-fort-tips" hidden></span>
+          </div>
+        </div>
+      </div>
+      <div class="emp-modal-footer">
+        <button type="button" class="btn btn-secondary" id="emp-clock-cancel">Cancel</button>
+        <button type="button" class="btn btn-success" id="emp-clock-confirm">Clock In</button>
+      </div>
+    </div>
+  </div>
+  <div id="emp-clock-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- ── Cash payment modal ─────────────────────────────────────────────── -->
+  <div id="cash-pay-modal" class="emp-modal-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="cash-pay-title" hidden>
+    <div class="cash-pay-inner">
+      <!-- Scrollable order summary -->
+      <div class="cash-pay-header">
+        <h2 class="ppr-title" id="cash-pay-title">Cash Payment</h2>
+      </div>
+      <div class="cash-pay-body">
+        <div class="ppr-customer" id="cash-pay-customer"></div>
+        <ul class="ppr-items" id="cash-pay-items" aria-label="Order items"></ul>
+        <div class="ppr-subtotals" id="cash-pay-subtotals"></div>
+        <div class="ppr-grand-total" id="cash-pay-grand"></div>
+      </div>
+      <!-- Fixed bottom: denomination + change + actions -->
+      <div class="cash-pay-footer">
+        <p class="cash-pay-prompt">How much did the customer give?</p>
+        <div class="cash-pay-bills" id="cash-pay-bills"></div>
+        <div class="cash-pay-change-row" id="cash-pay-change-row" hidden>
+          <span class="cash-pay-change-label">Change due</span>
+          <span class="cash-pay-change-amount" id="cash-pay-change-amount"></span>
+        </div>
+        <div class="emp-modal-footer">
+          <button type="button" class="btn btn-secondary" id="cash-pay-cancel">Cancel</button>
+          <button type="button" class="btn" id="cash-pay-confirm" disabled>Confirm Payment</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Receipt prompt modal (card payments) ───────────────────────────── -->
+  <div id="receipt-prompt-modal" class="emp-modal-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="receipt-prompt-title" hidden>
+    <div class="cash-pay-inner">
+      <div class="cash-pay-header">
+        <h2 class="ppr-title" id="receipt-prompt-title">Receipt</h2>
+      </div>
+      <div class="cash-pay-body" style="padding-top: 1rem; padding-bottom: 1rem;">
+        <p style="font-size: 1.05rem; margin: 0; color: var(--color-gray-700, #374151);">
+          Does the customer want a receipt?
+        </p>
+      </div>
+      <div class="cash-pay-footer">
+        <div class="emp-modal-footer">
+          <button type="button" class="btn btn-secondary" id="receipt-prompt-skip">No Thanks</button>
+          <button type="button" class="btn" id="receipt-prompt-print">🧾 Print Receipt</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Finix payment modal ── centered dialog, no redirect ─────────────── -->
+  <!-- Finix payments use Checkout Pages (redirect flow) — no inline modal needed -->
+
+  <!-- ── Review & Pay full-screen overlay ─────────────────────────────────── -->
+  <div id="payment-modal-overlay" hidden aria-modal="true" role="dialog"
+       aria-labelledby="pm-modal-title">
+    <div class="pm-modal-card">
+      <div class="pm-header">
+        <div>
+          <h2 id="pm-modal-title" class="pm-header">Review &amp; Pay</h2>
+          <div class="pm-order-meta"></div>
+        </div>
+        <button type="button" class="pm-close-btn" aria-label="Close">&times;</button>
+      </div>
+      <!-- Screen content injected here by payment-modal.js -->
+      <div class="pm-screen"></div>
+    </div>
+  </div>
+
+</body>
+</html>

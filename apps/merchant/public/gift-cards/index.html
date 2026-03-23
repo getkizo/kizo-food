@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self';">
+  <title>Gift Cards</title>
+  <link rel="stylesheet" href="/gift-cards/css/gift-cards.css?v=2">
+</head>
+<body>
+
+<!-- ── Loading splash ── -->
+<div id="gc-loading" class="gc-splash" aria-live="polite">
+  <img id="gc-splash-img" class="gc-splash-img" src="" alt="" role="presentation" hidden>
+  <div class="gc-splash-banner">
+    <div class="gc-spinner"></div>
+    <p id="gc-splash-name" class="gc-splash-name">Loading…</p>
+  </div>
+</div>
+
+<!-- ── Unavailable ── -->
+<div id="gc-unavailable" class="gc-full-center" hidden>
+  <p class="gc-unavail-icon">🎁</p>
+  <h2 class="gc-unavail-title">Gift cards unavailable</h2>
+  <p class="gc-unavail-sub">Please check back later.</p>
+</div>
+
+<!-- ========================================================
+     STEP 1 — Select denominations + build cart
+     ======================================================== -->
+<div id="gc-step-select" hidden>
+
+  <!-- Store header (banner + logo + name) -->
+  <header class="gc-store-header">
+    <div class="gc-store-banner" id="gc-store-banner">
+      <img id="gc-banner-img" class="gc-banner-img" src="" alt="" hidden>
+      <div class="gc-banner-overlay"></div>
+    </div>
+    <div class="gc-store-header-content">
+      <img id="gc-logo-img" class="gc-store-logo" src="" alt="" hidden>
+      <div>
+        <h1 id="gc-store-name" class="gc-store-name"></h1>
+        <p class="gc-store-sub">Gift Cards</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="gc-main">
+
+    <!-- Denomination picker -->
+    <section class="gc-section">
+      <h2 class="gc-section-title">Choose an amount</h2>
+      <div class="gc-denom-grid" id="gc-denom-grid" role="group" aria-label="Gift card denominations">
+        <button type="button" class="gc-denom-btn" data-cents="2500">$25</button>
+        <button type="button" class="gc-denom-btn gc-denom-btn--active" data-cents="5000">$50</button>
+        <button type="button" class="gc-denom-btn" data-cents="7500">$75</button>
+        <button type="button" class="gc-denom-btn" data-cents="10000">$100</button>
+        <button type="button" class="gc-denom-btn" data-cents="15000">$150</button>
+      </div>
+    </section>
+
+    <!-- Quantity + Add -->
+    <section class="gc-section gc-add-row-section">
+      <div class="gc-add-row">
+        <div class="gc-qty-control">
+          <button type="button" id="gc-qty-dec" class="gc-qty-btn" aria-label="Decrease quantity">−</button>
+          <span id="gc-qty-val" class="gc-qty-val">1</span>
+          <button type="button" id="gc-qty-inc" class="gc-qty-btn" aria-label="Increase quantity">+</button>
+        </div>
+        <button type="button" id="gc-add-btn" class="gc-btn-add">
+          Add to Cart
+        </button>
+      </div>
+    </section>
+
+    <!-- Cart line items -->
+    <section id="gc-cart-section" class="gc-section" hidden>
+      <h2 class="gc-section-title">Your cart</h2>
+      <ul id="gc-cart-list" class="gc-cart-list" aria-label="Cart items"></ul>
+      <div class="gc-cart-footer">
+        <span class="gc-cart-total-label">Total</span>
+        <span id="gc-cart-total" class="gc-cart-total-value"></span>
+      </div>
+    </section>
+
+    <!-- Checkout CTA -->
+    <div id="gc-checkout-cta" hidden>
+      <button type="button" id="gc-to-checkout-btn" class="gc-btn-primary">
+        Continue to Checkout →
+      </button>
+      <p class="gc-valid-note">Valid for 1 year · Tax included</p>
+    </div>
+
+  </main>
+</div>
+
+<!-- ========================================================
+     STEP 2 — Contact info + review
+     ======================================================== -->
+<div id="gc-step-checkout" hidden>
+
+  <header class="gc-compact-header">
+    <button type="button" id="gc-back-btn" class="gc-back-btn" aria-label="Back to cart">
+      ← Back
+    </button>
+    <h1 class="gc-compact-title">Checkout</h1>
+    <span></span><!-- spacer -->
+  </header>
+
+  <main class="gc-main">
+
+    <!-- Order summary (read-only line items) -->
+    <section class="gc-section">
+      <h2 class="gc-section-title">Order summary</h2>
+      <div id="gc-summary-box" class="gc-summary-box">
+        <!-- filled by JS -->
+      </div>
+    </section>
+
+    <!-- Contact info -->
+    <section class="gc-section">
+      <h2 class="gc-section-title">Your details</h2>
+      <p class="gc-helper">We'll email your gift card(s) and a PDF to this address.</p>
+
+      <label class="gc-label" for="gc-name">Your name</label>
+      <input type="text" id="gc-name" class="gc-input"
+        placeholder="Your name" autocomplete="off" maxlength="128">
+
+      <label class="gc-label" for="gc-email">Your email</label>
+      <input type="email" id="gc-email" class="gc-input"
+        placeholder="you@example.com" autocomplete="off" maxlength="256" inputmode="email">
+
+      <label class="gc-label" for="gc-recipient-name">Recipient's first name <span class="gc-label-optional">(optional)</span></label>
+      <input type="text" id="gc-recipient-name" class="gc-input"
+        placeholder="Who is this gift for?" autocomplete="off" maxlength="128">
+    </section>
+
+    <p id="gc-checkout-err" class="gc-error-msg" hidden></p>
+
+    <button type="button" id="gc-purchase-btn" class="gc-btn-primary">
+      Purchase Gift Card
+    </button>
+    <p class="gc-secure-note">🔒 Secured by your payment provider</p>
+
+  </main>
+</div>
+
+<!-- ========================================================
+     STEP 3 — Paying (interstitial)
+     ======================================================== -->
+<div id="gc-step-paying" class="gc-full-center" hidden>
+  <div class="gc-spinner"></div>
+  <p class="gc-loading-text" id="gc-paying-text">Redirecting to payment…</p>
+  <p class="gc-loading-sub">Please do not close this page.</p>
+</div>
+
+<!-- ========================================================
+     STEP 4 — Thank You (pay-return landing)
+     ======================================================== -->
+<div id="gc-step-thankyou" class="gc-full-center" hidden>
+  <span class="gc-confirmed-check" aria-hidden="true">✓</span>
+  <h2 class="gc-thankyou-title">Thank you for your purchase!</h2>
+  <p id="gc-thankyou-sub" class="gc-thankyou-sub">Your gift cards have been sent to your email inbox.</p>
+  <a id="gc-thankyou-link" href="/" class="gc-btn-primary gc-thankyou-link">← Back to <span id="gc-thankyou-store-name">the store</span></a>
+</div>
+
+<!-- ========================================================
+     STEP 5 — Confirmed (in-session purchase flow)
+     ======================================================== -->
+<div id="gc-step-confirmed" hidden>
+
+  <header class="gc-compact-header gc-compact-header--confirmed">
+    <span></span>
+    <h1 class="gc-compact-title">Gift Cards</h1>
+    <span></span>
+  </header>
+
+  <main class="gc-main">
+    <div class="gc-confirmed-hero">
+      <span class="gc-confirmed-check" aria-hidden="true">✓</span>
+      <h2 class="gc-confirmed-title">Purchase Complete!</h2>
+      <p id="gc-confirmed-sub" class="gc-confirmed-sub"></p>
+    </div>
+
+    <section class="gc-section">
+      <h2 class="gc-section-title">Your gift cards</h2>
+      <div id="gc-confirmed-cards" class="gc-confirmed-cards">
+        <!-- rows filled by JS -->
+      </div>
+    </section>
+
+    <div class="gc-redeem-box">
+      <p class="gc-redeem-title">How to redeem</p>
+      <p class="gc-redeem-body">
+        Present your card code when placing an order. The full card value will be applied to your bill.
+      </p>
+    </div>
+
+    <button type="button" id="gc-buy-another-btn" class="gc-btn-secondary">
+      Buy Another Gift Card
+    </button>
+  </main>
+</div>
+
+<!-- ========================================================
+     STEP 6 — Error
+     ======================================================== -->
+<div id="gc-step-error" class="gc-full-center" hidden>
+  <span class="gc-error-icon" aria-hidden="true">⚠️</span>
+  <h2 id="gc-err-title" class="gc-err-title">Payment Not Completed</h2>
+  <p id="gc-err-body" class="gc-err-body">Something went wrong. Please try again.</p>
+  <button type="button" id="gc-retry-btn" class="gc-btn-primary gc-btn-retry">
+    Try Again
+  </button>
+</div>
+
+<script src="/gift-cards/js/gift-card-app.js?v=4"></script>
+</body>
+</html>

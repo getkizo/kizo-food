@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#1a1a2e"/>
+  <!-- Stylized "B" wordmark for Kizo -->
+  <text x="256" y="340" font-family="Georgia, serif" font-size="300" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">B</text>
+  <!-- Accent dot -->
+  <circle cx="360" cy="180" r="28" fill="#f97316"/>
+</svg>

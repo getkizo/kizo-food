@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Merchant Onboarding - Kizo</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="logo">Kizo</h1>
+      <p class="tagline">Restaurant Management Made Simple</p>
+    </header>
+
+    <!-- Progress Stepper -->
+    <nav class="stepper" aria-label="Onboarding progress">
+      <ol>
+        <li id="stepper-1" class="stepper-step active" aria-current="step">
+          <span class="stepper-number">1</span>
+          <span class="stepper-label">Account</span>
+        </li>
+        <li id="stepper-2" class="stepper-step">
+          <span class="stepper-number">2</span>
+          <span class="stepper-label">Business</span>
+        </li>
+        <li id="stepper-3" class="stepper-step">
+          <span class="stepper-number">3</span>
+          <span class="stepper-label">POS</span>
+        </li>
+      </ol>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content" aria-live="polite">
+      <!-- Step 1: Welcome & Social Login -->
+      <section id="step-welcome" class="step active" role="region" aria-label="Create account">
+        <div class="card">
+          <h2 tabindex="-1">Create Your Merchant Account</h2>
+          <p class="subtitle">Connect your restaurant to Kizo in minutes</p>
+
+          <div class="social-login" role="group" aria-label="Social login options">
+            <button id="google-login" class="btn-social btn-google" type="button" aria-label="Continue with Google">
+              <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              Continue with Google
+            </button>
+
+            <button id="apple-login" class="btn-social btn-apple" type="button" aria-label="Continue with Apple">
+              <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+                <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+              </svg>
+              Continue with Apple
+            </button>
+
+            <button id="facebook-login" class="btn-social btn-facebook" type="button" aria-label="Continue with Facebook">
+              <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+              </svg>
+              Continue with Facebook
+            </button>
+          </div>
+
+          <div class="divider" role="separator">
+            <span>or</span>
+          </div>
+
+          <button id="email-signup" class="btn btn-secondary full-width" type="button">
+            Sign up with Email
+          </button>
+
+          <p class="login-link">
+            Already have an account? <a href="#" id="show-login">Log in</a>
+          </p>
+        </div>
+      </section>
+
+      <!-- Step 1b: Email Signup Credentials -->
+      <section id="step-email-signup" class="step" role="region" aria-label="Email signup">
+        <div class="card">
+          <h2 tabindex="-1">Create Your Account</h2>
+          <p class="subtitle">Enter your email and choose a password</p>
+
+          <form id="email-signup-form" novalidate>
+            <div class="form-group">
+              <label for="signup-fullname">Full Name *</label>
+              <input
+                type="text"
+                id="signup-fullname"
+                name="fullName"
+                required
+                placeholder="Jane Smith"
+                class="input"
+                autocomplete="name"
+                aria-required="true"
+              >
+            </div>
+
+            <div class="form-group">
+              <label for="signup-email">Email *</label>
+              <input
+                type="email"
+                id="signup-email"
+                name="email"
+                required
+                placeholder="jane@example.com"
+                class="input"
+                autocomplete="email"
+                aria-required="true"
+              >
+            </div>
+
+            <div class="form-group">
+              <label for="signup-password">Password *</label>
+              <input
+                type="password"
+                id="signup-password"
+                name="password"
+                required
+                minlength="8"
+                placeholder="Minimum 8 characters"
+                class="input"
+                autocomplete="new-password"
+                aria-required="true"
+                aria-describedby="password-hint"
+              >
+              <small id="password-hint" class="helper-text">At least 8 characters</small>
+            </div>
+
+            <div class="form-group">
+              <label for="signup-password-confirm">Confirm Password *</label>
+              <input
+                type="password"
+                id="signup-password-confirm"
+                name="passwordConfirm"
+                required
+                minlength="8"
+                placeholder="Re-enter your password"
+                class="input"
+                autocomplete="new-password"
+                aria-required="true"
+              >
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="back-to-welcome-from-email" class="btn btn-secondary">
+                Back
+              </button>
+              <button type="submit" class="btn btn-primary">
+                Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Step 2: Business Information -->
+      <section id="step-business" class="step" role="region" aria-label="Business information">
+        <div class="card">
+          <h2 tabindex="-1">Tell Us About Your Restaurant</h2>
+          <p class="subtitle">We'll use this to set up your merchant profile</p>
+
+          <form id="business-form" novalidate>
+            <div class="form-group">
+              <label for="business-name">Business Name *</label>
+              <input
+                type="text"
+                id="business-name"
+                name="businessName"
+                required
+                placeholder="e.g., Joe's Pizza"
+                class="input"
+                autocomplete="organization"
+                aria-required="true"
+              >
+            </div>
+
+            <div class="form-group">
+              <label for="slug">URL Slug *</label>
+              <div class="input-group">
+                <input
+                  type="text"
+                  id="slug"
+                  name="slug"
+                  required
+                  placeholder="joes-pizza"
+                  class="input"
+                  aria-required="true"
+                  aria-describedby="slug-hint slug-status"
+                >
+                <span class="input-suffix">.kizo.app</span>
+              </div>
+              <small id="slug-hint" class="helper-text">Lowercase letters, numbers, and hyphens only</small>
+              <small id="slug-status" class="helper-text slug-status" aria-live="polite"></small>
+            </div>
+
+            <div class="form-group">
+              <label for="phone">Phone Number</label>
+              <input
+                type="tel"
+                id="phone"
+                name="phoneNumber"
+                placeholder="(555) 123-4567"
+                class="input"
+                autocomplete="tel"
+              >
+            </div>
+
+            <div class="form-group">
+              <label for="email">Contact Email</label>
+              <input
+                type="email"
+                id="email"
+                name="email"
+                placeholder="contact@joespizza.com"
+                class="input"
+                autocomplete="email"
+              >
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="back-to-welcome" class="btn btn-secondary">
+                Back
+              </button>
+              <button type="submit" class="btn btn-primary">
+                Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Step 3: POS Integration -->
+      <section id="step-pos" class="step" role="region" aria-label="POS integration">
+        <div class="card">
+          <h2 tabindex="-1">Connect Your POS System</h2>
+          <p class="subtitle">Link your Clover account to sync menu and orders automatically</p>
+
+          <fieldset class="pos-options">
+            <legend class="sr-only">Choose your POS system</legend>
+
+            <div class="pos-option">
+              <input type="radio" id="pos-clover" name="posType" value="clover" checked>
+              <label for="pos-clover" class="pos-card">
+                <div class="pos-header">
+                  <h3>Clover</h3>
+                  <span class="badge badge-recommended">Recommended</span>
+                </div>
+                <p>Automatically sync your menu, inventory, and orders</p>
+              </label>
+            </div>
+
+            <div class="pos-option">
+              <input type="radio" id="pos-manual" name="posType" value="manual">
+              <label for="pos-manual" class="pos-card">
+                <div class="pos-header">
+                  <h3>Manual Entry</h3>
+                </div>
+                <p>Enter menu items manually (you can add POS later)</p>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- Clover API Key Form -->
+          <div id="clover-setup" class="clover-setup" role="group" aria-label="Clover configuration">
+            <div class="form-group">
+              <label for="clover-api-key">Clover API Key *</label>
+              <div class="input-toggle-group">
+                <input
+                  type="password"
+                  id="clover-api-key"
+                  name="cloverApiKey"
+                  placeholder="Enter your Clover API token"
+                  class="input"
+                  autocomplete="off"
+                  aria-describedby="clover-key-hint"
+                >
+                <button type="button" class="btn-toggle-visibility" aria-label="Show API key" data-target="clover-api-key">
+                  <svg class="icon-eye" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                    <circle cx="12" cy="12" r="3"/>
+                  </svg>
+                </button>
+              </div>
+              <small id="clover-key-hint" class="helper-text">
+                Find this in your Clover dashboard under Settings &gt; API Tokens
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="clover-merchant-id">Clover Merchant ID *</label>
+              <input
+                type="text"
+                id="clover-merchant-id"
+                name="cloverMerchantId"
+                placeholder="e.g. WJ3EYD26EN771"
+                class="input"
+                autocomplete="off"
+                aria-describedby="clover-merchant-hint"
+              >
+              <small id="clover-merchant-hint" class="helper-text">
+                Log in to
+                <a href="https://www.clover.com/setupapp" target="_blank" rel="noopener noreferrer">clover.com/setupapp</a>
+                — your Merchant ID appears in the URL as <code>?mid=XXXXXXXXXXXXXXX</code>
+              </small>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="clover-sandbox" name="cloverSandbox">
+              <label for="clover-sandbox">Use Clover sandbox (for testing)</label>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" id="back-to-business" class="btn btn-secondary">
+              Back
+            </button>
+            <button type="button" id="finish-setup" class="btn btn-primary">
+              Complete Setup
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 4: Success -->
+      <section id="step-success" class="step" role="region" aria-label="Setup complete">
+        <div class="card text-center">
+          <div class="success-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="var(--color-success)" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 12l2 2 4-4"/>
+            </svg>
+          </div>
+          <h2 tabindex="-1">Welcome to Kizo!</h2>
+          <p class="subtitle">Your merchant account is ready</p>
+
+          <div class="success-details">
+            <p>Your restaurant URL:</p>
+            <div class="url-display">
+              <code id="merchant-url"></code>
+              <button id="copy-url" class="btn-icon" type="button" title="Copy URL" aria-label="Copy restaurant URL to clipboard">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2"/>
+                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <button id="go-to-dashboard" class="btn btn-primary" type="button">
+            Go to Dashboard
+          </button>
+        </div>
+      </section>
+
+      <!-- Login Modal -->
+      <div id="login-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="login-modal-title">Log In</h2>
+            <button id="close-login" class="btn-close" type="button" aria-label="Close login dialog">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="social-login" role="group" aria-label="Social login options">
+              <button id="google-login-modal" class="btn-social btn-google" type="button" aria-label="Continue with Google">
+                <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Continue with Google
+              </button>
+
+              <button id="apple-login-modal" class="btn-social btn-apple" type="button" aria-label="Continue with Apple">
+                <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+                  <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+                </svg>
+                Continue with Apple
+              </button>
+
+              <button id="facebook-login-modal" class="btn-social btn-facebook" type="button" aria-label="Continue with Facebook">
+                <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                </svg>
+                Continue with Facebook
+              </button>
+            </div>
+
+            <!-- Passkey / fingerprint login (shown only when platform authenticator available) -->
+            <button
+              id="passkey-login"
+              class="btn-social btn-passkey"
+              type="button"
+              aria-label="Sign in with passkey (fingerprint or Face ID)"
+              hidden
+            >
+              <svg class="icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 2C9.5 2 7.5 4 7.5 6.5V9H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1.5V6.5C16.5 4 14.5 2 12 2z"/>
+                <circle cx="12" cy="15" r="1.5" fill="currentColor" stroke="none"/>
+                <line x1="12" y1="16.5" x2="12" y2="19"/>
+              </svg>
+              Sign in with Passkey
+            </button>
+
+            <div class="divider" role="separator">
+              <span>or</span>
+            </div>
+
+            <form id="login-form" novalidate>
+              <div class="form-group">
+                <label for="login-email">Email</label>
+                <input type="email" id="login-email" required class="input" autocomplete="email" aria-required="true">
+              </div>
+              <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" required class="input" autocomplete="current-password" aria-required="true">
+              </div>
+              <button type="submit" class="btn btn-primary full-width">Log In</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Toast Notifications -->
+    <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
+  </div>
+
+  <script src="/js/webauthn.js?v=3"></script>
+  <script src="/js/app.js?v=6"></script>
+</body>
+</html>

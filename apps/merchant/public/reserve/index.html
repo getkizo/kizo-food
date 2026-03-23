@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Reserve a Table</title>
+  <link rel="stylesheet" href="/reserve/reserve.css">
+</head>
+<body>
+  <div id="reserve-app">
+
+    <!-- Loading -->
+    <div id="rv-loading" class="rv-center">
+      <div class="rv-spinner"></div>
+    </div>
+
+    <!-- Closed / reservations disabled -->
+    <div id="rv-disabled" class="rv-center" hidden>
+      <div class="rv-card rv-card--center">
+        <svg class="rv-icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M7 8V5a2 2 0 014 0v3"/><path d="M13 8V5a2 2 0 014 0v3"/></svg>
+        <p id="rv-disabled-msg">Online reservations are not available.</p>
+      </div>
+    </div>
+
+    <!-- Step 1: Date + Party Size -->
+    <div id="rv-step-date" class="rv-step" hidden>
+      <h1 class="rv-heading" id="rv-business-name">Reserve a Table</h1>
+
+      <div class="rv-card">
+        <label class="rv-label">Party size</label>
+        <div class="rv-party-row">
+          <button type="button" class="rv-party-btn" id="rv-party-dec" aria-label="Decrease party size">−</button>
+          <span class="rv-party-count" id="rv-party-display">2</span>
+          <button type="button" class="rv-party-btn" id="rv-party-inc" aria-label="Increase party size">+</button>
+        </div>
+        <p id="rv-party-max-msg" class="rv-helper" hidden></p>
+
+        <label class="rv-label" style="margin-top:20px">Date</label>
+        <div class="rv-date-grid" id="rv-date-grid" role="group" aria-label="Select date">
+          <!-- date chips rendered by JS -->
+        </div>
+      </div>
+
+      <button type="button" class="rv-btn rv-btn--primary rv-btn--full" id="rv-date-next">
+        See Available Times →
+      </button>
+    </div>
+
+    <!-- Step 2: Time slot -->
+    <div id="rv-step-time" class="rv-step" hidden>
+      <button type="button" class="rv-back-btn" id="rv-back-to-date">← Back</button>
+      <h2 class="rv-heading rv-heading--sm" id="rv-time-heading">Available Times</h2>
+      <div id="rv-slots-loading" class="rv-center rv-center--sm">
+        <div class="rv-spinner rv-spinner--sm"></div>
+      </div>
+      <div id="rv-slots-empty" class="rv-helper rv-center rv-center--sm" hidden>
+        No times available for this date.
+      </div>
+      <div class="rv-slots-grid" id="rv-slots-grid" role="group" aria-label="Available time slots">
+        <!-- time chips rendered by JS -->
+      </div>
+    </div>
+
+    <!-- Step 3: Contact info -->
+    <div id="rv-step-contact" class="rv-step" hidden>
+      <button type="button" class="rv-back-btn" id="rv-back-to-time">← Back</button>
+      <h2 class="rv-heading rv-heading--sm">Your Details</h2>
+
+      <div class="rv-card">
+        <label class="rv-label" for="rv-name">Name <span class="rv-required">*</span></label>
+        <input type="text" id="rv-name" class="rv-input" placeholder="Full name" maxlength="100" autocomplete="off" required>
+
+        <label class="rv-label" for="rv-phone" style="margin-top:16px">Phone</label>
+        <input type="tel" id="rv-phone" class="rv-input" placeholder="(206) 555-1234" autocomplete="off" maxlength="20">
+
+        <label class="rv-label" for="rv-email" style="margin-top:16px">Email</label>
+        <input type="email" id="rv-email" class="rv-input" placeholder="you@example.com" autocomplete="off" maxlength="100">
+
+        <label class="rv-label" for="rv-notes" style="margin-top:16px">Special requests</label>
+        <textarea id="rv-notes" class="rv-input rv-textarea" placeholder="Allergies, celebrations, accessibility needs…" maxlength="500" rows="3"></textarea>
+      </div>
+
+      <div class="rv-summary-bar" id="rv-summary-bar">
+        <!-- filled by JS -->
+      </div>
+
+      <!--
+        Honeypot: positioned off-screen, invisible to humans.
+        Bots that auto-fill all fields will populate this; real users never touch it.
+        aria-hidden keeps screen readers from announcing or reading the field.
+      -->
+      <div style="position:absolute;left:-9999px;top:-9999px;overflow:hidden;height:0" aria-hidden="true">
+        <label for="rv-hp">Leave this blank</label>
+        <input type="text" id="rv-hp" name="url" tabindex="-1" autocomplete="off">
+      </div>
+
+      <p class="rv-policy-note">We hold your table for 15 minutes after the reservation time. Please call us if you're running late or need to cancel.</p>
+
+      <p id="rv-contact-error" class="rv-error" hidden></p>
+
+      <button type="button" class="rv-btn rv-btn--primary rv-btn--full" id="rv-submit-btn">
+        Confirm Reservation
+      </button>
+    </div>
+
+    <!-- Step 4: Confirmation -->
+    <div id="rv-step-confirm" class="rv-step" hidden>
+      <div class="rv-card rv-card--center">
+        <svg class="rv-check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="9 12 11 14 15 10"/>
+        </svg>
+        <h2 class="rv-heading rv-heading--sm">You're all set!</h2>
+        <div id="rv-confirm-details" class="rv-confirm-details"></div>
+        <p class="rv-helper" style="margin-top:12px">A confirmation email with a calendar invite has been sent if you provided your email address. Keep your confirmation code to cancel if needed.</p>
+      </div>
+    </div>
+
+    <!-- Large party message -->
+    <div id="rv-large-party" class="rv-center" hidden>
+      <div class="rv-card rv-card--center">
+        <svg class="rv-icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        <p>For parties of <strong id="rv-large-size"></strong> or more, please call us to make a reservation.</p>
+        <p id="rv-call-phone" class="rv-phone-link"></p>
+      </div>
+    </div>
+
+  </div>
+  <script src="/reserve/reserve-app.js"></script>
+</body>
+</html>

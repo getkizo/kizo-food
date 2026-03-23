@@ -1,0 +1,12 @@
+# Kizo memory leak monitor — runs every 5 minutes
+# Install: crontab -e  (then paste the line below)
+#
+# The script logs to /var/log/kizo/mem-check.log
+# Alerts appear in journald:  journalctl -t kizo-mem -f
+#
+# Optional env overrides (uncomment to change defaults):
+#   ALERT_THRESHOLD_MB=300   — alert if Private_Dirty exceeds this
+#   TREND_GROWTH_MB=50       — alert if growth over 1 hour exceeds this
+#   TREND_SAMPLES=12         — number of 5-min samples to keep (1 hour)
+#
+*/5 * * * * /home/kizo/baan-baan-merchant/v2/scripts/mem-check.sh

@@ -1,0 +1,7 @@
+[test]
+# Default timeout for all tests and lifecycle hooks (30 seconds).
+# Registration calls use bcrypt cost-10 (~3 s each) and migrations run ~80
+# schema items; combined setup routinely exceeds the 5-second default.
+timeout = 30000
+# Only run unit tests under test/; e2e/ specs use Playwright (bun run test:e2e)
+root = "./test"

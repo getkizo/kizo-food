@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Online Order</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/store/manifest.json">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+  <link rel="stylesheet" href="/store/css/store.css?v=24">
+</head>
+<body>
+
+<!-- =========================================================
+     iOS "Add to Home Screen" install banner
+     Shown once per session on non-standalone iOS Safari
+     ========================================================= -->
+<div id="ios-install-banner" class="ios-install-banner" hidden>
+  <div class="ios-install-inner">
+    <svg class="ios-share-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 16V4m0 0L8 8m4-4l4 4"/>
+      <rect x="3" y="14" width="18" height="8" rx="2"/>
+    </svg>
+    <span>Tap <strong>Share</strong>, then <strong>"Add to Home Screen"</strong> to receive order notifications.</span>
+  </div>
+  <button id="ios-banner-dismiss" class="ios-banner-dismiss" aria-label="Dismiss">&times;</button>
+</div>
+
+<!-- =========================================================
+     Active order status bar — visible across ALL views,
+     above every state panel
+     ========================================================= -->
+<div id="active-order-bar" class="active-order-bar" hidden>
+  <div class="active-order-bar-inner">
+    <div class="active-order-info">
+      <span class="active-order-status" id="active-order-status">Received</span>
+      <span class="active-order-sep">&middot;</span>
+      <span class="active-order-code">Code: <strong id="active-order-code"></strong></span>
+    </div>
+    <div class="active-order-bar-right">
+      <span class="active-order-eta" id="active-order-eta"></span>
+    </div>
+  </div>
+  <div class="active-order-progress">
+    <div class="active-order-progress-fill" id="active-order-progress-fill"></div>
+  </div>
+</div>
+
+<!-- =========================================================
+     LOADING state — Splash screen
+     Collage cells are replaced by JS after menu data arrives.
+     ========================================================= -->
+<div id="state-loading" class="state-panel splash-screen" aria-live="polite">
+  <!-- Merchant splash image — decorative background; alt intentionally empty -->
+  <img id="splash-custom-img" class="splash-custom-img" src="" alt="" role="presentation" hidden>
+  <div class="splash-banner">
+    <div class="splash-spinner"></div>
+    <p id="splash-restaurant-name" class="splash-restaurant-name">Loading…</p>
+  </div>
+</div>
+
+<!-- =========================================================
+     Welcome message modal — shown once per merchant on first visit
+     Injected by JS after splash fades, before BROWSING renders.
+     ========================================================= -->
+<div id="welcome-modal-backdrop" class="welcome-modal-backdrop" hidden aria-hidden="true"></div>
+<div id="welcome-modal" class="welcome-modal" role="dialog" aria-modal="true" aria-label="Welcome message" hidden>
+  <div class="welcome-modal-inner">
+    <p id="welcome-modal-message" class="welcome-modal-message"></p>
+    <button id="welcome-modal-dismiss" class="btn btn-primary btn-full">Let's Go!</button>
+  </div>
+</div>
+
+<!-- Exit app confirmation (device back from menu, or back while order pending) -->
+<div id="exit-modal-backdrop" class="exit-modal-backdrop" hidden aria-hidden="true"></div>
+<div id="exit-modal" class="exit-modal" role="alertdialog" aria-modal="true" aria-labelledby="exit-modal-title" hidden>
+  <p id="exit-modal-title" class="exit-modal-title">Leave the app?</p>
+  <p id="exit-modal-subtitle" class="exit-modal-subtitle" hidden></p>
+  <div class="exit-modal-btns">
+    <button id="exit-modal-stay" class="btn btn-secondary">Stay</button>
+    <button id="exit-modal-leave" class="btn btn-primary">Leave</button>
+  </div>
+</div>
+
+<!-- =========================================================
+     BROWSING state — store header + menu
+     ========================================================= -->
+<div id="state-browsing" class="state-panel" hidden>
+
+  <!-- Hero header: banner + logo + merchant name -->
+  <header id="store-header" class="store-header">
+    <div id="store-banner" class="store-banner">
+      <img id="store-banner-img" src="" alt="" class="store-banner-img" hidden>
+      <div class="store-banner-overlay"></div>
+    </div>
+    <div class="store-header-content">
+      <img id="store-logo" src="" alt="" class="store-logo" hidden>
+      <h1 id="store-name" class="store-name"></h1>
+      <p id="store-hours-badge" class="store-hours-badge"></p>
+    </div>
+  </header>
+
+  <!-- Closed banner — shown when restaurant is outside business hours -->
+  <div id="store-closed-banner" class="store-closed-banner" hidden>
+    <div class="store-closed-inner">
+      <p class="store-closed-title">We're closed right now</p>
+      <p id="store-closed-next" class="store-closed-next"></p>
+      <button id="store-closed-schedule-btn" class="btn btn-primary store-closed-btn">
+        Schedule an Order
+      </button>
+    </div>
+  </div>
+
+  <!-- View toggle: Menu / My Orders -->
+  <nav class="store-view-nav">
+    <button id="nav-menu-btn" class="store-view-tab active" data-view="menu">Menu</button>
+    <button id="nav-history-btn" class="store-view-tab" data-view="history">My Orders</button>
+  </nav>
+
+  <!-- Sticky category nav pills (visible in menu view) -->
+  <nav id="category-nav" class="category-nav" aria-label="Menu categories">
+    <!-- Pills injected by store-menu.js -->
+  </nav>
+
+  <!-- Menu sections (visible in menu view) -->
+  <main id="menu-body" class="menu-body">
+    <!-- Category sections injected by store-menu.js -->
+    <div id="menu-empty" class="menu-empty" hidden>
+      <p>No items available right now.</p>
+    </div>
+  </main>
+
+  <!-- Order history (separate full view, hidden by default) -->
+  <section id="order-history-section" class="order-history-section" hidden>
+    <ul id="order-history-list" class="order-history-list"></ul>
+    <div id="order-history-empty" class="order-history-empty" hidden>
+      <p>No previous orders yet.</p>
+      <p class="order-history-empty-hint">Your order history will appear here after your first order.</p>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="store-footer">
+    <small>Powered by <a href="https://kizo.app" target="_blank" rel="noopener" aria-label="Kizo (opens in new tab)">Kizo</a></small>
+  </footer>
+
+</div>
+
+<!-- =========================================================
+     MODIFIER SHEET (bottom sheet overlay)
+     — visible in ITEM state on top of BROWSING
+     ========================================================= -->
+<div id="modifier-sheet-backdrop" class="sheet-backdrop" hidden aria-hidden="true"></div>
+<div id="modifier-sheet" class="modifier-sheet" data-scrollable role="dialog" aria-modal="true" aria-label="Item options" aria-hidden="true">
+  <div class="sheet-handle" role="presentation"></div>
+  <div class="sheet-content">
+    <div class="sheet-item-header">
+      <img id="sheet-item-img" src="" alt="" class="sheet-item-img" hidden>
+      <div class="sheet-item-info">
+        <h2 id="sheet-item-title" class="sheet-item-name"></h2>
+        <p id="sheet-item-desc" class="sheet-item-desc"></p>
+        <p id="sheet-item-price" class="sheet-item-price"></p>
+      </div>
+    </div>
+
+    <div id="sheet-modifier-groups" class="sheet-modifier-groups">
+      <!-- Injected by store-cart.js -->
+    </div>
+
+    <!-- Per-dish name + kitchen note -->
+    <div class="sheet-note-fields">
+      <div class="sheet-note-group">
+        <label for="sheet-item-name" class="sheet-note-label">Name for this dish <span class="item-note-optional">(optional)</span></label>
+        <div class="sheet-name-wrap">
+          <input id="sheet-item-name" type="text" class="sheet-note-input" placeholder="e.g. Alice, for John…" maxlength="40" autocomplete="off" inputmode="text">
+          <ul id="sheet-name-suggestions" class="sheet-name-suggestions" hidden></ul>
+        </div>
+      </div>
+      <div class="sheet-note-group">
+        <label for="sheet-item-kitchen-note" class="sheet-note-label">Kitchen note <span class="item-note-optional">(optional)</span></label>
+        <input id="sheet-item-kitchen-note" type="text" class="sheet-note-input" placeholder="e.g. no onions, extra spicy…" maxlength="120" autocomplete="off">
+      </div>
+    </div>
+
+    <!-- Quantity selector -->
+    <div class="sheet-qty-row">
+      <button id="sheet-qty-minus" class="sheet-qty-btn" aria-label="Decrease quantity">−</button>
+      <span id="sheet-qty-display" class="sheet-qty-display">1</span>
+      <button id="sheet-qty-plus" class="sheet-qty-btn" aria-label="Increase quantity">+</button>
+    </div>
+
+    <div class="sheet-actions">
+      <button id="sheet-cancel-btn" class="btn btn-ghost">Cancel</button>
+      <button id="sheet-add-btn" class="btn btn-primary">Add to Order</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     ITEM NOTE SHEET (bottom sheet overlay)
+     — opened from checkout item row to set per-item name + kitchen note
+     ========================================================= -->
+<div id="item-note-backdrop" class="sheet-backdrop" hidden aria-hidden="true"></div>
+<div id="item-note-sheet" class="item-note-sheet" role="dialog" aria-modal="true" aria-label="Item note" aria-hidden="true" hidden>
+  <div class="sheet-handle" role="presentation"></div>
+  <div class="item-note-content">
+    <p id="item-note-dish-label" class="item-note-dish-label"></p>
+    <div class="form-group">
+      <label for="item-note-name-input">Name for this dish <span class="item-note-optional">(optional)</span></label>
+      <input id="item-note-name-input" type="text" placeholder="e.g. Alice, for John…" maxlength="40" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="item-note-kitchen-input">Kitchen note <span class="item-note-optional">(optional)</span></label>
+      <input id="item-note-kitchen-input" type="text" placeholder="e.g. no onions, extra spicy…" maxlength="120" autocomplete="off">
+    </div>
+    <div class="item-note-actions">
+      <button id="item-note-modifier-btn" class="btn btn-ghost btn-full">Change modifiers</button>
+      <button id="item-note-done-btn" class="btn btn-primary btn-full">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     CART BAR — persistent, visible when cart > 0
+     ========================================================= -->
+<div id="cart-bar" class="cart-bar" hidden role="complementary" aria-label="Cart">
+  <button id="cart-bar-btn" class="cart-bar-btn">
+    <span id="cart-bar-count" class="cart-count-badge">0</span>
+    <span id="cart-bar-label" class="cart-bar-label">Review Order</span>
+    <span id="cart-bar-total" class="cart-bar-total"></span>
+  </button>
+</div>
+
+<!-- =========================================================
+     CHECKOUT state (full screen)
+     ========================================================= -->
+<div id="state-checkout" class="state-panel" hidden>
+  <header class="panel-header">
+    <button id="checkout-back-btn" class="btn-back" aria-label="Back to menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <h1 class="panel-title">Your Order</h1>
+    <button id="checkout-clear-btn" class="checkout-clear-btn" type="button">Clear Order</button>
+  </header>
+
+  <div class="checkout-body">
+
+    <!-- Order summary -->
+    <section class="checkout-section">
+      <div class="section-header" role="button" tabindex="0" aria-expanded="true">
+        <div class="section-header-left">
+          <h2 class="section-title">Order Summary</h2>
+          <span class="section-summary" aria-live="polite"></span>
+        </div>
+        <svg class="section-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="section-body">
+        <ul id="checkout-items-list" class="checkout-items-list"></ul>
+        <div class="checkout-totals">
+          <div class="totals-row">
+            <span>Subtotal</span>
+            <span id="checkout-subtotal"></span>
+          </div>
+          <div class="totals-row">
+            <span>Tax</span>
+            <span id="checkout-tax"></span>
+          </div>
+          <div class="totals-row" id="checkout-tip-row" hidden>
+            <span>Tip</span>
+            <span id="checkout-tip"></span>
+          </div>
+          <div class="totals-row totals-total">
+            <span>Total</span>
+            <span id="checkout-total"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Customer info -->
+    <section class="checkout-section">
+      <div class="section-header" role="button" tabindex="0" aria-expanded="true">
+        <div class="section-header-left">
+          <h2 class="section-title">Your Details</h2>
+          <span class="section-summary" aria-live="polite"></span>
+        </div>
+        <svg class="section-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="section-body">
+        <div class="form-group">
+          <label for="field-name">Name <span class="required">*</span></label>
+          <input type="text" id="field-name" autocomplete="name" placeholder="Jane Smith" required aria-describedby="checkout-error">
+        </div>
+        <div class="form-group">
+          <label for="field-phone">Phone (in case we need to contact you)</label>
+          <input type="tel" id="field-phone" autocomplete="tel" placeholder="(555) 000-0000">
+        </div>
+        <div class="form-group">
+          <label for="field-email">Email (for your receipt)</label>
+          <input type="email" id="field-email" autocomplete="email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="field-note">Special requests</label>
+          <textarea id="field-note" rows="2" placeholder="Allergies, preparation notes…"></textarea>
+        </div>
+        <label class="utensils-row">
+          <span class="utensils-label">Include utensils</span>
+          <span class="toggle-switch">
+            <input type="checkbox" id="field-utensils" class="toggle-input">
+            <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+          </span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Pickup time (shown for pickup orders when merchant has scheduled ordering enabled) -->
+    <section id="checkout-time-section" class="checkout-section" hidden>
+      <div class="section-header" role="button" tabindex="0" aria-expanded="true">
+        <div class="section-header-left">
+          <h2 class="section-title">When would you like your order ready?</h2>
+          <span class="section-summary" aria-live="polite"></span>
+        </div>
+        <svg class="section-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="section-body">
+        <div class="form-group">
+          <select id="checkout-time-select" class="checkout-time-select">
+            <option value="">ASAP (as soon as possible)</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tip + Pay group -->
+    <div class="checkout-pay-group">
+      <div class="checkout-pay-group-tip">
+        <h2 class="section-title">Add a Tip</h2>
+        <div id="checkout-tip-btns" class="tip-selector" role="group" aria-label="Select tip amount"></div>
+        <div id="checkout-tip-custom" class="tip-custom-row" hidden>
+          <span class="tip-custom-dollar">$</span>
+          <input type="number" id="checkout-tip-input" class="tip-custom-input"
+                 min="0" step="0.01" placeholder="0.00" inputmode="decimal"
+                 aria-label="Custom tip amount in dollars">
+        </div>
+      </div>
+
+      <div id="checkout-error" class="alert alert-error" role="alert" hidden></div>
+
+      <button id="checkout-pay-btn" class="btn btn-primary btn-lg btn-full">
+        Pay Now — <span id="checkout-pay-total"></span>
+      </button>
+      <p class="checkout-secure-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-lock">
+          <rect x="5" y="11" width="14" height="11" rx="2"/>
+          <path d="M8 11V7a4 4 0 018 0v4"/>
+        </svg>
+        <span id="payment-provider-label">Secure payment</span>
+      </p>
+      <p class="checkout-privacy-link">
+        <a href="#" id="checkout-show-privacy">Privacy Policy</a>
+      </p>
+    </div>
+
+  </div>
+
+  <!-- Privacy overlay -->
+  <div id="privacy-overlay" class="privacy-overlay" hidden>
+    <div class="privacy-content">
+      <div class="privacy-header">
+        <h2>Privacy Policy</h2>
+        <button id="privacy-close-btn" type="button" class="privacy-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="privacy-body">
+        <p class="privacy-intro">Protecting your personal data and privacy is very important to us.</p>
+
+        <h3>No account required</h3>
+        <p>We do not require you to create an account or log in. Your order history is stored only on your device using your browser's local storage. If you order from a different device, your previous orders will not appear there &mdash; order history is device-specific.</p>
+
+        <h3>Your name</h3>
+        <p>You don't have to give us your real name. We just need a first name or nickname so we can identify your order at pickup.</p>
+
+        <h3>Phone number</h3>
+        <p>Please provide a real phone number so we can contact you if there's an issue with your order.</p>
+
+        <h3>Email address</h3>
+        <p>Your email is optional. If you'd like a receipt, provide a valid email address.</p>
+
+        <h3>Payment information</h3>
+        <p>All payment information is handled entirely by our payment processor. We do <strong>not</strong> store your credit card number, billing name, or address in our systems. Payments work with your phone's wallet &mdash; again, we never see or store any payment details.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     PAYING state — interim while submitting
+     ========================================================= -->
+<div id="state-paying" class="state-panel state-loading" hidden>
+  <div class="loading-spinner"></div>
+  <p class="loading-text">Redirecting to payment…</p>
+</div>
+
+<!-- =========================================================
+     CONFIRMED state
+     ========================================================= -->
+<div id="state-confirmed" class="state-panel" hidden>
+  <div class="confirmation-body">
+
+    <div class="confirmation-hero">
+      <svg class="confirmation-check" viewBox="0 0 80 80" fill="none">
+        <circle cx="40" cy="40" r="38" stroke="var(--color-success)" stroke-width="3"/>
+        <path d="M24 40l12 12 20-24" stroke="var(--color-success)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1 class="confirmation-title">Order Confirmed!</h1>
+      <p class="confirmation-subtitle">We're preparing your food.</p>
+    </div>
+
+    <div class="pickup-code-card">
+      <p class="pickup-code-label">Pickup Code</p>
+      <p id="confirmed-pickup-code" class="pickup-code" aria-label="Pickup code"></p>
+      <p class="pickup-code-hint">Show this code when picking up your order.</p>
+    </div>
+
+    <!-- Scheduled pickup time (shown when customer chose a specific time) -->
+    <div id="confirmed-scheduled-time" class="confirmed-scheduled-time" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-clock"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      <span id="confirmed-scheduled-label"></span>
+    </div>
+
+    <!-- Status tracker -->
+    <div class="status-tracker">
+      <div class="status-step" id="step-received">
+        <div class="step-dot active"></div>
+        <span>Received</span>
+      </div>
+      <div class="status-step" id="step-accepted">
+        <div class="step-dot"></div>
+        <span>Accepted</span>
+      </div>
+      <div class="status-step" id="step-ready">
+        <div class="step-dot"></div>
+        <span>Ready</span>
+      </div>
+      <div class="status-step" id="step-pickedup">
+        <div class="step-dot"></div>
+        <span>Picked Up</span>
+      </div>
+    </div>
+
+    <!-- Estimated ready time (shown when merchant accepts) -->
+    <p id="confirmed-eta" class="confirmation-eta" hidden></p>
+
+    <!-- Order items -->
+    <div class="confirmation-items">
+      <h2 class="section-title">Your Order</h2>
+      <ul id="confirmed-items-list" class="checkout-items-list"></ul>
+    </div>
+
+    <div id="confirmed-push-prompt" class="push-prompt" hidden>
+      <p id="confirmed-push-label">Setting up notifications…</p>
+      <button id="confirmed-push-btn" class="btn btn-secondary" disabled>Enabling notifications…</button>
+    </div>
+
+    <div id="confirmed-polling-note" class="polling-note" hidden>
+      <p>This page will update automatically when your order is ready.</p>
+    </div>
+
+    <!-- Cancel scheduled order (hidden once prep window starts or order is terminal) -->
+    <div id="confirmed-cancel-section" hidden>
+      <button id="confirmed-cancel-btn" class="btn btn-cancel btn-full">
+        Cancel Order
+      </button>
+      <p id="confirmed-cancel-deadline" class="cancel-deadline-note"></p>
+    </div>
+
+    <!-- Cancellation confirmed message -->
+    <div id="confirmed-cancelled-msg" class="cancelled-msg" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+      <div>
+        <strong>Order Cancelled</strong>
+        <p>Your order has been cancelled. A confirmation has been sent.</p>
+      </div>
+    </div>
+
+    <button id="confirmed-new-order-btn" class="btn btn-secondary btn-full" style="margin-top: 2rem">
+      Back to Menu
+    </button>
+
+    <button id="confirmed-feedback-btn" class="btn btn-outline btn-full" style="margin-top: 0.75rem">
+      Give Feedback
+    </button>
+
+  </div>
+</div>
+
+<!-- =========================================================
+     Feedback modals (app rating + per-order dish feedback)
+     ========================================================= -->
+
+<!-- "Rate this app" modal (from order status page) -->
+<div id="feedback-app-overlay" class="feedback-overlay" hidden>
+  <div class="feedback-modal">
+    <div class="feedback-header">
+      <h2>Rate this app</h2>
+      <button class="feedback-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="feedback-body">
+      <div class="feedback-stars" role="radiogroup" aria-label="Rating">
+        <button class="feedback-star" data-star="1" aria-label="1 star">★</button>
+        <button class="feedback-star" data-star="2" aria-label="2 stars">★</button>
+        <button class="feedback-star" data-star="3" aria-label="3 stars">★</button>
+        <button class="feedback-star" data-star="4" aria-label="4 stars">★</button>
+        <button class="feedback-star" data-star="5" aria-label="5 stars">★</button>
+      </div>
+      <textarea id="feedback-app-comment" class="feedback-textarea" placeholder="Tell us what you think… (optional)" maxlength="2000" rows="3"></textarea>
+      <input id="feedback-app-contact" class="feedback-input" type="text" placeholder="Email or phone (optional)" maxlength="200">
+    </div>
+    <div class="feedback-footer">
+      <button id="feedback-app-submit" class="btn btn-primary btn-full" disabled>Submit Feedback</button>
+    </div>
+  </div>
+</div>
+
+<!-- Per-order dish feedback modal (from order history) -->
+<div id="feedback-order-overlay" class="feedback-overlay" hidden>
+  <div class="feedback-modal">
+    <div class="feedback-header">
+      <h2>How was your order?</h2>
+      <button class="feedback-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="feedback-body">
+      <ul id="feedback-dish-list" class="feedback-dish-list"></ul>
+      <div class="feedback-stars" role="radiogroup" aria-label="Overall rating">
+        <button class="feedback-star" data-star="1" aria-label="1 star">★</button>
+        <button class="feedback-star" data-star="2" aria-label="2 stars">★</button>
+        <button class="feedback-star" data-star="3" aria-label="3 stars">★</button>
+        <button class="feedback-star" data-star="4" aria-label="4 stars">★</button>
+        <button class="feedback-star" data-star="5" aria-label="5 stars">★</button>
+      </div>
+      <textarea id="feedback-order-comment" class="feedback-textarea" placeholder="Any comments? (optional)" maxlength="2000" rows="3"></textarea>
+      <input id="feedback-order-contact" class="feedback-input" type="text" placeholder="Email or phone (optional)" maxlength="200">
+    </div>
+    <div class="feedback-footer">
+      <button id="feedback-order-submit" class="btn btn-primary btn-full" disabled>Submit Feedback</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     ERROR state
+     ========================================================= -->
+<div id="state-error" class="state-panel state-loading" hidden>
+  <p class="error-icon">⚠️</p>
+  <p id="state-error-msg" class="loading-text"></p>
+  <button id="state-error-retry" class="btn btn-secondary" style="margin-top: 1rem">Retry</button>
+</div>
+
+<!--
+  Finix JavaScript library — enables fraud detection (device fingerprinting).
+  window.Finix becomes available once loaded; store.js calls Finix.Auth()
+  after the merchant profile is fetched to initialise the tracking session.
+-->
+<script type="text/javascript" src="https://js.finix.com/v/1/finix.js" async></script>
+<script src="/store/js/store.js?v=45"></script>
+<script src="/store/js/store-menu.js?v=6"></script>
+<script src="/store/js/store-cart.js?v=12"></script>
+<script src="/store/js/store-checkout.js?v=15"></script>
+<script src="/store/js/store-push.js?v=8"></script>
+<script src="/store/js/store-voice.js?v=5"></script>
+<!-- Voice ordering disabled — code kept for future use -->
+<!-- <script>window.StoreVoice?.init()</script> -->
+
+</body>
+</html>

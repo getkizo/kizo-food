@@ -1,0 +1,1305 @@
+/**
+ * payment-modal.css — Review & Pay modal overlay
+ * Centered card dialog with dark backdrop; tablet-optimized, portrait-first layout
+ */
+
+/* ── Overlay backdrop ──────────────────────────────────────────────────── */
+
+#payment-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  color: #111;
+}
+
+#payment-modal-overlay[hidden] {
+  display: none !important;
+}
+
+/* ── Centered card ─────────────────────────────────────────────────────── */
+
+.pm-modal-card {
+  width: 78%;
+  max-width: 1040px;
+  min-width: 480px;
+  max-height: 95vh;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Modal header ──────────────────────────────────────────────────────── */
+
+.pm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: #111;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.pm-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.pm-header .pm-order-meta {
+  font-size: 0.8rem;
+  color: #aaa;
+}
+
+.pm-close-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  line-height: 1;
+}
+
+.pm-close-btn:hover {
+  color: #fff;
+}
+
+/* ── Screen container ──────────────────────────────────────────────────── */
+
+.pm-screen {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Bill review screen ────────────────────────────────────────────────── */
+
+.pm-bill {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+}
+
+.pm-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.5rem;
+}
+
+.pm-items-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.3rem 0.25rem;
+  border-bottom: 2px solid #111;
+}
+
+.pm-items-table th:last-child {
+  text-align: right;
+}
+
+.pm-items-table td {
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+  font-size: 1.5rem;
+}
+
+.pm-items-table td:last-child {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pm-item-mods {
+  font-size: 1.1rem;
+  color: #666;
+  margin-top: 0.15rem;
+}
+
+/* ── Totals block ──────────────────────────────────────────────────────── */
+
+.pm-totals {
+  padding: 0.5rem 1rem;
+  background: #fafafa;
+  border-top: 1px solid #eee;
+  flex-shrink: 0;
+}
+
+.pm-totals-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.25rem 0;
+  font-size: 0.95rem;
+}
+
+.pm-totals-row.pm-total-final {
+  font-size: 1.2rem;
+  font-weight: 700;
+  border-top: 2px solid #111;
+  padding-top: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.pm-totals-row.pm-discount {
+  color: #c0392b;
+}
+
+.pm-totals-row.pm-service-charge {
+  color: #b45309;
+}
+
+/* ── Tip selector ──────────────────────────────────────────────────────── */
+
+.pm-tip-section {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid #eee;
+  flex-shrink: 0;
+}
+
+.pm-tip-on-terminal-note {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.pm-tot-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.pm-tip-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #666;
+  margin-bottom: 0.5rem;
+}
+
+.pm-tip-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pm-tip-btn {
+  flex: 1;
+  min-width: 70px;
+  padding: 1.1rem 0.5rem;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 2rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  line-height: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.pm-tip-btn-amt {
+  font-size: 0.6em;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.pm-tip-btn.active {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.pm-tip-btn:hover:not(.active) {
+  border-color: #555;
+}
+
+.pm-tip-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.pm-tip-custom-row label {
+  font-size: 0.85rem;
+  color: #555;
+  white-space: nowrap;
+}
+
+.pm-tip-custom-input {
+  flex: 1;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  max-width: 120px;
+}
+
+/* ── Payment method buttons ────────────────────────────────────────────── */
+
+.pm-pay-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+  border-top: 1px solid #eee;
+}
+
+.pm-pay-btn {
+  flex: 1;
+  padding: 1.5rem 1rem;
+  border: none;
+  border-radius: 10px;
+  font-size: 2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.pm-pay-btn:active {
+  opacity: 0.8;
+}
+
+.pm-pay-btn.cash {
+  background: #27ae60;
+  color: #fff;
+}
+
+.pm-pay-btn.card {
+  background: #2980b9;
+  color: #fff;
+}
+
+.pm-pay-btn.phone {
+  background: #7c3aed;
+  color: #fff;
+}
+
+/* ── Phone tokenize screen (Finix.js hosted fields) ────────────────────── */
+
+.pm-phone-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 1rem 1rem;
+  overflow-y: auto;
+}
+
+.pm-phone-title {
+  text-align: center;
+  margin: 0.75rem 0 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pm-phone-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Finix PaymentForm V2 renders its own layout inside #pm-finix-form */
+#pm-finix-form {
+  min-height: 200px;
+}
+
+.pm-phone-error {
+  color: #c0392b;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+/* ── Cash confirm screen ───────────────────────────────────────────────── */
+
+.pm-cash-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  gap: 0.75rem;
+}
+
+.pm-cash-total {
+  text-align: center;
+  font-size: 2.5rem;
+  font-weight: 700;
+  padding: 1rem 0;
+}
+
+.pm-cash-total-label {
+  text-align: center;
+  font-size: 0.85rem;
+  color: #666;
+  margin-top: -0.5rem;
+}
+
+.pm-denomination-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.pm-denom-btn {
+  padding: 0.6rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #f5f5f5;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.pm-denom-btn:hover {
+  background: #eee;
+}
+
+.pm-change-display {
+  text-align: center;
+  padding: 0.75rem;
+  background: #edfaf1;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #27ae60;
+}
+
+.pm-change-display.owed {
+  background: #fef3cd;
+  color: #b7791f;
+}
+
+/* ── Card confirm screen ───────────────────────────────────────────────── */
+
+.pm-card-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  gap: 0.75rem;
+}
+
+.pm-card-instruction {
+  background: #f0f7ff;
+  border: 1px solid #bee3f8;
+  border-radius: 8px;
+  padding: 1rem;
+  font-size: 0.95rem;
+  color: #2c5282;
+  line-height: 1.5;
+}
+
+.pm-card-instruction strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 1rem;
+}
+
+/* Terminal processing screen */
+.pm-terminal-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  gap: 1.5rem;
+  text-align: center;
+}
+
+.pm-terminal-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #e2e8f0;
+  border-top-color: #3182ce;
+  border-radius: 50%;
+  animation: pm-spin 0.8s linear infinite;
+}
+
+@keyframes pm-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pm-terminal-msg {
+  font-size: 1.1rem;
+  color: #2d3748;
+  line-height: 1.6;
+}
+
+.pm-terminal-msg strong {
+  font-size: 1.25rem;
+}
+
+.pm-terminal-error {
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  color: #c53030;
+  font-size: 1rem;
+  line-height: 1.5;
+  max-width: 400px;
+}
+
+.pm-terminal-note {
+  background: #fffbeb;
+  border: 1px solid #f6e05e;
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  color: #744210;
+  font-size: 0.9rem;
+  margin-top: 0.75rem;
+  max-width: 400px;
+  text-align: center;
+}
+
+.pm-terminal-approved-note {
+  background: #f0fff4;
+  border: 1px solid #9ae6b4;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: #276749;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+
+.pm-card-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.pm-card-fields .full-width {
+  grid-column: 1 / -1;
+}
+
+.pm-field-label {
+  font-size: 0.75rem;
+  color: #555;
+  margin-bottom: 0.2rem;
+}
+
+.pm-field-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.pm-card-type-btns {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.pm-card-type-btn {
+  padding: 0.35rem 0.75rem;
+  border: 2px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.pm-card-type-btn.active {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+/* ── Signature screen ──────────────────────────────────────────────────── */
+
+.pm-sig-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pm-sig-screen h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pm-sig-canvas-wrap {
+  width: 100%;
+  max-width: 680px;
+  position: relative;
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  background: #fdfdfd;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+#pm-sig-canvas {
+  display: block;
+  width: 100%;
+  height: 240px;
+}
+
+.pm-sig-hint {
+  font-size: 0.8rem;
+  color: #999;
+  text-align: center;
+}
+
+.pm-sig-actions {
+  display: flex;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 680px;
+}
+
+/* ── Receipt options screen ────────────────────────────────────────────── */
+
+.pm-receipt-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1rem;
+  gap: 0.75rem;
+}
+
+.pm-receipt-screen .pm-success-icon {
+  text-align: center;
+  font-size: 3rem;
+  margin-bottom: 0.25rem;
+}
+
+.pm-receipt-screen h3 {
+  text-align: center;
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.pm-receipt-summary {
+  background: #f9f9f9;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+}
+
+.pm-receipt-summary .pm-totals-row {
+  padding: 0.2rem 0;
+  font-size: 0.9rem;
+}
+
+.pm-receipt-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0 1rem;
+}
+
+.pm-receipt-action-btn {
+  width: 100%;
+  font-size: 1rem;
+  padding: 0.7rem 1rem;
+}
+
+.pm-email-receipt-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pm-email-receipt-row .pm-receipt-email-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pm-receipt-email-input {
+  box-sizing: border-box;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.pm-email-receipt-row .pm-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── PIN exit screen ───────────────────────────────────────────────────── */
+
+.pm-pin-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+  gap: 1rem;
+}
+
+.pm-pin-screen h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #555;
+}
+
+.pm-pin-display {
+  font-size: 2.2rem;
+  letter-spacing: 0.5rem;
+  min-height: 2.8rem;
+  color: #111;
+  text-align: center;
+}
+
+.pm-pin-error {
+  color: #c0392b;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+  text-align: center;
+}
+
+.pm-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 320px;
+}
+
+.pm-key {
+  padding: 1rem;
+  font-size: 1.3rem;
+  font-weight: 600;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #f5f5f5;
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+  transition: background 0.1s;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pm-key:active {
+  background: #ddd;
+}
+
+.pm-key.pm-key-del {
+  background: #fff0f0;
+  color: #c0392b;
+  font-size: 1rem;
+}
+
+.pm-key.pm-key-submit {
+  background: #111;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.pm-key.pm-key-submit:active {
+  background: #333;
+}
+
+.pm-pin-lockout {
+  font-size: 0.85rem;
+  color: #999;
+  text-align: center;
+}
+
+/* ── Generic action bar ────────────────────────────────────────────────── */
+
+.pm-action-bar {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+  border-top: 1px solid #eee;
+}
+
+.pm-btn {
+  flex: 1;
+  padding: 0.9rem;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.pm-btn:active {
+  opacity: 0.75;
+}
+
+.pm-btn-primary {
+  background: #111;
+  color: #fff;
+}
+
+.pm-btn-secondary {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.pm-btn-danger {
+  background: #c0392b;
+  color: #fff;
+}
+
+.pm-btn-success {
+  background: #27ae60;
+  color: #fff;
+}
+
+.pm-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Spinner ───────────────────────────────────────────────────────────── */
+
+.pm-spinner {
+  display: inline-block;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: 3px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pm-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+}
+
+@keyframes pm-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Split select screen ───────────────────────────────────────────────── */
+
+.pm-split-select-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem 1rem;
+  overflow-y: auto;
+}
+
+.pm-split-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.pm-split-option-card {
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.pm-split-option-card:hover {
+  border-color: #aaa;
+}
+
+.pm-split-option-card.active {
+  border-color: #111;
+  background: #f9f9f9;
+}
+
+.pm-split-option-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+}
+
+.pm-split-option-desc {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.pm-split-ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.pm-split-way-btn {
+  padding: 0.5rem 1rem;
+  border: 2px solid #111;
+  border-radius: 8px;
+  background: #111;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.pm-split-way-btn:hover {
+  opacity: 0.8;
+}
+
+/* ── Split banner (shown at top of screens in split mode) ──────────────── */
+
+.pm-split-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 1rem;
+  background: #111;
+  color: #fff;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.pm-split-badge {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* ── Split button in pay actions ───────────────────────────────────────── */
+
+.pm-split-btn {
+  flex: 1;
+  min-width: 80px;
+  padding: 1.5rem 1rem;
+  border: 2px solid #555;
+  border-radius: 10px;
+  background: #fff;
+  color: #555;
+  font-size: 2rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pm-split-btn:hover {
+  background: #555;
+  color: #fff;
+}
+
+/* ── Split items selection screen ──────────────────────────────────────── */
+
+.pm-split-items-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pm-split-items-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 1rem;
+}
+
+.pm-split-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.pm-split-item-row:hover {
+  background: #f5f5f5;
+}
+
+.pm-split-item-row.selected {
+  background: #f0f7ff;
+}
+
+.pm-split-item-price {
+  font-size: 0.9rem;
+  color: #555;
+  white-space: nowrap;
+}
+
+.pm-split-item-subtotal {
+  padding: 0.6rem 1rem;
+  background: #fafafa;
+  border-top: 1px solid #eee;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+/* ── Leg complete screen ───────────────────────────────────────────────── */
+
+.pm-leg-complete-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem 1rem;
+  gap: 0.5rem;
+}
+
+.pm-leg-complete-screen h3 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+/* ── Amex surcharge note ───────────────────────────────────────────────── */
+
+.pm-amex-surcharge-note {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #7c4a00;
+  margin-bottom: 0.25rem;
+}
+
+/* ── Item row — tappable in bill review ───────────────────────────────── */
+
+.pm-item-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.pm-item-row:hover {
+  background: #f5f5f5;
+}
+
+.pm-item-row:active {
+  background: #ebebeb;
+}
+
+/* ── Edit item screen ──────────────────────────────────────────────────── */
+
+.pm-edit-item-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pm-edit-item-header {
+  padding: 1rem 1.25rem 0.75rem;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.pm-edit-item-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0 0 0.2rem;
+}
+
+.pm-edit-item-base {
+  font-size: 0.9rem;
+  color: #666;
+  margin: 0;
+}
+
+.pm-edit-mod-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1.25rem;
+}
+
+.pm-edit-mod-group {
+  margin-bottom: 1.25rem;
+}
+
+.pm-edit-mod-group-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #555;
+  margin: 0 0 0.5rem;
+}
+
+.pm-edit-required {
+  color: #c0392b;
+  font-size: 0.75rem;
+  margin-left: 0.35rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.pm-edit-mod-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pm-edit-mod-option {
+  padding: 0.45rem 0.9rem;
+  border: 1.5px solid #ccc;
+  border-radius: 20px;
+  background: #fff;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  user-select: none;
+}
+
+.pm-edit-mod-option.selected {
+  border-color: #111;
+  background: #111;
+  color: #fff;
+}
+
+.pm-edit-mod-option:active {
+  opacity: 0.7;
+}
+
+.pm-edit-no-menu {
+  padding: 2rem 1.25rem;
+  color: #888;
+  text-align: center;
+}
+
+.pm-edit-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid #e8e8e8;
+}
+
+.pm-edit-cancel-btn {
+  flex: 1;
+}
+
+.pm-edit-update-btn {
+  flex: 2;
+}
+
+/* ── Gift Card ─────────────────────────────────────────────────────────── */
+
+/* Banner shown in BILL_REVIEW when a gift card is attached */
+.pm-gc-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: #f0faf4;
+  border: 1px solid #6fcf97;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.pm-gc-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.pm-gc-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.pm-gc-info strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1a7a44;
+}
+
+.pm-gc-info span {
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.pm-gc-purchaser {
+  font-size: 0.75rem;
+  color: #777;
+  font-style: italic;
+}
+
+.pm-gc-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: #888;
+  text-decoration: underline;
+  padding: 0.25rem;
+  flex-shrink: 0;
+}
+
+.pm-gc-remove:hover {
+  color: #c0392b;
+}
+
+/* Tax credit line in the totals section */
+.pm-gc-tax-credit {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: #1a7a44;
+  padding: 0.1rem 0;
+}
+
+/* "Add Gift Card" button in BILL_REVIEW — sits in .pm-pay-actions flex row */
+.pm-gc-add-btn {
+  flex: 1;
+  padding: 1.5rem 1rem;
+  background: #fff;
+  border: 1.5px dashed #6fcf97;
+  border-radius: 8px;
+  color: #1a7a44;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s;
+}
+
+.pm-gc-add-btn:hover {
+  background: #f0faf4;
+}
+
+/* ── Gift Card Lookup Screen ────────────────────────────────────────────── */
+
+.pm-gc-lookup {
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.pm-gc-lookup-hint {
+  font-size: 0.9rem;
+  color: #555;
+  line-height: 1.4;
+}
+
+.pm-gc-lookup-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pm-gc-suffix-input {
+  flex: 1;
+  padding: 0.65rem 0.75rem;
+  font-size: 1.1rem;
+  font-family: monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border: 1.5px solid #ccc;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.pm-gc-suffix-input:focus {
+  border-color: #1a7a44;
+}
+
+.pm-gc-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pm-gc-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #f8f8f8;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.pm-gc-result-code {
+  font-family: monospace;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #222;
+}
+
+.pm-gc-result-details {
+  font-size: 0.8rem;
+  color: #555;
+  margin-top: 0.2rem;
+}
+
+.pm-gc-searching,
+.pm-gc-no-results {
+  font-size: 0.9rem;
+  color: #666;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.pm-gc-lookup-error {
+  font-size: 0.85rem;
+  color: #c0392b;
+  background: #fff5f5;
+  border: 1px solid #e74c3c;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.pm-gc-lookup-error:empty {
+  display: none;
+}
+
+/* ── Responsive tweaks ─────────────────────────────────────────────────── */
+
+@media (min-width: 600px) {
+  .pm-card-fields {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .pm-tip-buttons {
+    gap: 0.35rem;
+  }
+
+  .pm-tip-btn {
+    font-size: 1.5rem;
+    padding: 0.9rem 0.1rem;
+  }
+
+  .pm-card-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .pm-card-fields .full-width {
+    grid-column: 1;
+  }
+}
