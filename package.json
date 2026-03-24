@@ -1,7 +1,7 @@
 {
-  "name": "@getkizo/kizo-retail",
+  "name": "@getkizo/kizo-food",
   "version": "0.0.1",
-  "description": "Kizo sector for apparel, accessories, and boutiques",
+  "description": "Kizo sector for restaurants, cafés, and coffee shops",
   "private": true,
   "workspaces": ["apps/*", "modules/*", "packages/*", "adapters/*"]
 }

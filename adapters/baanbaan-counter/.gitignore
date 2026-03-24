@@ -1,0 +1,23 @@
+# Local machine config (SDK path) — never commit
+local.properties
+
+# Gradle
+.gradle/
+build/
+app/build/
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Keystore / signing
+*.jks
+*.keystore
+release.properties
+keystore.properties
+
+# OS
+.DS_Store
+Thumbs.db
