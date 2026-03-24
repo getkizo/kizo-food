@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- "B" lettermark for Kizo Counter -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,28 L36,80 L58,80 Q72,80 72,67 Q72,58 64,55 Q70,52 70,44 Q70,28 56,28 Z
+                          M46,38 L54,38 Q60,38 60,44 Q60,50 54,50 L46,50 Z
+                          M46,58 L56,58 Q62,58 62,67 Q62,70 56,70 L46,70 Z" />
+</vector>

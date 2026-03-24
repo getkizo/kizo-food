@@ -30,7 +30,7 @@ Adapters are open-source integrations that connect third-party hardware or servi
 
 | Path | Platform | Description |
 |---|---|---|
-| `adapters/baanbaan-counter` | Android | Counter-facing payment terminal. Drives a Finix D135 Bluetooth card reader via a WebSocket protocol. Handles tip selection, signature capture, and card payment. |
+| `adapters/kizo-counter` | Android | Counter-facing payment terminal. Drives a Finix D135 Bluetooth card reader via a WebSocket protocol. Handles tip selection, signature capture, and card payment. |
 
 ### Packages
 
