@@ -78,7 +78,7 @@ curl -X POST http://localhost:3000/api/merchants/m_your_merchant_id/keys \
   }'
 ```
 
-**Security:** The API token is encrypted with AES-256-GCM before storage. See [security-cryptography.md](../../../docs/architecture/security-cryptography.md) for details.
+**Security:** The API token is encrypted with AES-256-GCM before storage. See [security-cryptography.md](../architecture/security-cryptography.md) for details.
 
 ### 2.2 Update POS Configuration
 

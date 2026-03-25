@@ -213,7 +213,7 @@ If you have a Clover sandbox account:
 
    This fetches merchant details from Clover and updates the local profile.
 
-See [CLOVER-SETUP.md](./CLOVER-SETUP.md) for detailed Clover integration instructions.
+See [CLOVER-SETUP.md](./docs/CLOVER-SETUP.md) for detailed Clover integration instructions.
 
 ## Printer Setup
 
@@ -801,19 +801,19 @@ CORS_ORIGIN=http://localhost:5173
 ## Next Steps
 
 1. **Explore the API** - Import the API collection into Postman/Insomnia
-2. **Read Architecture Docs** - See `../docs/architecture/` for system design
-3. **Review ADRs** - Check `../docs/architecture/ADRs/` for architectural decisions
+2. **Read Architecture Docs** - See `./docs/architecture/` for system design
+3. **Review ADRs** - Check `./docs/architecture/ADRs/` for architectural decisions
 4. **Set up POS Integration** - See `CLOVER-SETUP.md` for Clover integration
 5. **Build a Frontend** - Connect a React/Vue app to the REST API
 
 ## Additional Resources
 
 - [Main README](./README.md) - Project overview and quick start
-- [Architecture Documentation](../docs/architecture/README.md) - System design
-- [Clover Setup Guide](./CLOVER-SETUP.md) - Clover POS integration
-- [ADR-004: Bun + SQLite Appliance](../docs/architecture/ADRs/ADR-004-bun-sqlite-appliance.md)
-- [ADR-005: Envelope Encryption](../docs/architecture/ADRs/ADR-005-envelope-encryption.md)
-- [ADR-006: Ed25519 Code Signing](../docs/architecture/ADRs/ADR-006-ed25519-code-signing.md)
+- [Architecture Documentation](./docs/architecture/README.md) - System design
+- [Clover Setup Guide](./docs/CLOVER-SETUP.md) - Clover POS integration
+- [ADR-004: Bun + SQLite Appliance](./docs/architecture/ADRs/ADR-004-bun-sqlite-appliance.md)
+- [ADR-005: Envelope Encryption](./docs/architecture/ADRs/ADR-005-envelope-encryption.md)
+- [ADR-006: Ed25519 Code Signing](./docs/architecture/ADRs/ADR-006-ed25519-code-signing.md)
 
 ## Support
 
