@@ -277,8 +277,8 @@ with the production appliance):
 |---|---|
 | `example-usage.js` | Generates sample raster buffers and writes PNG previews |
 | `receipt-comparison.jsx` | React component for side-by-side ticket comparison |
-| `demo-receipts.jsx` | Demo Thai Café real-data receipt preview |
-| `demo-receipt-renderer.js` | Node renderer for `demo-receipts.jsx` |
+| `sample-receipts.jsx` | Sample receipt preview (rename/populate with your restaurant data) |
+| `sample-receipt-renderer.js` | Node renderer for `sample-receipts.jsx` |
 | `convert-logo.py` | Converts a PNG logo to base64 `.txt` for `src/assets/printers/` |
 
 Run with:
