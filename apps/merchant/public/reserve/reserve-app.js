@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Kizo Reserve — Customer-facing reservation booking app
  * Multi-step flow: Date → Time → Contact → Confirmation
  */
@@ -15,6 +15,7 @@
   let _partySize = 2
   let _selectedDate = null  // 'YYYY-MM-DD'
   let _selectedTime = null  // 'HH:MM'
+  let _slotsAbortController = null
 
   // Bot-detection: record page load time; real users take > 2.5 s to fill the form
   const _bootTime = Date.now()
@@ -58,7 +59,10 @@
   function localIso(daysAhead = 0) {
     const d = new Date()
     d.setDate(d.getDate() + daysAhead)
-    return d.toISOString().slice(0, 10)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
   }
 
   // ---------------------------------------------------------------------------
@@ -75,7 +79,7 @@
       if (!cfgRes.ok || !profRes.ok) throw new Error('Load failed')
       _config  = await cfgRes.json()
       const prof = await profRes.json()
-      _profile = { businessName: prof.name, phoneNumber: prof.phoneNumber }
+      _profile = { businessName: prof.name, phoneNumber: prof.phoneNumber, scheduledClosures: prof.scheduledClosures ?? [] }
     } catch {
       hide('rv-loading')
       show('rv-disabled')
@@ -87,6 +91,19 @@
 
     if (!_config.enabled) {
       show('rv-disabled')
+      return
+    }
+
+    if (_config.isBusy) {
+      // Walk-in only mode — show informational screen, no booking flow
+      const busyUntilEl = el('rv-busy-until')
+      if (_config.busyUntil && busyUntilEl) {
+        const dt = new Date(_config.busyUntil)
+        const timeStr = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        busyUntilEl.textContent = `Reservations resume around ${timeStr}.`
+        busyUntilEl.hidden = false
+      }
+      show('rv-busy')
       return
     }
 
@@ -121,11 +138,21 @@
 
   el('rv-party-dec')?.addEventListener('click', () => {
     if (!_config) return
-    if (_partySize > 1) { _partySize--; renderPartySize(); renderDateGrid() }
+    if (_partySize > 1) {
+      _partySize--
+      renderPartySize()
+      renderDateGrid()
+      if (_selectedDate) loadSlotsInline(_selectedDate)
+    }
   })
   el('rv-party-inc')?.addEventListener('click', () => {
     if (!_config) return
-    if (_partySize < _config.maxPartySize) { _partySize++; renderPartySize(); renderDateGrid() }
+    if (_partySize < _config.maxPartySize) {
+      _partySize++
+      renderPartySize()
+      renderDateGrid()
+      if (_selectedDate) loadSlotsInline(_selectedDate)
+    }
   })
 
   function renderDateGrid() {
@@ -154,17 +181,23 @@
     }
 
     const today = localIso(0)
+    const closures = _profile.scheduledClosures ?? []
     for (let i = 0; i < _config.advanceDays; i++) {
       const iso = localIso(i)
       const [y, m, d] = iso.split('-').map(Number)
       const date = new Date(y, m - 1, d)
 
+      const isClosed = closures.some((c) => iso >= c.startDate && iso <= c.endDate)
+
       const chip = document.createElement('button')
       chip.type = 'button'
       const todayClass = i === 0 ? ' rv-today' : i === 1 ? ' rv-tomorrow' : ''
-      chip.className = `rv-date-chip${todayClass}${iso === _selectedDate ? ' selected' : ''}`
+      const closedClass = isClosed ? ' rv-date-chip--closed' : ''
+      chip.className = `rv-date-chip${todayClass}${closedClass}${iso === _selectedDate && !isClosed ? ' selected' : ''}`
       chip.dataset.date = iso
-      chip.setAttribute('aria-pressed', String(iso === _selectedDate))
+      chip.disabled = isClosed
+      chip.setAttribute('aria-pressed', String(iso === _selectedDate && !isClosed))
+      if (isClosed) chip.setAttribute('aria-label', `${date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} — closed`)
 
       const dayLabel = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : date.toLocaleDateString(undefined, { weekday: 'short' })
       const dateNum  = date.getDate()
@@ -175,56 +208,61 @@
         <div class="rv-date">${dateNum}</div>
         <div class="rv-month">${monLabel}</div>
       `
-      chip.addEventListener('click', () => {
-        _selectedDate = iso
-        renderDateGrid()
-      })
+      if (!isClosed) {
+        chip.addEventListener('click', () => {
+          _selectedDate = iso
+          _selectedTime = null
+          renderDateGrid()
+          loadSlotsInline(iso)
+        })
+      }
       grid.appendChild(chip)
     }
   }
 
-  el('rv-date-next')?.addEventListener('click', () => {
-    if (!_selectedDate) {
-      // Auto-select today
-      _selectedDate = localIso(0)
-      renderDateGrid()
-    }
-    goToTimeStep()
-  })
-
   // ---------------------------------------------------------------------------
-  // Step 2: Time slots
+  // Step 1 (continued): Inline time slots — loaded on date chip click
   // ---------------------------------------------------------------------------
 
-  async function goToTimeStep() {
-    hide('rv-step-date')
-    show('rv-step-time')
-    show('rv-slots-loading')
-    hide('rv-slots-empty')
-    el('rv-slots-grid').innerHTML = ''
+  async function loadSlotsInline(date) {
+    if (_slotsAbortController) _slotsAbortController.abort()
+    _slotsAbortController = new AbortController()
 
-    // Heading
-    setText('rv-time-heading', `${_partySize} guests · ${formatDate(_selectedDate)}`)
+    const wrap = el('rv-slots-inline-wrap')
+    if (!wrap) return
+    wrap.hidden = false
+
+    hide('rv-slots-inline-empty')
+    el('rv-slots-inline-grid').innerHTML = ''
+    show('rv-slots-inline-loading')
+
+    setText('rv-slots-inline-heading', `${_partySize} guest${_partySize > 1 ? 's' : ''} · ${formatDate(date)}`)
 
     try {
-      const res = await fetch(`/api/store/reservations/slots?date=${_selectedDate}`)
+      const res = await fetch(`/api/store/reservations/slots?date=${date}`, {
+        signal: _slotsAbortController.signal,
+      })
       if (!res.ok) throw new Error('Failed to load slots')
       const data = await res.json()
-      hide('rv-slots-loading')
-      renderSlots(data.slots ?? [])
-    } catch {
-      hide('rv-slots-loading')
-      el('rv-slots-empty').textContent = 'Unable to load available times. Please try again.'
-      show('rv-slots-empty')
+      hide('rv-slots-inline-loading')
+      renderSlotsInline(data.slots ?? [])
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      hide('rv-slots-inline-loading')
+      const emptyEl = el('rv-slots-inline-empty')
+      if (emptyEl) emptyEl.textContent = 'Unable to load available times. Please try again.'
+      show('rv-slots-inline-empty')
     }
   }
 
-  function renderSlots(slots) {
-    const grid = el('rv-slots-grid')
+  function renderSlotsInline(slots) {
+    const grid = el('rv-slots-inline-grid')
     const available = slots.filter((s) => s.available)
 
     if (available.length === 0) {
-      show('rv-slots-empty')
+      const emptyEl = el('rv-slots-inline-empty')
+      if (emptyEl) emptyEl.textContent = 'No times available for this date.'
+      show('rv-slots-inline-empty')
       return
     }
 
@@ -242,24 +280,18 @@
           c.classList.toggle('selected', c.dataset.time === _selectedTime)
           c.setAttribute('aria-pressed', String(c.dataset.time === _selectedTime))
         })
-        // Advance to contact step after short delay
         setTimeout(goToContactStep, 200)
       })
       grid.appendChild(chip)
     })
   }
 
-  el('rv-back-to-date')?.addEventListener('click', () => {
-    hide('rv-step-time')
-    show('rv-step-date')
-  })
-
   // ---------------------------------------------------------------------------
   // Step 3: Contact info
   // ---------------------------------------------------------------------------
 
   function goToContactStep() {
-    hide('rv-step-time')
+    hide('rv-step-date')
     show('rv-step-contact')
     hide('rv-contact-error')
     renderSummaryBar()
@@ -277,7 +309,7 @@
 
   el('rv-back-to-time')?.addEventListener('click', () => {
     hide('rv-step-contact')
-    show('rv-step-time')
+    show('rv-step-date')
   })
 
   el('rv-submit-btn')?.addEventListener('click', submitReservation)

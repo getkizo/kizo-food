@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+﻿#!/usr/bin/env bun
 /**
  * Receipt render debugger
  *
@@ -8,13 +8,13 @@
  *
  * Usage:
  *   bun run v2/src/tools/debug-receipt.ts
- *   bun run v2/src/tools/debug-receipt.ts 192.168.1.179   # also prints
+ *   bun run v2/src/tools/debug-receipt.ts 192.168.1.100   # also prints
  */
 
 import receiptline from 'receiptline'
 import sharp from 'sharp'
 import { writeFileSync, unlinkSync } from 'fs'
-import { tmpdir, EOL } from 'os'
+import { tmpdir } from 'os'
 import { join } from 'path'
 
 const PRINTER_DOT_WIDTH = 576
@@ -39,18 +39,18 @@ const STAR_GRAPHIC_OPTS = {
 import { buildCustomerReceiptMarkup } from '../services/star-raster'
 
 const MARKUP = buildCustomerReceiptMarkup({
-  printerIp:       '192.168.1.179',
+  printerIp:       '192.168.1.100',
   printerProtocol: 'star-graphic',
   orderId:         'ord_FFB577',
   orderType:       'takeout',
-  merchantName:    'Hanuman Thai Cafe',
+  merchantName:    'Demo Restaurant',
   address:         '115 Central Way, Kirkland WA 98033',
   customerName:    'Jj',
   tableLabel:      null,
   roomLabel:       null,
   notes:           null,
   phoneNumber:     '425-822-2629',
-  website:         'https://www.hanuman-thai-cafe-kirkland.com',
+  website:         'https://www.demo-restaurant.example.com',
   subtotalCents:   1100,
   taxCents:        114,
   taxRate:         0.104,
@@ -71,7 +71,8 @@ const MARKUP = buildCustomerReceiptMarkup({
 // Step 1: markup → SVG
 // ---------------------------------------------------------------------------
 console.log('Step 1: rendering markup → SVG ...')
-const svg = receiptline.transform(MARKUP, SVG_OPTS)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const svg = receiptline.transform(MARKUP, SVG_OPTS as any)
 const tmp = tmpdir()
 const svgPath   = join(tmp, 'receipt-debug.svg')
 const pngPath   = join(tmp, 'receipt-debug.png')
@@ -101,7 +102,8 @@ console.log(`  PNG: ${meta.width}×${meta.height} px, ${png.length} bytes  →  
 // ---------------------------------------------------------------------------
 console.log('Step 3: encoding PNG → Star Graphic bytes ...')
 const base64 = png.toString('base64')
-const result = receiptline.transform(`{i:${base64}}\n{cut}`, STAR_GRAPHIC_OPTS)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const result = receiptline.transform(`{i:${base64}}\n{cut}`, STAR_GRAPHIC_OPTS as any)
 const bytes = Buffer.from(result, 'binary')
 writeFileSync(bytesPath, bytes)
 console.log(`  Bytes: ${bytes.length}  →  ${bytesPath}`)
@@ -116,7 +118,7 @@ if (printerIp) {
   console.log(sent ? '  OK' : '  FAILED — check IP/network')
 } else {
   console.log('\nTip: pass a printer IP to also send to the printer.')
-  console.log('     bun run v2/src/tools/debug-receipt.ts 192.168.1.179')
+  console.log('     bun run v2/src/tools/debug-receipt.ts 192.168.1.100')
 }
 
 console.log('\nOpen the PNG to see exactly what will print:')
@@ -126,7 +128,7 @@ console.log(`  start ${pngPath}`)
 // TCP helper — writes a .ps1 script to a temp file to avoid Windows
 // command-line length limits (~32KB) when embedding large binary payloads.
 // ---------------------------------------------------------------------------
-async function sendTcp(host: string, port: number, data: Buffer, binPath: string): Promise<boolean> {
+async function sendTcp(host: string, port: number, _data: Buffer, binPath: string): Promise<boolean> {
   // binPath already written to disk by Step 3 above — PowerShell reads it directly.
   const scriptPath = join(tmpdir(), 'receipt-send.ps1')
   const ps = `

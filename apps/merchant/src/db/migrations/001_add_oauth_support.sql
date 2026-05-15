@@ -1,4 +1,4 @@
--- Migration: Add OAuth Support
+﻿-- Migration: Add OAuth Support
 -- Version: 2.0.1
 -- Date: 2026-02-16
 

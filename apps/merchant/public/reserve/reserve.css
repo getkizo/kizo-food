@@ -1,4 +1,4 @@
-/* =============================================================================
+﻿/* =============================================================================
    Kizo Reserve — Customer-facing reservation booking page
    Embeddable as an <iframe>. Dark theme matching the store PWA.
    ============================================================================= */
@@ -159,6 +159,20 @@ html, body {
   border-color: var(--rv-primary);
   background: #2e2818;
 }
+
+/* Scheduled closure — disabled date chip */
+.rv-date-chip--closed {
+  opacity: 0.38;
+  cursor: not-allowed;
+  text-decoration: line-through;
+  pointer-events: none;
+}
+
+/* ── Inline slot wrap (shown within Step 1 after a date is chosen) ────────── */
+
+.rv-slots-inline-wrap { margin-top: 8px; }
+.rv-slots-inline-heading { margin-bottom: 10px; }
+/* rv-center[hidden] already covers rv-slots-inline-loading via the rule below */
 
 /* ── Time slot grid ───────────────────────────────────────────────────────── */
 
@@ -328,6 +342,43 @@ html, body {
   font-weight: 700;
   color: var(--rv-primary);
   margin-top: 8px;
+}
+
+/* ── Busy mode ────────────────────────────────────────────────────────────── */
+
+.rv-card--busy {
+  border-color: rgba(249,115,22,0.35);
+}
+
+.rv-icon-busy {
+  color: #f97316;
+}
+
+.rv-busy-heading {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--rv-text);
+}
+
+.rv-busy-subtext {
+  font-size: 1rem;
+  color: var(--rv-text-muted);
+  margin: 0 0 6px;
+}
+
+.rv-busy-until {
+  font-size: 0.875rem;
+  color: #f97316;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.rv-busy-until[hidden] { display: none !important; }
+
+.rv-busy-note {
+  font-size: 0.8rem;
+  color: var(--rv-text-muted);
+  margin: 4px 0 0;
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */

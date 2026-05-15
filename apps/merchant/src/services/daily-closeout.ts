@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Daily closeout email service
  *
  * Sends a sales summary email 60 minutes after the business closes each day.
@@ -16,6 +16,7 @@ import nodemailer from 'nodemailer'
 import { getDatabase } from '../db/connection'
 import { getAPIKey } from '../crypto/api-keys'
 import { prunePaymentEvents } from './payment-log'
+import { prunePaymentErrors } from './payment-error-log'
 
 // ---------------------------------------------------------------------------
 // Helpers (same timezone helpers as reports.ts — kept local to avoid coupling)
@@ -129,6 +130,8 @@ export async function checkCloseouts(): Promise<number> {
   // Prune stale payment_events on every sweep so the table stays bounded even
   // when reconciliation is disabled (secondary call site per payment-log.ts warning).
   prunePaymentEvents()
+  // Prune payment_errors older than 30 days (COSA monitoring log).
+  prunePaymentErrors()
 
   const db = getDatabase()
 
@@ -253,6 +256,15 @@ function addMinutes(time: string, minutes: number): string {
 // Sales data query (reuses reports.ts logic)
 // ---------------------------------------------------------------------------
 
+interface TerminalAlertRow {
+  id: string
+  time: string
+  amountCents: number
+  cardLastFour: string | null
+  cardBrand: string | null
+  kind: 'orphaned' | 'duplicate' | 'both'
+}
+
 interface SalesData {
   totalOrders: number
   grossSalesCents: number
@@ -277,6 +289,80 @@ interface SalesData {
     amountCollectedCents: number
     refundedCents: number
   }>
+  terminalAlerts: TerminalAlertRow[]
+}
+
+/**
+ * Return orphaned and duplicate succeeded terminal transactions for the given
+ * merchant-local date.  Used in the daily closeout email to flag issues that
+ * need staff follow-up before the next business day.
+ *
+ * Orphaned  = COMPLETED with no order_id AND no payment_id
+ * Duplicate = COMPLETED sharing the same (approved_amount_cents, card_last_four)
+ *             as another COMPLETED row on the same day
+ */
+export function getTerminalAlerts(merchantId: string, date: string, tz: string): TerminalAlertRow[] {
+  const db = getDatabase()
+  const fromBound = localToUtc(date, '00:00:00', tz)
+  const toBound   = localToUtc(date, '23:59:59', tz)
+
+  type TxRow = {
+    id: string
+    completed_at: string | null
+    created_at: string
+    amount_cents: number | null
+    approved_amount_cents: number | null
+    card_last_four: string | null
+    card_brand: string | null
+    order_id: string | null
+    payment_id: string | null
+  }
+
+  const rows = db
+    .query<TxRow, [string, string, string]>(
+      `SELECT id, completed_at, created_at, amount_cents, approved_amount_cents,
+              card_last_four, card_brand, order_id, payment_id
+       FROM terminal_transactions
+       WHERE merchant_id = ?
+         AND tx_state = 'COMPLETED'
+         AND COALESCE(completed_at, created_at) >= ?
+         AND COALESCE(completed_at, created_at) <= ?
+       ORDER BY COALESCE(completed_at, created_at) ASC`
+    )
+    .all(merchantId, fromBound, toBound)
+
+  // Count occurrences of each (approvedAmount, cardLastFour) pair.
+  // Rows with no card_last_four are excluded — two null-card rows are not
+  // necessarily the same transaction, so we can't flag them as duplicates.
+  const pairCounts: Record<string, number> = {}
+  for (const r of rows) {
+    if (r.card_last_four == null) continue
+    const fullCents = r.approved_amount_cents ?? (r.amount_cents ?? 0)
+    const key = `${fullCents}_${r.card_last_four}`
+    pairCounts[key] = (pairCounts[key] || 0) + 1
+  }
+
+  const alerts: TerminalAlertRow[] = []
+  for (const r of rows) {
+    const timeStr = r.completed_at ?? r.created_at
+    const fullCents = r.approved_amount_cents ?? (r.amount_cents ?? 0)
+    const isOrphaned = r.order_id == null && r.payment_id == null
+    const isDuplicate = r.card_last_four != null
+      && (pairCounts[`${fullCents}_${r.card_last_four}`] ?? 0) > 1
+
+    if (isOrphaned || isDuplicate) {
+      alerts.push({
+        id: r.id,
+        time: utcToLocalTime(timeStr, tz),
+        amountCents: fullCents,
+        cardLastFour: r.card_last_four,
+        cardBrand: r.card_brand,
+        kind: isOrphaned && isDuplicate ? 'both' : isOrphaned ? 'orphaned' : 'duplicate',
+      })
+    }
+  }
+
+  return alerts
 }
 
 function getSalesData(merchantId: string, date: string, tz: string): SalesData {
@@ -371,6 +457,7 @@ function getSalesData(merchantId: string, date: string, tz: string): SalesData {
     netSalesCents: grossSalesCents - discountCents - refundedCents,
     taxCents, serviceChargeCents, tipCents, amountCollectedCents,
     cardCents, cashCents, orders,
+    terminalAlerts: getTerminalAlerts(merchantId, date, tz),
   }
 }
 
@@ -423,7 +510,7 @@ async function sendCloseoutEmail(
 function buildCloseoutHtml(
   merchant: MerchantRow,
   date: string,
-  tz: string,
+  _tz: string,
   sales: SalesData | null,
   isClosed: boolean,
 ): string {
@@ -526,6 +613,56 @@ function buildCloseoutHtml(
       </td></tr>`
   }
 
+  // Terminal payment alerts section
+  let terminalAlertsHtml = ''
+  if (sales.terminalAlerts.length > 0) {
+    const orphanCount = sales.terminalAlerts.filter(a => a.kind === 'orphaned' || a.kind === 'both').length
+    const dupCount    = sales.terminalAlerts.filter(a => a.kind === 'duplicate' || a.kind === 'both').length
+
+    const alertHeaderRow = `
+      <tr style="background:#fff3cd;">
+        <th style="padding:6px 8px;text-align:left;font-size:12px;">Time</th>
+        <th style="padding:6px 8px;text-align:left;font-size:12px;">Type</th>
+        <th style="padding:6px 8px;text-align:left;font-size:12px;">Card</th>
+        <th style="padding:6px 8px;text-align:right;font-size:12px;">Amount</th>
+        <th style="padding:6px 8px;text-align:left;font-size:12px;">Transaction ID</th>
+      </tr>`
+
+    const alertDataRows = sales.terminalAlerts.map(a => {
+      const kindLabel = a.kind === 'both'
+        ? '<span style="color:#92400e;font-weight:600;">Orphaned + Duplicate</span>'
+        : a.kind === 'orphaned'
+          ? '<span style="color:#92400e;font-weight:600;">Orphaned</span>'
+          : '<span style="color:#b45309;font-weight:600;">Duplicate</span>'
+      const cardLabel = a.cardBrand && a.cardLastFour
+        ? `${esc(a.cardBrand)} ···${esc(a.cardLastFour)}`
+        : a.cardLastFour ? `···${esc(a.cardLastFour)}` : '—'
+      return `
+        <tr style="border-bottom:1px solid #fde68a;">
+          <td style="padding:5px 8px;font-size:12px;">${esc(a.time)}</td>
+          <td style="padding:5px 8px;font-size:12px;">${kindLabel}</td>
+          <td style="padding:5px 8px;font-size:12px;">${cardLabel}</td>
+          <td style="padding:5px 8px;font-size:12px;text-align:right;">${fmt(a.amountCents)}</td>
+          <td style="padding:5px 8px;font-size:11px;color:#666;">${esc(a.id)}</td>
+        </tr>`
+    }).join('')
+
+    const summary: string[] = []
+    if (orphanCount > 0) summary.push(`${orphanCount} orphaned (charged but not linked to an order)`)
+    if (dupCount > 0)    summary.push(`${dupCount} duplicate (same card &amp; amount charged more than once)`)
+
+    terminalAlertsHtml = `
+      <tr><td style="padding:16px 24px 0;">
+        <p style="margin:0 0 4px;font-weight:bold;font-size:14px;color:#92400e;">
+          ⚠ Terminal Payment Alerts (${sales.terminalAlerts.length})
+        </p>
+        <p style="margin:0 0 8px;font-size:12px;color:#666;">${summary.join(' &middot; ')}</p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #fde68a;border-radius:4px;">
+          ${alertHeaderRow}${alertDataRows}
+        </table>
+      </td></tr>`
+  }
+
   const body = `
     <!-- Summary -->
     <tr><td style="padding:16px 24px 0;">
@@ -547,6 +684,7 @@ function buildCloseoutHtml(
         </tr>
       </table>
     </td></tr>
+    ${terminalAlertsHtml}
     ${orderDetailHtml}
   `
 

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Auto-fire service
  *
  * For scheduled orders, the customer specifies when their order should be READY.
@@ -14,10 +14,11 @@
  */
 
 import { getDatabase } from '../db/connection'
-import { printKitchenTicket, course2Items } from './printer'
+import { printKitchenTicket, course2Items, kitchenItems, nonGfItems } from './printer'
 import { enrichItemsWithCategory } from '../utils/print-items'
 import type { OrderItemShape } from '../utils/print-items'
 import { broadcastToMerchant } from './sse'
+import { logger } from '../utils/logger'
 
 interface DueOrder {
   id: string
@@ -32,6 +33,7 @@ interface DueOrder {
   kitchen_printer_protocol: string | null
   receipt_style: string | null
   merchant_name: string | null
+  timezone: string | null
   created_at: string | null
 }
 
@@ -60,6 +62,7 @@ export function checkDueOrders(): number {
          m.kitchen_printer_protocol,
          m.receipt_style,
          m.business_name AS merchant_name,
+         m.timezone,
          o.created_at
        FROM orders o
        JOIN merchants m ON m.id = o.merchant_id
@@ -83,10 +86,9 @@ export function checkDueOrders(): number {
         [order.id],
       )
 
-      console.log(
-        `[auto-fire] Fired order ${order.id} for merchant ${order.merchant_id}` +
-        ` — scheduled ready at ${order.pickup_time}`,
-      )
+      logger.info('[auto-fire]', 'Fired order', {
+        orderId: order.id, merchantId: order.merchant_id, pickupTime: order.pickup_time,
+      })
 
       // Print kitchen ticket (non-blocking, errors logged not thrown)
       if (order.printer_ip) {
@@ -104,8 +106,9 @@ export function checkDueOrders(): number {
         try {
           items = JSON.parse(order.items ?? '[]')
         } catch (err) {
-          console.error('[auto-fire] JSON.parse failed for order', order.id,
-            '— raw:', String(order.items).slice(0, 120), err)
+          logger.error('[auto-fire]', 'JSON.parse failed for order items', {
+            orderId: order.id, raw: String(order.items).slice(0, 120), err: String(err),
+          })
         }
 
         const printItems = items.map(item => ({
@@ -128,6 +131,8 @@ export function checkDueOrders(): number {
           notes: order.notes,
           items: printItems,
           createdAt: order.created_at,
+          scheduledFor: order.pickup_time,
+          timezone: order.timezone,
         }).then(result => {
           if (result.webprntFallbackUsed) {
             broadcastToMerchant(order.merchant_id, 'printer_warning', {
@@ -135,11 +140,11 @@ export function checkDueOrders(): number {
             })
           }
         }).catch(err => {
-          console.error(
-            `[auto-fire] Print failed for order ${order.id}` +
-            ` — printer=${order.printer_ip} protocol=${order.kitchen_printer_protocol} items=${printItems.length}:`,
-            err instanceof Error ? err.message : err
-          )
+          logger.error('[auto-fire]', 'Print failed', {
+            orderId: order.id, printer: order.printer_ip,
+            protocol: order.kitchen_printer_protocol, items: printItems.length,
+            err: err instanceof Error ? err.message : String(err),
+          })
         })
       }
 
@@ -151,7 +156,7 @@ export function checkDueOrders(): number {
 
       fired++
     } catch (err) {
-      console.error(`[auto-fire] Error processing order ${order.id}:`, err)
+      logger.error('[auto-fire]', 'Error processing order', { orderId: order.id, err: String(err) })
     }
   }
 
@@ -166,6 +171,7 @@ interface PendingCourseFire {
   printer_ip: string
   printer_protocol: string
   print_language: string | null
+  ticket_type: string
   // order fields joined in
   order_type: string
   customer_name: string | null
@@ -191,7 +197,7 @@ export function checkPendingCourseFires(): number {
     .query<PendingCourseFire, []>(
       `SELECT
          pcf.id, pcf.merchant_id, pcf.order_id, pcf.course,
-         pcf.printer_ip, pcf.printer_protocol, pcf.print_language,
+         pcf.printer_ip, pcf.printer_protocol, pcf.print_language, pcf.ticket_type,
          o.order_type, o.customer_name, o.table_label, o.room_label,
          o.notes, o.items, o.created_at,
          m.business_name AS merchant_name,
@@ -200,7 +206,7 @@ export function checkPendingCourseFires(): number {
        JOIN orders o ON o.id = pcf.order_id
        JOIN merchants m ON m.id = pcf.merchant_id
        WHERE pcf.fired_at IS NULL
-         AND pcf.fire_at <= datetime('now')
+         AND datetime(pcf.fire_at) <= datetime('now')
          AND o.status NOT IN ('cancelled', 'picked_up', 'completed')`
     )
     .all()
@@ -211,12 +217,15 @@ export function checkPendingCourseFires(): number {
     try {
       let rawItems: OrderItemShape[] = []
       try { rawItems = JSON.parse(pcf.items ?? '[]') } catch (err) {
-        console.error('[auto-fire] JSON.parse failed for pending_course_fires row', pcf.id,
-          '(order', pcf.order_id + ') — raw:', String(pcf.items).slice(0, 120), err)
+        logger.error('[auto-fire]', 'JSON.parse failed for pending_course_fires items', {
+          pcfId: pcf.id, orderId: pcf.order_id, raw: String(pcf.items).slice(0, 120), err: String(err),
+        })
       }
 
       const allItems = enrichItemsWithCategory(rawItems)
-      const itemsForCourse = course2Items(allItems)
+      const itemsForCourse = pcf.ticket_type === 'non_gf'
+        ? nonGfItems(kitchenItems(allItems))
+        : course2Items(allItems)
 
       if (itemsForCourse.length === 0) {
         // Nothing to print — mark as fired and skip
@@ -252,20 +261,22 @@ export function checkPendingCourseFires(): number {
           })
         }
       }).catch(err => {
-        console.error(
-          `[auto-fire] Course-${pcf.course} print failed for order ${pcf.order_id}` +
-          ` — printer=${pcf.printer_ip} protocol=${pcf.printer_protocol} items=${itemsForCourse.length}:`,
-          err instanceof Error ? err.message : err
-        )
+        logger.error('[auto-fire]', 'Course print failed', {
+          pcfId: pcf.id, orderId: pcf.order_id, course: pcf.course,
+          printer: pcf.printer_ip, protocol: pcf.printer_protocol, items: itemsForCourse.length,
+          err: err instanceof Error ? err.message : String(err),
+        })
         db.run(`UPDATE pending_course_fires SET print_status = 'failed' WHERE id = ?`, [pcf.id])
         broadcastToMerchant(pcf.merchant_id, 'printer_warning', {
-          message: `Course ${pcf.course} kitchen ticket failed to print for order ${pcf.order_id} — printer=${pcf.printer_ip}. Manual reprint required.`,
+          message: pcf.ticket_type === 'non_gf'
+            ? `Non-GF kitchen ticket failed to print for order ${pcf.order_id} — printer=${pcf.printer_ip}. Manual reprint required.`
+            : `Course ${pcf.course} kitchen ticket failed to print for order ${pcf.order_id} — printer=${pcf.printer_ip}. Manual reprint required.`,
           orderId: pcf.order_id,
           course: pcf.course,
         })
       })
 
-      console.log(`[auto-fire] Fired course-${pcf.course} ticket for order ${pcf.order_id}`)
+      logger.info('[auto-fire]', 'Fired course ticket', { orderId: pcf.order_id, course: pcf.course, ticketType: pcf.ticket_type })
 
       broadcastToMerchant(pcf.merchant_id, 'order_updated', {
         orderId: pcf.order_id,
@@ -274,7 +285,7 @@ export function checkPendingCourseFires(): number {
 
       fired++
     } catch (err) {
-      console.error(`[auto-fire] Error processing course fire ${pcf.id}:`, err)
+      logger.error('[auto-fire]', 'Error processing course fire', { pcfId: pcf.id, err: String(err) })
     }
   }
 
@@ -325,7 +336,7 @@ export function cleanupStaleOrders(): number {
   ) as { changes: number }
   const count = result.changes ?? 0
   if (count > 0) {
-    console.log(`[auto-fire] Cleaned up ${count} stale unpaid order(s)`)
+    logger.info('[auto-fire]', 'Cleaned up stale unpaid orders', { count })
   }
   return count
 }
@@ -390,8 +401,6 @@ export function checkReservationReminders(): void {
     )
     .all(todayUtcDate, tomorrowUtcDate)
 
-  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes()
-
   for (const res of rows) {
     try {
       const tz = res.timezone ?? 'America/Los_Angeles'
@@ -424,7 +433,7 @@ export function checkReservationReminders(): void {
           minutesUntil: Math.round(minutesUntil),
           mark: 60,
         })
-        console.log(`[auto-fire] Reservation reminder (60 min) sent for ${res.id} — ${res.customer_name} at ${res.time}`)
+        logger.info('[auto-fire]', 'Reservation reminder sent', { reservationId: res.id, customerName: res.customer_name, time: res.time, mark: 60 })
       }
 
       // Check 15-minute mark: within [13, 17] minutes
@@ -440,10 +449,10 @@ export function checkReservationReminders(): void {
           minutesUntil: Math.round(minutesUntil),
           mark: 15,
         })
-        console.log(`[auto-fire] Reservation reminder (15 min) sent for ${res.id} — ${res.customer_name} at ${res.time}`)
+        logger.info('[auto-fire]', 'Reservation reminder sent', { reservationId: res.id, customerName: res.customer_name, time: res.time, mark: 15 })
       }
     } catch (err) {
-      console.error(`[auto-fire] Error processing reminder for reservation ${res.id}:`, err)
+      logger.error('[auto-fire]', 'Error processing reservation reminder', { reservationId: res.id, err: String(err) })
     }
   }
 }
@@ -459,6 +468,104 @@ const COURSE_FIRE_CLEANUP_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
  * Delete `pending_course_fires` rows that were fired more than 30 days ago.
  * Runs at most once every 30 days (module-level gate).
  */
+export function checkAdvanceOrderReminders(): void {
+  const db = getDatabase()
+
+  type AoReminderRow = {
+    id: string
+    merchant_id: string
+    customer_name: string
+    customer_phone: string | null
+    scheduled_for: string
+    reminder_24h_fired: number
+    reminder_day_fired: number
+    timezone: string | null
+  }
+
+  const now = new Date()
+  // Fetch pending orders within the next 48 h that still need a reminder fired.
+  // 48-hour window catches: 24h-before reminder (fires at T-24h) and
+  // same-day 9 AM reminder (fires on the day of, at or after 09:00 local).
+  const lookaheadUtc = new Date(now.getTime() + 48 * 60 * 60 * 1000)
+    .toISOString().replace('T', ' ').slice(0, 19)
+
+  const rows = db.query<AoReminderRow, [string]>(
+    `SELECT ao.id, ao.merchant_id, ao.customer_name, ao.customer_phone, ao.scheduled_for,
+            ao.reminder_24h_fired, ao.reminder_day_fired, m.timezone
+     FROM advance_orders ao
+     JOIN merchants m ON m.id = ao.merchant_id
+     WHERE ao.status = 'pending'
+       AND ao.scheduled_for >= datetime('now')
+       AND ao.scheduled_for <= ?
+       AND (ao.reminder_24h_fired = 0 OR ao.reminder_day_fired = 0)
+     ORDER BY ao.scheduled_for ASC`
+  ).all(lookaheadUtc)
+
+  for (const row of rows) {
+    try {
+      const tz = row.timezone ?? 'America/Los_Angeles'
+      const scheduledUtc = new Date(
+        row.scheduled_for.endsWith('Z') || row.scheduled_for.includes('+')
+          ? row.scheduled_for : row.scheduled_for + 'Z'
+      )
+
+      // ── 24-hour reminder ───────────────────────────────────────────────────
+      if (row.reminder_24h_fired === 0) {
+        const reminderAt = new Date(scheduledUtc.getTime() - 24 * 60 * 60 * 1000)
+        if (now >= reminderAt) {
+          db.run(`UPDATE advance_orders SET reminder_24h_fired = 1 WHERE id = ?`, [row.id])
+          const scheduledLabel = scheduledUtc.toLocaleString('en-US', {
+            timeZone: tz, month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', hour12: true,
+          })
+          broadcastToMerchant(row.merchant_id, 'advance_order_reminder', {
+            aoId:           row.id,
+            customerName:   row.customer_name,
+            customerPhone:  row.customer_phone,
+            scheduledFor:   row.scheduled_for,
+            scheduledLabel,
+            mark:           '24h',
+          })
+          logger.info('[auto-fire]', 'Advance order 24h reminder sent', {
+            aoId: row.id, customerName: row.customer_name, scheduledFor: row.scheduled_for,
+          })
+        }
+      }
+
+      // ── Day-of 9 AM reminder ───────────────────────────────────────────────
+      if (row.reminder_day_fired === 0) {
+        const localNow       = new Date(now.toLocaleString('en-US', { timeZone: tz }))
+        const localNowDate   = localNow.toLocaleDateString('en-CA')           // YYYY-MM-DD
+        const localScheduled = new Date(scheduledUtc.toLocaleString('en-US', { timeZone: tz }))
+        const localSchedDate = localScheduled.toLocaleDateString('en-CA')
+        const localHour      = localNow.getHours() + localNow.getMinutes() / 60
+
+        if (localNowDate === localSchedDate && localHour >= 9) {
+          db.run(`UPDATE advance_orders SET reminder_day_fired = 1 WHERE id = ?`, [row.id])
+          const scheduledLabel = scheduledUtc.toLocaleString('en-US', {
+            timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true,
+          })
+          broadcastToMerchant(row.merchant_id, 'advance_order_reminder', {
+            aoId:           row.id,
+            customerName:   row.customer_name,
+            customerPhone:  row.customer_phone,
+            scheduledFor:   row.scheduled_for,
+            scheduledLabel,
+            mark:           'day',
+          })
+          logger.info('[auto-fire]', 'Advance order day-of reminder sent', {
+            aoId: row.id, customerName: row.customer_name, scheduledFor: row.scheduled_for,
+          })
+        }
+      }
+    } catch (err) {
+      logger.error('[auto-fire]', 'Error processing advance order reminder', {
+        aoId: row.id, err: String(err),
+      })
+    }
+  }
+}
+
 function cleanupFiredCourses(): void {
   if (_lastCourseFireCleanup !== null &&
       Date.now() - _lastCourseFireCleanup < COURSE_FIRE_CLEANUP_INTERVAL_MS) {
@@ -472,7 +579,7 @@ function cleanupFiredCourses(): void {
        AND fired_at < datetime('now', '-30 days')`
   ) as { changes: number }
   if (result.changes > 0) {
-    console.log(`[auto-fire] Cleaned up ${result.changes} old pending_course_fires rows`)
+    logger.info('[auto-fire]', 'Cleaned up old pending_course_fires rows', { count: result.changes })
   }
 }
 
@@ -493,13 +600,14 @@ export function startAutoFire(): () => void {
     cleanupFiredCourses()
     cleanupStaleOrders()
     checkReservationReminders()
+    checkAdvanceOrderReminders()
   } catch (err) {
-    console.error('[auto-fire] Startup check failed (will retry on next interval):', err)
+    logger.error('[auto-fire]', 'Startup check failed (will retry on next interval)', { err: String(err) })
   }
 
   const handle = setInterval(() => {
     if (_autoFireRunning) {
-      console.warn('[auto-fire] Previous interval tick still running — skipping')
+      logger.warn('[auto-fire]', 'Previous interval tick still running — skipping')
       return
     }
     _autoFireRunning = true
@@ -510,7 +618,7 @@ export function startAutoFire(): () => void {
       cleanupStaleOrders()
       checkReservationReminders()
     } catch (err) {
-      console.error('[auto-fire] Interval check failed:', err)
+      logger.error('[auto-fire]', 'Interval check failed', { err: String(err) })
     } finally {
       _autoFireRunning = false
     }

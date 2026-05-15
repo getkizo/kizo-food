@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Master key derivation and management
  * Uses scrypt (memory-hard KDF) with hardware UUID binding
  *
@@ -43,7 +43,8 @@ async function deriveMasterKey(passphrase: string): Promise<MasterKeyDerivation>
 
   // Master Key = scrypt(passphrase, salt, keylen=32, N=2^17, r=8, p=1)
   // N=2^17 (~130ms on RPi4, 128MB RAM) balances security vs startup time
-  const key = (await scryptAsync(passphrase, salt, 32, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const key = (await (scryptAsync as any)(passphrase, salt, 32, {
     N: 131072, // 2^17 iterations
     r: 8,      // block size
     p: 1,      // parallelization
@@ -174,7 +175,7 @@ export function clearMasterKey(): void {
  * @param prompt - Prompt message
  * @returns Promise resolving to passphrase
  */
-async function promptForPassphrase(prompt: string): Promise<string> {
+async function promptForPassphrase(_prompt: string): Promise<string> {
   // For now, throw error requiring env var
   // In production, would use readline or similar for interactive input
   throw new Error(

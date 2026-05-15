@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SAM reserved fields guard
  *
  * sam-pattern's Model class exposes a fixed set of methods. Model.update()

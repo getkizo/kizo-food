@@ -1,0 +1,30 @@
+﻿[Unit]
+Description=Marketing Engine — QR redirector for kizo.example
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=kizo
+WorkingDirectory=/home/kizo/kizo-food/v2/tools/marketing-engine
+ExecStart=/home/kizo/.bun/bin/bun run src/server.ts
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=marketing-engine
+
+# Environment — override via /etc/marketing-engine.env or EnvironmentFile
+Environment=NODE_ENV=production
+Environment=PORT=3100
+Environment=HOST=127.0.0.1
+Environment=DB_PATH=/var/lib/kizo/campaigns.db
+Environment=DEFAULT_REDIRECT=https://demo-restaurant.kizo.example
+# Load shared vars (ALLOWED_MERCHANT_IPS, RESTRICT_MERCHANT_TO_LOCAL, etc.) from
+# the main Kizo env file first; marketing-engine.env can override any of them.
+EnvironmentFile=-/home/kizo/kizo-food/v2/.env
+EnvironmentFile=-/etc/marketing-engine.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Clover Order Client
  *
  * Pushes Kizo in-store orders to a Clover Flex terminal as custom line

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Server-Sent Events (SSE) broadcaster
  *
  * Uses Node's EventEmitter as an in-process pub/sub bus.
@@ -84,4 +84,12 @@ export function releaseMerchantEmitter(merchantId: string, emitter: EventEmitter
  */
 export function broadcastToMerchant(merchantId: string, event: string, data: unknown): void {
   registry.get(merchantId)?.emitter.emit('sse', { event, data } satisfies SSEPayload)
+}
+
+/**
+ * Return the total number of active SSE client connections across all merchants.
+ * Used by `GET /api/status` to report `system.sse_clients`.
+ */
+export function getSseClientCount(): number {
+  return [...registry.values()].reduce((sum, e) => sum + e.refCount, 0)
 }

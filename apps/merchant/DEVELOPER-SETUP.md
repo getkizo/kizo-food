@@ -1,4 +1,4 @@
-# Developer Setup Guide (Windows)
+﻿# Developer Setup Guide (Windows)
 
 Complete guide to set up and run the Merchant Appliance v2 on Windows for development and testing.
 
@@ -49,7 +49,7 @@ Complete guide to set up and run the Merchant Appliance v2 on Windows for develo
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/kizo/merchant.git
+git clone https://github.com/YOUR_ORG/kizo-food.git
 cd merchant/v2
 ```
 
@@ -213,7 +213,7 @@ If you have a Clover sandbox account:
 
    This fetches merchant details from Clover and updates the local profile.
 
-See [CLOVER-SETUP.md](./docs/CLOVER-SETUP.md) for detailed Clover integration instructions.
+See [CLOVER-SETUP.md](./CLOVER-SETUP.md) for detailed Clover integration instructions.
 
 ## Printer Setup
 
@@ -277,8 +277,8 @@ with the production appliance):
 |---|---|
 | `example-usage.js` | Generates sample raster buffers and writes PNG previews |
 | `receipt-comparison.jsx` | React component for side-by-side ticket comparison |
-| `hanuman-receipts.jsx` | Hanuman Thai Café real-data receipt preview |
-| `hanuman-receipt-renderer.js` | Node renderer for `hanuman-receipts.jsx` |
+| `sample-receipts.jsx` | Sample receipt preview (rename/populate with your restaurant data) |
+| `sample-receipt-renderer.js` | Node renderer for `sample-receipts.jsx` |
 | `convert-logo.py` | Converts a PNG logo to base64 `.txt` for `src/assets/printers/` |
 
 Run with:
@@ -801,24 +801,24 @@ CORS_ORIGIN=http://localhost:5173
 ## Next Steps
 
 1. **Explore the API** - Import the API collection into Postman/Insomnia
-2. **Read Architecture Docs** - See `./docs/architecture/` for system design
-3. **Review ADRs** - Check `./docs/architecture/ADRs/` for architectural decisions
+2. **Read Architecture Docs** - See `../docs/architecture/` for system design
+3. **Review ADRs** - Check `../docs/architecture/ADRs/` for architectural decisions
 4. **Set up POS Integration** - See `CLOVER-SETUP.md` for Clover integration
 5. **Build a Frontend** - Connect a React/Vue app to the REST API
 
 ## Additional Resources
 
 - [Main README](./README.md) - Project overview and quick start
-- [Architecture Documentation](./docs/architecture/README.md) - System design
-- [Clover Setup Guide](./docs/CLOVER-SETUP.md) - Clover POS integration
-- [ADR-004: Bun + SQLite Appliance](./docs/architecture/ADRs/ADR-004-bun-sqlite-appliance.md)
-- [ADR-005: Envelope Encryption](./docs/architecture/ADRs/ADR-005-envelope-encryption.md)
-- [ADR-006: Ed25519 Code Signing](./docs/architecture/ADRs/ADR-006-ed25519-code-signing.md)
+- [Architecture Documentation](../docs/architecture/README.md) - System design
+- [Clover Setup Guide](./CLOVER-SETUP.md) - Clover POS integration
+- [ADR-004: Bun + SQLite Appliance](../docs/architecture/ADRs/ADR-004-bun-sqlite-appliance.md)
+- [ADR-005: Envelope Encryption](../docs/architecture/ADRs/ADR-005-envelope-encryption.md)
+- [ADR-006: Ed25519 Code Signing](../docs/architecture/ADRs/ADR-006-ed25519-code-signing.md)
 
 ## Support
 
 - **GitHub Issues**: Report bugs or request features
-- **Email**: dev@kizo.app
+- **Email**: dev@kizo.example
 - **Documentation**: `docs/architecture/`
 
 ---

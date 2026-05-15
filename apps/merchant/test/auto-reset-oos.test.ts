@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Auto-reset OOS service tests
  *
  * Covers:

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * E2E test server — starts the Kizo appliance on port 3099 with a
  * fresh SQLite database. Invoked by Playwright's webServer config.
  *

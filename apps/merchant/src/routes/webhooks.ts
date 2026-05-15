@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Webhook routes
  * Handles incoming webhooks from payment processors (Stax/Fattmerchant)
  * and generic POS webhook integrations.
@@ -32,7 +32,7 @@ const webhooks = new Hono<{ Variables: Variables }>()
  * (backward-compatible open mode).
  */
 webhooks.post('/webhooks/generic/:merchantId', async (c) => {
-  const merchantId = c.req.param('merchantId')
+  const merchantId = c.req.param('merchantId')!
 
   try {
     const db = getDatabase()
@@ -132,7 +132,7 @@ webhooks.post('/webhooks/generic/:merchantId', async (c) => {
  * STAX_WEBHOOK_SECRET env var and the stax-signature header.
  */
 webhooks.post('/webhooks/stax/:merchantId', async (c) => {
-  const merchantId = c.req.param('merchantId')
+  const merchantId = c.req.param('merchantId')!
 
   try {
     const body = await c.req.json()
@@ -195,7 +195,7 @@ webhooks.get(
   '/api/merchants/:id/payment-notifications',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const events = db
@@ -228,8 +228,8 @@ webhooks.patch(
   '/api/merchants/:id/payment-notifications/:eventId/dismiss',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const eventId = c.req.param('eventId')
+    const merchantId = c.req.param('id')!
+    const eventId = c.req.param('eventId')!
     const db = getDatabase()
 
     db.run(
@@ -257,7 +257,7 @@ webhooks.patch(
  * Relevant events: PAYMENT_UPDATE (state → 'paid'), ORDER_UPDATE
  */
 webhooks.post('/api/merchants/:id/webhooks/clover', async (c) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   try {
     const rawBody = await c.req.text()
     if (rawBody.length > 65_536) {

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Customer email notification service
  *
  * Sends two types of transactional emails to customers:
@@ -450,6 +450,45 @@ interface ReadyOpts {
   items: OrderItem[]
   isDelivery: boolean
 }
+
+// ---------------------------------------------------------------------------
+// sendEmail — generic alert via appliance merchant SMTP config
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a plain-text email using the appliance merchant's configured SMTP.
+ * Used for operational alerts (e.g. forwarded from marketing-engine).
+ * Logs a warning and returns silently when no SMTP config is present.
+ */
+export async function sendEmail({ to, subject, text }: { to: string; subject: string; text: string }): Promise<void> {
+  const db = getDatabase()
+  const merchantRow = db
+    .query<{ id: string; receipt_email_from: string | null; smtp_provider: string | null }, []>(
+      `SELECT id, receipt_email_from, smtp_provider
+       FROM merchants WHERE status='active' ORDER BY created_at ASC LIMIT 1`
+    )
+    .get()
+
+  if (!merchantRow?.receipt_email_from) {
+    console.warn('[email] sendEmail: no SMTP config — alert not sent:', subject)
+    return
+  }
+
+  const fromAddress  = merchantRow.receipt_email_from
+  const smtpProvider = merchantRow.smtp_provider ?? 'gmail'
+  const transporter  = await resolveTransporter(merchantRow.id, fromAddress, smtpProvider)
+  if (!transporter) {
+    console.warn('[email] sendEmail: no SMTP credentials — alert not sent:', subject)
+    return
+  }
+
+  await transporter.sendMail({ from: fromAddress, to, subject, text })
+  console.log(`[email] Alert sent to ${to}: ${subject}`)
+}
+
+// ---------------------------------------------------------------------------
+// HTML template — order ready
+// ---------------------------------------------------------------------------
 
 function buildReadyHtml(opts: ReadyOpts): string {
   const { businessName, address, phone, order, items, isDelivery } = opts

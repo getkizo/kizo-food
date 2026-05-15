@@ -1,4 +1,4 @@
-/**
+﻿/**
  * POS Adapter types and interfaces
  * Defines the contract for integrating with merchant POS systems
  */

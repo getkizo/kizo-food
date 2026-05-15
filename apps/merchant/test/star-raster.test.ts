@@ -1,4 +1,4 @@
-/**
+﻿/**
  * star-raster markup builder tests
  *
  * Tests the pure markup-generating functions exported from star-raster.ts.
@@ -321,5 +321,68 @@ describe('buildTestPageMarkup', () => {
     expect(markup.length).toBeGreaterThan(20)
     expect(markup).toContain('192.168.1.100')
     expect(markup.toUpperCase()).toContain('KITCHEN')
+  })
+})
+
+// ── Edge cases ────────────────────────────────────────────────────────────────
+
+describe('Edge cases — long names, special chars, zero price', () => {
+  test('item with priceCents = 0 renders "$0.00" in bill markup', () => {
+    const opts: CustomerBillOptions = {
+      orderId:      BASE_ORDER_ID,
+      orderType:    'dine_in',
+      items:        [{ dishName: 'Complimentary Bread', quantity: 1, priceCents: 0, modifiers: [], lineTotalCents: 0 }],
+      subtotalCents: 0,
+      taxCents:      0,
+      tipOptions:    [18, 20, 22, 25],
+    }
+    const markup = buildCustomerBillMarkup(opts)
+    expect(markup.length).toBeGreaterThan(0)
+    expect(markup).toContain('0.00')
+  })
+
+  test('dish name longer than 30 chars does not crash kitchen ticket builder', () => {
+    const longName = 'A'.repeat(50) + ' Special Dish With Extra Long Name'
+    const opts: KitchenTicketOptions = {
+      orderId:   BASE_ORDER_ID,
+      orderType: 'dine_in',
+      items:     [{ dishName: longName, quantity: 1, priceCents: 1000, modifiers: [], lineTotalCents: 1000 }],
+    }
+    expect(() => buildKitchenTicketMarkup(opts)).not.toThrow()
+    const markup = buildKitchenTicketMarkup(opts)
+    expect(markup.length).toBeGreaterThan(0)
+  })
+
+  test('modifier with receiptline special chars {|}  is escaped in kitchen markup', () => {
+    const opts: KitchenTicketOptions = {
+      orderId:   BASE_ORDER_ID,
+      orderType: 'dine_in',
+      items:     [{
+        dishName:  'Curry',
+        quantity:  1,
+        priceCents: 1200,
+        modifiers: [{ name: 'Sauce {spicy}|mild', priceCents: 0 }],
+        lineTotalCents: 1200,
+      }],
+    }
+    const markup = buildKitchenTicketMarkup(opts)
+    // The modifier content should appear escaped in the markup
+    // (receiptline property blocks like {align:center} are separate and unrelated)
+    expect(markup).toContain('\\{spicy\\}')
+    expect(markup).toContain('\\|mild')
+  })
+
+  test('multi-item bill contains all item names', () => {
+    const opts: CustomerBillOptions = {
+      orderId:      BASE_ORDER_ID,
+      orderType:    'dine_in',
+      items:        [ITEM_PAD_THAI, ITEM_SPRING_ROLL],
+      subtotalCents: 3400,
+      taxCents:      272,
+      tipOptions:    [18, 20, 22, 25],
+    }
+    const markup = buildCustomerBillMarkup(opts)
+    expect(markup).toContain('Pad Thai')
+    expect(markup).toContain('Spring Roll')
   })
 })

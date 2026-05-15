@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Terminal management route tests
  *
  * Tests GET/POST/PUT/DELETE /api/merchants/:id/terminals

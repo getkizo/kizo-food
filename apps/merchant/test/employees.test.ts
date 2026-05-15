@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Employee route tests
  *
  * Covers:
@@ -413,6 +413,49 @@ describe('POST clock-in and clock-out', () => {
   test('clock-in for non-existent employee returns 404', async () => {
     const res = await clockIn('emp_doesnotexist')
     expect(res.status).toBe(404)
+  })
+})
+
+// ── Stale shift auto-close ────────────────────────────────────────────────────
+
+describe('clock-in — stale shift from previous day is auto-closed', () => {
+  let staleEmpId = ''
+
+  beforeAll(async () => {
+    const res = await createEmployee({ nickname: 'StaleWorker', accessCode: '0003', role: 'server' })
+    const body = await res.json() as { id: string }
+    staleEmpId = body.id
+  })
+
+  test('clock-in when open shift exists from yesterday auto-closes it and opens new shift', async () => {
+    const db = getDatabase()
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yesterdayStr = yesterday.toISOString().slice(0, 10)
+
+    // Seed a stale open shift from yesterday directly in DB
+    const staleShiftId = `ts_stale_${Math.random().toString(36).slice(2, 10)}`
+    db.run(
+      `INSERT INTO timesheets (id, employee_id, merchant_id, clock_in, date, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))`,
+      [staleShiftId, staleEmpId, merchantId, yesterday.toISOString(), yesterdayStr]
+    )
+
+    // Clock-in today — should auto-close the stale shift and create a new one
+    const res = await clockIn(staleEmpId)
+    expect(res.status).toBe(201)
+    const body = await res.json() as { shiftId: string; clockIn: string }
+    expect(body.shiftId).toMatch(/^ts_/)
+    expect(body.shiftId).not.toBe(staleShiftId)
+
+    // Stale shift should now have a clock_out (auto_clocked_out = 1)
+    const stale = db
+      .query<{ clock_out: string | null; auto_clocked_out: number }, [string]>(
+        'SELECT clock_out, auto_clocked_out FROM timesheets WHERE id = ?'
+      )
+      .get(staleShiftId)
+    expect(stale?.clock_out).not.toBeNull()
+    expect(stale?.auto_clocked_out).toBe(1)
   })
 })
 

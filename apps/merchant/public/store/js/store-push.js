@@ -1,12 +1,19 @@
-/**
- * store-push.js — Customer push subscription + iOS install prompt + polling fallback
+﻿/**
+ * store-push.js v10 — Customer push subscription + iOS install prompt + polling fallback
+ *
+ * On first cart add (iOS non-standalone):
+ *   show "Add to Home Screen" banner so the customer can enable notifications
+ *   before they reach checkout.
  *
  * On confirmation:
- *   1. iOS non-standalone: show "Add to Home Screen" install banner (once per session)
+ *   1. iOS non-standalone: show banner again if not yet shown this session
  *   2. Capable browsers: attempt push subscription, POST to /api/store/push/subscribe
  *   3. Fallback (iOS/unsupported): poll /api/store/orders/:id/status every 15s
  *
- * Exposes: window.StorePush = { onConfirmed }
+ * After order feedback submit (dine-in QR scan path):
+ *   showIOSBanner() — unconditional, bypasses session guard.
+ *
+ * Exposes: window.StorePush = { onConfirmed, maybeShowIOSBanner, showIOSBanner }
  */
 
 ;(function () {
@@ -27,20 +34,21 @@
   // iOS install banner
   // ---------------------------------------------------------------------------
 
-  function maybeShowIOSBanner() {
+  function showIOSBanner() {
     if (!isIOS || isStandalone) return
-    if (sessionStorage.getItem('kizo_ios_prompted')) return
-
-    const banner    = document.getElementById('ios-install-banner')
+    const banner     = document.getElementById('ios-install-banner')
     const dismissBtn = document.getElementById('ios-banner-dismiss')
     if (!banner) return
-
     banner.hidden = false
     sessionStorage.setItem('kizo_ios_prompted', '1')
-
     if (dismissBtn) {
-      dismissBtn.addEventListener('click', () => { banner.hidden = true })
+      dismissBtn.addEventListener('click', () => { banner.hidden = true }, { once: true })
     }
+  }
+
+  function maybeShowIOSBanner() {
+    if (sessionStorage.getItem('kizo_ios_prompted')) return
+    showIOSBanner()
   }
 
   // ---------------------------------------------------------------------------
@@ -253,6 +261,8 @@
   window.StorePush = {
     onConfirmed,
     resumePolling,
+    maybeShowIOSBanner,
+    showIOSBanner,
   }
 
 })()

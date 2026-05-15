@@ -1,0 +1,64 @@
+# ── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+
+# ── Environment — NEVER commit secrets ───────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+# .env.example is intentionally committed (no real secrets)
+
+# ── Runtime data ─────────────────────────────────────────────────────────────
+data/
+captures/
+
+# ── Databases ─────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Test artifacts ────────────────────────────────────────────────────────────
+test-results/
+playwright-report/
+e2e/.cache/
+e2e/test.db
+coverage/
+.nyc_output/
+
+# ── OS / editor junk ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Secrets / certificates ────────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+*.p8
+
+# ── Merchant-uploaded images (populated at runtime) ───────────────────────────
+public/images/merchants/
+
+# ── Tool config (machine-local) ───────────────────────────────────────────────
+.puffin/
+.claude/settings.local.json
+
+# ── Bun ───────────────────────────────────────────────────────────────────────
+# bun.lock is committed so contributors get reproducible installs
+# (remove this line if you prefer not to lock)

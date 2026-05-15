@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Auto-cancel stale online store orders
  *
  * ⚠️  DISABLED — This service is no longer started in server.ts.

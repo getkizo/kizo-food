@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Authentication tests
  * Tests JWT utilities, middleware, and auth routes
  */
@@ -516,5 +516,35 @@ describe('Login rate limiting', () => {
       body:    JSON.stringify({ email: freshEmail, password: 'WrongPassword' }),
     }))
     expect(afterSuccessRes.status).toBe(401) // not 429
+  })
+})
+
+// ── Security negative cases ───────────────────────────────────────────────────
+
+describe('Login — SQL injection and security edge cases', () => {
+  test('email with SQL injection characters is handled safely (parameterized query)', async () => {
+    // Should not throw or crash — just return 401 (wrong credentials)
+    const res = await app.fetch(new Request('http://localhost:3000/api/auth/login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        email:    "' OR '1'='1'; --",
+        password: 'anything',
+      }),
+    }))
+    // Result is 400 (invalid email format) or 401 (not found) — never 200
+    expect([400, 401]).toContain(res.status)
+  })
+
+  test('password with SQL-like chars does not bypass authentication', async () => {
+    const res = await app.fetch(new Request('http://localhost:3000/api/auth/login', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        email:    'owner@authmw.test',
+        password: "' OR '1'='1",
+      }),
+    }))
+    expect(res.status).toBe(401)
   })
 })

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * HTML receipt renderer
  *
  * Renders receipt HTML via Puppeteer headless Chrome, converts the screenshot
@@ -19,20 +19,17 @@ import puppeteer from 'puppeteer-core'
 import type { Browser } from 'puppeteer-core'
 import sharp from 'sharp'
 import receiptline from 'receiptline'
+import qrcode from 'qrcode'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { logger } from '../utils/logger'
+import { sortItemsByCourse, kitchenItems } from '../utils/course-items'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 /** 80mm paper at 203 DPI ≈ 576 printable pixels */
 const PAPER_WIDTH_PX = 576
 
-/**
- * Luminance threshold for 1-bit conversion: pixel < THRESHOLD → black dot.
- * 200 (vs the naive 128) catches grey anti-aliased font edges that would
- * otherwise print as white (invisible) on thermal paper.
- */
-const THRESHOLD = 200
 
 // ─── Logo ────────────────────────────────────────────────────────────────────
 
@@ -57,7 +54,7 @@ function loadFontB64(filename: string): string {
     const buf = readFileSync(join(import.meta.dir, '../assets/printers/fonts', filename))
     return buf.toString('base64')
   } catch {
-    console.warn(`[html-receipt] Font file not found: ${filename} — falling back to Helvetica/Arial`)
+    logger.warn('[html-receipt]', 'Font file not found — falling back to Helvetica/Arial', { filename })
     return ''
   }
 }
@@ -170,10 +167,12 @@ async function renderToImage(
     // Without this, offsetHeight is measured with fallback font metrics (Helvetica),
     // producing a taller measurement than the final DM Sans layout → whitespace.
     const height = await page.evaluate(async () => {
-      await document.fonts.ready
-      return (document.querySelector('#receipt') as HTMLElement).offsetHeight
+      // runs in browser context — globalThis.document is window.document
+      const doc = (globalThis as any).document
+      await doc.fonts.ready
+      return (doc.querySelector('#receipt') as any).offsetHeight
     })
-    console.log(`[html-receipt] 1. offsetHeight = ${height}px`)
+    logger.debug('[html-receipt]', 'Step 1: offsetHeight measured', { heightPx: height })
     await page.setViewport({ width: PAPER_WIDTH_PX, height, deviceScaleFactor: SCALE })
     // clip is in CSS pixels; screenshot output will be PAPER_WIDTH_PX*SCALE × height*SCALE
     const rawPng = (await page.screenshot({
@@ -182,63 +181,20 @@ async function renderToImage(
       omitBackground: false,
     })) as Buffer
     const rawMeta = await sharp(rawPng).metadata()
-    console.log(`[html-receipt] 2. screenshot = ${rawMeta.width}×${rawMeta.height}px`)
+    logger.debug('[html-receipt]', 'Step 2: screenshot captured', { width: rawMeta.width, height: rawMeta.height })
     // Downscale back to printer width — Lanczos3 preserves contrast at edges
     const png = await sharp(rawPng)
       .resize(PAPER_WIDTH_PX, null, { kernel: sharp.kernel.lanczos3 })
       .png()
       .toBuffer()
     const finalMeta = await sharp(png).metadata()
-    console.log(`[html-receipt] 3. final bitmap = ${finalMeta.width}×${finalMeta.height}px → ${height} raster rows`)
+    logger.debug('[html-receipt]', 'Step 3: bitmap downscaled', { width: finalMeta.width, height: finalMeta.height, rasterRows: height })
     return { png, width: PAPER_WIDTH_PX, height }
   } finally {
     await page.close()
   }
 }
 
-async function toMonochrome(pngBuffer: Buffer): Promise<{
-  data: Buffer
-  width: number
-  height: number
-  bytesPerRow: number
-}> {
-  const { data, info } = await sharp(pngBuffer)
-    .greyscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true })
-  const { width, height } = info
-  const bytesPerRow = Math.ceil(width / 8)
-  const mono = Buffer.alloc(bytesPerRow * height)
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const gray = data[y * width + x]
-      if (gray < THRESHOLD) {
-        const byteIndex = y * bytesPerRow + Math.floor(x / 8)
-        const bitIndex = 7 - (x % 8)
-        mono[byteIndex] |= 1 << bitIndex
-      }
-    }
-  }
-  return { data: mono, width, height, bytesPerRow }
-}
-
-function toStarGraphicCommands(monoData: {
-  data: Buffer
-  height: number
-  bytesPerRow: number
-}): Buffer {
-  const { data, height, bytesPerRow } = monoData
-  const parts: Buffer[] = [Buffer.from([0x1b, 0x2a, 0x72, 0x41])] // ESC * r A
-  for (let y = 0; y < height; y++) {
-    const line = data.slice(y * bytesPerRow, (y + 1) * bytesPerRow)
-    parts.push(Buffer.from([0x62, bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff]))
-    parts.push(line)
-  }
-  parts.push(Buffer.from([0x1b, 0x2a, 0x72, 0x42])) // ESC * r B  (exit raster)
-  // No explicit cut — TSP143 III auto-cuts on Star Graphic mode exit.
-  // ESC RS i (Star Line cut) is rejected by TSP143 III (no font ROM) and kills the print job.
-  return Buffer.concat(parts)
-}
 
 /** Options for the receiptline Star Graphic encode step (PNG → raster bytes). */
 const STAR_GRAPHIC_OPTIONS = {
@@ -259,12 +215,13 @@ const STAR_GRAPHIC_OPTIONS = {
  * to hold the paper.
  */
 export async function renderHtmlToRasterBuffer(html: string): Promise<Buffer> {
-  console.log('[html-receipt] Rendering HTML receipt via Puppeteer...')
+  logger.debug('[html-receipt]', 'Rendering HTML receipt via Puppeteer')
   const { png } = await renderToImage(html)
   const base64 = png.toString('base64')
-  const result = receiptline.transform(`{i:${base64}}\n\n\n\n{cut}`, STAR_GRAPHIC_OPTIONS)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = receiptline.transform(`{i:${base64}}\n\n\n\n{cut}`, STAR_GRAPHIC_OPTIONS as any)
   const buf = Buffer.from(result, 'latin1')
-  console.log(`[html-receipt] Rendered: ${buf.length} raster bytes`)
+  logger.debug('[html-receipt]', 'Rendered', { bytes: buf.length })
   return buf
 }
 
@@ -298,6 +255,9 @@ interface BaseHtmlOpts {
   address?: string | null
   phoneNumber?: string | null
   website?: string | null
+  showGlutenFreeBanner?: boolean
+  scheduledFor?: string | null
+  timezone?: string | null
 }
 
 export interface CounterHtmlOpts extends BaseHtmlOpts {
@@ -319,6 +279,8 @@ export interface BillHtmlOpts extends BaseHtmlOpts {
   serviceChargeCents?: number
   serviceChargeLabel?: string | null
   tipPercentages?: number[]
+  /** Full URL for the bill QR code feedback link. */
+  feedbackUrl?: string | null
 }
 
 export interface ReceiptHtmlOpts extends BaseHtmlOpts {
@@ -334,6 +296,11 @@ export interface ReceiptHtmlOpts extends BaseHtmlOpts {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Strip parenthetical annotations like "(Vegetarian)" from printed labels. */
+function stripParens(s: string): string {
+  return s.replace(/\s*\([^)]*\)/g, '').trim()
+}
 
 function esc(s: string | null | undefined): string {
   return (s ?? '')
@@ -355,8 +322,10 @@ function parseDate(iso?: string | null): Date {
   return new Date(iso)
 }
 
-function fmtTime(iso?: string | null): string {
-  return parseDate(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+function fmtTime(iso?: string | null, timezone?: string | null): string {
+  const fmt: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
+  if (timezone) fmt.timeZone = timezone
+  return parseDate(iso).toLocaleTimeString('en-US', fmt)
 }
 
 function fmtDate(iso?: string | null): string {
@@ -553,7 +522,7 @@ ${dmSansFontFaces()}
     display: inline-block;
     background: #000;
     color: #fff;
-    font-size: 20px;
+    font-size: 30px;
     font-weight: 700;
     padding: 4px 14px;
     border-radius: 4px;
@@ -575,9 +544,11 @@ export function buildKitchenTicketHtml(opts: BaseHtmlOpts): string {
   if (opts.roomLabel)  locationParts.push(esc(opts.roomLabel))
   if (opts.tableLabel) locationParts.push(`Table ${esc(opts.tableLabel)}`)
 
-  const itemsHtml = opts.items.map(item => {
+  // Sort by course (appetizers → mains → desserts), strip counter-only items
+  const sortedItems = sortItemsByCourse(kitchenItems(opts.items))
+  const itemsHtml = sortedItems.map(item => {
     const mods = (item.modifiers ?? []).map(m =>
-      `<div class="kitchen-mod">${esc(m.name)}</div>`
+      `<div class="kitchen-mod">${esc(stripParens(m.name))}</div>`
     ).join('')
     const instrHtml = item.specialInstructions
       ? `<div class="kitchen-mod" style="background:#555;font-style:italic">&gt;&gt; ${esc(item.specialInstructions)}</div>`
@@ -586,7 +557,7 @@ export function buildKitchenTicketHtml(opts: BaseHtmlOpts): string {
       ? `<div class="kitchen-mod" style="background:#555;font-style:italic">* ${esc(item.serverNotes)}</div>`
       : ''
     return `
-      <div class="kitchen-item">${item.quantity}× ${esc(item.dishName)}</div>
+      <div class="kitchen-item">${item.quantity}× ${esc(stripParens(item.dishName))}</div>
       ${mods}
       ${instrHtml}
       ${serverNoteHtml}
@@ -598,8 +569,15 @@ export function buildKitchenTicketHtml(opts: BaseHtmlOpts): string {
        <div style="font-size:18px;font-weight:700;padding:4px 0">NOTE: ${esc(opts.notes)}</div>`
     : ''
 
+  const gfBannerHtml = opts.showGlutenFreeBanner
+    ? `<div style="border:3px solid #000;text-align:center;padding:8px 0;margin-bottom:10px">
+         <div style="font-size:26px;font-weight:900;letter-spacing:2px">GLUTEN FREE</div>
+       </div>`
+    : ''
+
   return `<!DOCTYPE html><html><head><style>${BASE_CSS}</style></head><body>
   <div id="receipt">
+    ${gfBannerHtml}
     <div class="kitchen-header">
       <div class="kitchen-type">${typeLabel}</div>
       ${locationParts.length > 0
@@ -613,6 +591,11 @@ export function buildKitchenTicketHtml(opts: BaseHtmlOpts): string {
     ${opts.customerName && opts.orderType !== 'dine_in'
       ? `<div class="center bold" style="font-size:18px;margin:6px 0">${esc(opts.customerName)}</div>`
       : ''}
+    ${opts.scheduledFor ? `
+    <div style="background:#1a1a2e;color:#fff;text-align:center;padding:8px 6px;margin:8px 0">
+      <div style="font-size:14px;letter-spacing:2px;text-transform:uppercase;font-weight:700">Scheduled Order</div>
+      <div style="font-size:22px;font-weight:900">Ready at ${fmtTime(opts.scheduledFor, opts.timezone)}</div>
+    </div>` : ''}
     <div class="divider"></div>
     ${itemsHtml}
     ${notesHtml}
@@ -639,12 +622,9 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
 
     const itemsHtml = opts.items.map(item => {
       const lineTotal = item.lineTotalCents ?? item.priceCents * item.quantity
-      const mods = (item.modifiers ?? []).map(m => {
-        if (m.priceCents !== 0) {
-          const sign = m.priceCents > 0 ? '+' : '-'
-          return `<div class="item-mods">${esc(m.name)} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
-        }
-        return `<div class="item-mods">${esc(m.name)}</div>`
+      const mods = (item.modifiers ?? []).filter(m => m.priceCents !== 0).map(m => {
+        const sign = m.priceCents > 0 ? '+' : '-'
+        return `<div class="item-mods">${esc(stripParens(m.name))} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
       }).join('')
       const labelHtml = item.dishLabel
         ? `<div class="item-mods" style="font-weight:700">${esc(item.dishLabel)}</div>`
@@ -657,7 +637,7 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
         : ''
       return `
         <div class="row" style="font-weight:600">
-          <span>${item.quantity}× ${esc(item.dishName)}</span>
+          <span>${item.quantity}× ${esc(stripParens(item.dishName))}</span>
           <span>${fmtCents(lineTotal)}</span>
         </div>
         ${mods}
@@ -680,6 +660,7 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
         <div class="row-sm center muted">#${shortId(opts.orderId)} · ${fmtTime(opts.createdAt)} · ${fmtDate(opts.createdAt)}</div>
         ${opts.customerName ? `<div class="banner-name" style="font-size:22px">${esc(opts.customerName)}</div>` : ''}
         ${opts.pickupCode ? `<div class="banner-name" style="font-size:28px;letter-spacing:4px">CODE: ${esc(opts.pickupCode)}</div>` : ''}
+        ${opts.scheduledFor ? `<div class="banner-name" style="font-size:18px;background:#e85d04;padding:4px 0">&#x23F0; Ready at ${fmtTime(opts.scheduledFor, opts.timezone)}</div>` : ''}
       </div>
       <div style="padding:16px 0 28px">
         ${itemsHtml}
@@ -712,7 +693,7 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
 
   const itemsHtml = opts.items.map(item => {
     const mods = (item.modifiers ?? []).map(m =>
-      `<div class="kitchen-mod">${esc(m.name)}</div>`
+      `<div class="kitchen-mod">${esc(stripParens(m.name))}</div>`
     ).join('')
     const labelHtml = item.dishLabel
       ? `<div class="kitchen-mod" style="background:#fff;color:#000;font-weight:700">${esc(item.dishLabel)}</div>`
@@ -724,7 +705,7 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
       ? `<div class="kitchen-mod" style="background:#fff;color:#000;font-style:italic">* ${esc(item.serverNotes)}</div>`
       : ''
     return `
-      <div class="kitchen-item">${item.quantity}× ${esc(item.dishName)}</div>
+      <div class="kitchen-item">${item.quantity}× ${esc(stripParens(item.dishName))}</div>
       ${mods}
       ${labelHtml}
       ${instrHtml}
@@ -732,7 +713,7 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
     `
   }).join('')
 
-  return `<!DOCTYPE html><html><head><style>${BASE_CSS}</style></head><body>
+  return `<!DOCTYPE html><html><head><style>${BASE_CSS}${COUNTER_FONT_CSS}</style></head><body>
   <div id="receipt">
     <div class="kitchen-header">
       <div class="kitchen-type">${typeLabel}</div>
@@ -745,18 +726,23 @@ export function buildCounterTicketHtml(opts: CounterHtmlOpts): string {
       <span>${fmtTime(opts.createdAt)}</span>
     </div>
     ${opts.customerName
-      ? `<div class="center bold" style="font-size:28px;margin:6px 0">${esc(opts.customerName)}</div>`
+      ? `<div class="center bold" style="font-size:36px;margin:6px 0">${esc(opts.customerName)}</div>`
       : ''}
     ${opts.pickupCode
-      ? `<div class="center bold" style="font-size:32px;letter-spacing:4px;margin:4px 0">CODE: ${esc(opts.pickupCode)}</div>`
+      ? `<div class="center bold" style="font-size:42px;letter-spacing:4px;margin:4px 0">CODE: ${esc(opts.pickupCode)}</div>`
       : ''}
+    ${opts.scheduledFor ? `
+    <div style="background:#1a1a2e;color:#fff;text-align:center;padding:10px 6px;margin:8px 0">
+      <div style="font-size:14px;letter-spacing:2px;text-transform:uppercase;font-weight:700">Scheduled Order</div>
+      <div style="font-size:32px;font-weight:900">Ready at ${fmtTime(opts.scheduledFor, opts.timezone)}</div>
+    </div>` : ''}
     <div class="divider"></div>
     ${itemsHtml}
     <div class="divider" style="margin-top:16px"></div>
-    ${opts.notes ? `<div style="font-size:16px;font-weight:700;padding:4px 0">NOTE: ${esc(opts.notes)}</div>` : ''}
-    ${opts.utensilsNeeded ? `<div style="font-size:16px;font-weight:700;padding:4px 0">✓ UTENSILS REQUESTED</div>` : ''}
+    ${opts.notes ? `<div style="font-size:21px;font-weight:700;padding:4px 0">NOTE: ${esc(opts.notes)}</div>` : ''}
+    ${opts.utensilsNeeded ? `<div style="font-size:21px;font-weight:700;padding:4px 0">✓ UTENSILS REQUESTED</div>` : ''}
     ${(opts.notes || opts.utensilsNeeded) ? `<div class="divider"></div>` : ''}
-    <div class="center muted" style="font-size:14px">${fmtDate(opts.createdAt)} ${fmtTime(opts.createdAt)}</div>
+    <div class="center muted" style="font-size:18px">${fmtDate(opts.createdAt)} ${fmtTime(opts.createdAt)}</div>
   </div>
   </body></html>`
 }
@@ -778,10 +764,23 @@ const BILL_FONT_CSS = `
   .footer-thanks    { font-size: 23px; }
 `
 
+/** Counter copy font overrides — all kitchen/counter sizes 30% larger than BASE_CSS defaults. */
+const COUNTER_FONT_CSS = `
+  .kitchen-type  { font-size: 55px; }
+  .kitchen-table { font-size: 73px; }
+  .kitchen-item  { font-size: 36px; }
+  .kitchen-mod   { font-size: 39px; }
+  .row-sm        { font-size: 18px; }
+`
+
 /**
  * Customer bill (pre-payment) with suggested gratuity table and write-in lines.
  */
-export function buildCustomerBillHtml(opts: BillHtmlOpts): string {
+export async function buildCustomerBillHtml(opts: BillHtmlOpts): Promise<string> {
+  const feedbackQrDataUri = opts.feedbackUrl
+    ? await qrcode.toDataURL(opts.feedbackUrl, { margin: 1, width: 120 }).catch(() => null)
+    : null
+
   const tipPcts = opts.tipPercentages ?? [15, 20, 25]
   const discountCents = opts.discountCents ?? 0
   const serviceChargeCents = opts.serviceChargeCents ?? 0
@@ -796,12 +795,9 @@ export function buildCustomerBillHtml(opts: BillHtmlOpts): string {
 
   const itemsHtml = opts.items.map(item => {
     const lineTotal = item.lineTotalCents ?? item.priceCents * item.quantity
-    const mods = (item.modifiers ?? []).map(m => {
-      if (m.priceCents !== 0) {
-        const sign = m.priceCents > 0 ? '+' : '-'
-        return `<div class="item-mods">${esc(m.name)} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
-      }
-      return `<div class="item-mods">${esc(m.name)}</div>`
+    const mods = (item.modifiers ?? []).filter(m => m.priceCents !== 0).map(m => {
+      const sign = m.priceCents > 0 ? '+' : '-'
+      return `<div class="item-mods">${esc(m.name)} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
     }).join('')
     return `
       <div class="row">
@@ -813,7 +809,7 @@ export function buildCustomerBillHtml(opts: BillHtmlOpts): string {
   }).join('')
 
   const tipsHtml = tipPcts.map(pct => {
-    const amt = opts.subtotalCents * pct / 100
+    const amt = totalCents * pct / 100
     return `
       <div class="gratuity-option">
         <div class="gratuity-pct">${pct}%</div>
@@ -861,6 +857,11 @@ export function buildCustomerBillHtml(opts: BillHtmlOpts): string {
       <span class="write-line-label big">Total:</span>
       <span class="write-line-rule bold-rule"></span>
     </div>` : ''}
+    ${feedbackQrDataUri ? `
+    <div style="text-align:center;margin:14px 0 8px;padding-top:10px;border-top:1px solid #ddd">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px">Your feedback matters to us!</div>
+      <img src="${feedbackQrDataUri}" width="120" height="120" alt="Feedback QR" style="display:block;margin:0 auto"/>
+    </div>` : ''}
     <div class="footer">
       ${opts.website ? esc(opts.website) : ''}
       <div class="footer-thanks">Thank you for dining with us!</div>
@@ -882,12 +883,9 @@ export function buildCustomerReceiptHtml(opts: ReceiptHtmlOpts): string {
 
   const itemsHtml = opts.items.map(item => {
     const lineTotal = item.lineTotalCents ?? item.priceCents * item.quantity
-    const mods = (item.modifiers ?? []).map(m => {
-      if (m.priceCents !== 0) {
-        const sign = m.priceCents > 0 ? '+' : '-'
-        return `<div class="item-mods">${esc(m.name)} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
-      }
-      return `<div class="item-mods">${esc(m.name)}</div>`
+    const mods = (item.modifiers ?? []).filter(m => m.priceCents !== 0).map(m => {
+      const sign = m.priceCents > 0 ? '+' : '-'
+      return `<div class="item-mods">${esc(m.name)} ${sign}${fmtCents(Math.abs(m.priceCents))}</div>`
     }).join('')
     return `
       <div class="row">

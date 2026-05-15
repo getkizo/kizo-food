@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Database seeding script for development
  * Creates sample merchants, menus, and dishes
  */

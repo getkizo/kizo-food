@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Gift Card PDF Generator
  *
  * Renders a gift card PDF using Puppeteer (shares the Chrome instance with

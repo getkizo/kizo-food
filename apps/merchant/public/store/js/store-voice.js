@@ -1,4 +1,4 @@
-/**
+﻿/**
  * store-voice.js — Voice ordering for the customer store
  *
  * Workflow (one dish at a time):

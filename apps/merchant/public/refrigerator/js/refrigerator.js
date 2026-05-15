@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Refrigerator Log — standalone tablet app
  *
  * All data stored in localStorage (no backend). Each tablet has its own
@@ -429,5 +429,10 @@
     document.addEventListener('DOMContentLoaded', init)
   } else {
     init()
+  }
+
+  // PWA service worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/refrigerator/sw.js', { scope: '/refrigerator' })
   }
 })()

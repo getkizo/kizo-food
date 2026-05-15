@@ -1,0 +1,293 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#6c63ff">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <link rel="manifest" href="/manager-app/manifest.json">
+  <link rel="apple-touch-icon" href="/store/icon/180">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>Manager</title>
+  <link rel="stylesheet" href="/manager-app/css/manager.css?v=2">
+</head>
+<body>
+
+  <!-- Loading state -->
+  <div id="mg-loading">
+    <div class="mg-spinner"></div>
+    <p>Loading&hellip;</p>
+  </div>
+
+  <!-- Unauthenticated state -->
+  <div id="mg-unauthenticated" hidden>
+    <div class="mg-auth-card">
+      <div class="mg-app-icon">
+        <!-- Grid/chart icon -->
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="3" y="3" width="11" height="11" rx="2" fill="white" fill-opacity="0.9"/>
+          <rect x="18" y="3" width="11" height="11" rx="2" fill="white" fill-opacity="0.9"/>
+          <rect x="3" y="18" width="11" height="11" rx="2" fill="white" fill-opacity="0.9"/>
+          <rect x="18" y="18" width="5" height="11" rx="2" fill="white" fill-opacity="0.9"/>
+          <rect x="24" y="22" width="5" height="7" rx="2" fill="white" fill-opacity="0.9"/>
+        </svg>
+      </div>
+      <h1 class="mg-auth-title">Manager App</h1>
+      <p class="mg-auth-sub">Sign in to continue</p>
+      <button id="mg-signin-btn" class="mg-google-btn" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Sign in with Google
+      </button>
+    </div>
+  </div>
+
+  <!-- Invite acceptance state -->
+  <div id="mg-accept" hidden>
+    <div class="mg-auth-card">
+      <div class="mg-app-icon" style="background: var(--mg-success);">
+        <!-- Checkmark icon -->
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M6 16l7 7 13-13" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1 class="mg-auth-title">You've been invited</h1>
+      <div class="mg-accept-info">
+        <div>
+          <p class="mg-accept-label">Restaurant</p>
+          <p id="mg-accept-merchant" class="mg-accept-value"></p>
+        </div>
+        <div style="margin-top: 0.75rem;">
+          <p class="mg-accept-label">Email</p>
+          <p id="mg-accept-email" class="mg-accept-value"></p>
+        </div>
+      </div>
+      <button id="mg-accept-btn" class="mg-google-btn" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+        </svg>
+        Sign in with Google to Accept
+      </button>
+    </div>
+  </div>
+
+  <!-- Authenticated app shell -->
+  <div id="mg-app" hidden>
+
+    <header class="mg-header">
+      <button id="mg-back-btn" class="mg-icon-btn" hidden aria-label="Go back" type="button">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <h1 id="mg-header-title" class="mg-header-title">Receipts</h1>
+      <button id="mg-menu-btn" class="mg-icon-btn" aria-label="Menu" type="button">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="12" cy="5" r="1.5" fill="currentColor"/>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+          <circle cx="12" cy="19" r="1.5" fill="currentColor"/>
+        </svg>
+      </button>
+    </header>
+
+    <main id="mg-main" class="mg-main">
+
+      <!-- Receipts screen -->
+      <section id="mg-screen-receipts" class="mg-screen">
+
+        <!-- Upload action bar -->
+        <div class="mg-upload-bar">
+          <span id="mg-pending-badge" class="mg-pending-badge" hidden>0</span>
+          <button id="mg-btn-camera" class="mg-btn mg-btn-primary" type="button">&#128247; Take Photo</button>
+          <button id="mg-btn-gallery" class="mg-btn mg-btn-secondary" type="button">&#128193; Choose File</button>
+        </div>
+        <input type="file" id="mg-input-camera" accept="image/*" capture="environment" multiple hidden>
+        <input type="file" id="mg-input-gallery" accept="image/*" multiple hidden>
+
+        <!-- Capture preview (shown when files are staged, hidden otherwise) -->
+        <div id="mg-capture-preview" class="mg-capture-preview" hidden>
+          <div class="mg-capture-bar">
+            <span id="mg-capture-count" class="mg-capture-count"></span>
+            <div class="mg-capture-btns">
+              <button id="mg-capture-discard" class="mg-btn mg-btn-secondary" type="button">Discard</button>
+              <button id="mg-capture-upload" class="mg-btn mg-btn-primary" type="button">Upload</button>
+            </div>
+          </div>
+          <div class="mg-capture-vendor-row">
+            <label for="mg-capture-vendor" class="mg-capture-vendor-label">Supplier</label>
+            <select id="mg-capture-vendor" class="mg-capture-vendor-select">
+              <option value="">&#8212; New supplier &#8212;</option>
+            </select>
+          </div>
+          <div id="mg-capture-thumbs" class="mg-capture-thumbs"></div>
+        </div>
+
+        <!-- Filter bar -->
+        <div id="mg-filter-bar" class="mg-filter-bar">
+          <input type="text" id="mg-filter-vendor" class="mg-filter-input"
+                 placeholder="Filter by vendor&hellip;" autocomplete="off">
+          <input type="date" id="mg-filter-date-from" class="mg-filter-input mg-filter-date"
+                 aria-label="From date">
+          <input type="date" id="mg-filter-date-to" class="mg-filter-input mg-filter-date"
+                 aria-label="To date">
+          <button id="mg-filter-clear" class="mg-btn mg-btn-sm mg-btn-ghost" type="button">Clear</button>
+        </div>
+
+        <!-- Receipt list -->
+        <div id="mg-receipt-list" class="mg-receipt-list">
+          <div class="mg-empty-state">
+            <p>No receipts yet.</p>
+            <p>Snap a photo or upload a file to get started.</p>
+          </div>
+        </div>
+
+        <!-- Pagination (hidden when all fits on one page) -->
+        <div id="mg-pagination" class="mg-pagination" hidden>
+          <button id="mg-page-prev" class="mg-btn mg-btn-secondary mg-btn-sm" type="button">&#8592; Prev</button>
+          <span id="mg-page-label" class="mg-page-label"></span>
+          <button id="mg-page-next" class="mg-btn mg-btn-secondary mg-btn-sm" type="button">Next &#8594;</button>
+        </div>
+
+      </section>
+
+      <!-- Reports screen -->
+      <section id="mg-screen-reports" class="mg-screen" hidden>
+        <div class="mg-report-grid">
+          <div class="mg-report-card" data-report="cogs-trend" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #eef2ff;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="#6c63ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">COGS Trend</p>
+            <p class="mg-report-desc">Cost of goods over time</p>
+          </div>
+          <div class="mg-report-card" data-report="price-changes" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #fef3c7;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <line x1="12" y1="1" x2="12" y2="23" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">Price Changes</p>
+            <p class="mg-report-desc">Ingredient price history</p>
+          </div>
+          <div class="mg-report-card" data-report="order-warnings" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #fef2f2;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <line x1="12" y1="9" x2="12" y2="13" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
+                <line x1="12" y1="17" x2="12.01" y2="17" stroke="#ef4444" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">Order Warnings</p>
+            <p class="mg-report-desc">Anomalies &amp; flags</p>
+          </div>
+          <div class="mg-report-card" data-report="vendor-spend" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #ecfdf5;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" stroke="#22c55e" stroke-width="2"/>
+                <line x1="8" y1="21" x2="16" y2="21" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+                <line x1="12" y1="17" x2="12" y2="21" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+                <path d="M6 10h.01M10 10h4M10 13h4" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">Vendor Spend</p>
+            <p class="mg-report-desc">Spend by supplier</p>
+          </div>
+          <div class="mg-report-card" data-report="sales" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #eff6ff;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <polyline points="3 17 8 12 13 15 21 7" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="16 7 21 7 21 12" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">Sales</p>
+            <p class="mg-report-desc">Revenue &amp; order summary</p>
+          </div>
+          <div class="mg-report-card" data-report="shifts" role="button" tabindex="0">
+            <div class="mg-report-icon" style="background: #fdf4ff;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" stroke="#a855f7" stroke-width="2"/>
+                <polyline points="12 6 12 12 16 14" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <p class="mg-report-title">Shifts &amp; Tips</p>
+            <p class="mg-report-desc">Staff hours &amp; tips</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Receipt detail screen -->
+      <section id="mg-screen-receipt-detail" class="mg-screen" hidden>
+      </section>
+
+      <!-- Report detail screen -->
+      <section id="mg-screen-report-detail" class="mg-screen" hidden>
+      </section>
+
+      <!-- POS Sync screen -->
+      <section id="mg-screen-sync" class="mg-screen" hidden>
+      </section>
+
+      <!-- Ingredient price lookup screen -->
+      <section id="mg-screen-ingredients" class="mg-screen" hidden>
+      </section>
+
+    </main>
+
+    <nav class="mg-bottom-nav" aria-label="Main navigation">
+      <button class="mg-nav-btn active" data-screen="receipts" type="button" aria-label="Receipts">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="16" y1="13" x2="8" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="16" y1="17" x2="8" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <polyline points="10 9 9 9 8 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Receipts</span>
+      </button>
+      <button class="mg-nav-btn" data-screen="reports" type="button" aria-label="Reports">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <line x1="18" y1="20" x2="18" y2="10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="12" y1="20" x2="12" y2="4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <line x1="6" y1="20" x2="6" y2="14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Reports</span>
+      </button>
+      <button class="mg-nav-btn" data-screen="sync" type="button" aria-label="POS Sync">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <polyline points="23 4 23 10 17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <polyline points="1 20 1 14 7 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>Sync</span>
+      </button>
+      <button class="mg-nav-btn" data-screen="ingredients" type="button" aria-label="Prices">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <line x1="7" y1="7" x2="7.01" y2="7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>Prices</span>
+      </button>
+    </nav>
+
+    <!-- Off-site banner -->
+    <div id="mg-offsite-banner" class="mg-offsite-banner" hidden>Not at restaurant &ndash; POS sync disabled</div>
+
+  </div><!-- /#mg-app -->
+
+  <script src="/manager-app/js/manager-receipts.js?v=3"></script>
+  <script src="/manager-app/js/manager-reports.js?v=2"></script>
+  <script src="/manager-app/js/manager-ingredients.js?v=2"></script>
+  <script src="/manager-app/js/manager.js?v=4"></script>
+</body>
+</html>

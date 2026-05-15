@@ -1,12 +1,17 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; worker-src 'self';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Fridge Log">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#6c63ff">
   <title>Refrigerator Log</title>
+  <link rel="manifest" href="/refrigerator/manifest.json">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <link rel="stylesheet" href="/refrigerator/css/refrigerator.css?v=1">
 </head>
 <body>
@@ -76,6 +81,6 @@
     </div>
   </div>
 
-  <script src="/refrigerator/js/refrigerator.js?v=1"></script>
+  <script src="/refrigerator/js/refrigerator.js?v=2"></script>
 </body>
 </html>

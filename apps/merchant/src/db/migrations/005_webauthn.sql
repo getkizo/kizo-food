@@ -1,4 +1,4 @@
--- Migration 005: WebAuthn credentials and challenges
+﻿-- Migration 005: WebAuthn credentials and challenges
 -- Enables passkey / fingerprint login for staff tablets
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (

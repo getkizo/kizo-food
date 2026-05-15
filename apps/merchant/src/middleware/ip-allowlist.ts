@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Merchant dashboard IP allowlist middleware
  *
  * Restricts access to staff-facing routes (/merchant, /api/auth/*, /api/merchants/*)
@@ -214,6 +214,13 @@ if (process.env.ALLOWED_MERCHANT_IPS) {
 
 /** True when IP restriction is active (at least one range is configured). */
 export const merchantIpRestrictionEnabled = allowedCidrs.length > 0
+
+/** Returns true when `ip` is permitted by the configured allowlist (or restriction is disabled). */
+export function isAllowedIp(ip: string): boolean {
+  if (!merchantIpRestrictionEnabled) return true
+  if (!ip || ip === 'unknown') return false
+  return allowedCidrs.some(cidr => matchesCidr(ip, cidr))
+}
 
 if (merchantIpRestrictionEnabled) {
   const v4 = allowedCidrs.filter(c => !isIPv6(c.split('/')[0]))

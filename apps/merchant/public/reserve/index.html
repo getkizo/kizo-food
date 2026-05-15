@@ -1,9 +1,17 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.googletagmanager.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://www.google-analytics.com https://analytics.google.com;">
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-B96JXQ2Z6Q"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-B96JXQ2Z6Q');
+  </script>
   <title>Reserve a Table</title>
   <link rel="stylesheet" href="/reserve/reserve.css">
 </head>
@@ -20,6 +28,17 @@
       <div class="rv-card rv-card--center">
         <svg class="rv-icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M7 8V5a2 2 0 014 0v3"/><path d="M13 8V5a2 2 0 014 0v3"/></svg>
         <p id="rv-disabled-msg">Online reservations are not available.</p>
+      </div>
+    </div>
+
+    <!-- Busy mode — walk-ins only -->
+    <div id="rv-busy" class="rv-center" hidden>
+      <div class="rv-card rv-card--center rv-card--busy">
+        <svg class="rv-icon-lg rv-icon-busy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+        <h2 class="rv-busy-heading" id="rv-busy-heading">Apologies, we do not accept same day reservations right now</h2>
+        <p class="rv-busy-subtext" id="rv-busy-subtext">Walk-ins are very welcome — come on in!</p>
+        <p class="rv-busy-until" id="rv-busy-until" hidden></p>
+        <p class="rv-busy-note">Online reservations will resume later today.</p>
       </div>
     </div>
 
@@ -42,23 +61,14 @@
         </div>
       </div>
 
-      <button type="button" class="rv-btn rv-btn--primary rv-btn--full" id="rv-date-next">
-        See Available Times →
-      </button>
-    </div>
-
-    <!-- Step 2: Time slot -->
-    <div id="rv-step-time" class="rv-step" hidden>
-      <button type="button" class="rv-back-btn" id="rv-back-to-date">← Back</button>
-      <h2 class="rv-heading rv-heading--sm" id="rv-time-heading">Available Times</h2>
-      <div id="rv-slots-loading" class="rv-center rv-center--sm">
-        <div class="rv-spinner rv-spinner--sm"></div>
-      </div>
-      <div id="rv-slots-empty" class="rv-helper rv-center rv-center--sm" hidden>
-        No times available for this date.
-      </div>
-      <div class="rv-slots-grid" id="rv-slots-grid" role="group" aria-label="Available time slots">
-        <!-- time chips rendered by JS -->
+      <!-- Inline time slots — appear immediately when a date chip is clicked -->
+      <div id="rv-slots-inline-wrap" class="rv-slots-inline-wrap" hidden>
+        <p class="rv-label rv-slots-inline-heading" id="rv-slots-inline-heading">Available Times</p>
+        <div id="rv-slots-inline-loading" class="rv-center rv-center--sm">
+          <div class="rv-spinner rv-spinner--sm"></div>
+        </div>
+        <p id="rv-slots-inline-empty" class="rv-helper" hidden></p>
+        <div class="rv-slots-grid" id="rv-slots-inline-grid" role="group" aria-label="Available time slots"></div>
       </div>
     </div>
 

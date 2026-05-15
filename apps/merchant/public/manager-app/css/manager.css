@@ -1,0 +1,2061 @@
+﻿/* ============================================================
+   Manager PWA — manager.css
+   Mobile-first styles for the Manager progressive web app.
+   ============================================================ */
+
+:root {
+  --mg-primary: #6c63ff;
+  --mg-primary-dk: #5a52e0;
+  --mg-bg: #f5f7fa;
+  --mg-surface: #ffffff;
+  --mg-text: #1a1a2e;
+  --mg-muted: #6b7280;
+  --mg-border: #e5e7eb;
+  --mg-error: #ef4444;
+  --mg-success: #22c55e;
+  --mg-warning: #f59e0b;
+  --mg-header-h: 56px;
+  --mg-nav-h: 64px;
+  --mg-radius: 12px;
+  --mg-radius-sm: 8px;
+  --mg-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* ------------------------------------------------------------
+   Reset
+   ------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------
+   Base
+   ------------------------------------------------------------ */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--mg-bg);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--mg-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ------------------------------------------------------------
+   Loading screen
+   ------------------------------------------------------------ */
+
+#mg-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: var(--mg-surface);
+  z-index: 100;
+}
+
+#mg-loading p {
+  color: var(--mg-muted);
+  font-size: 0.95rem;
+}
+
+/* Spinner */
+.mg-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--mg-border);
+  border-top-color: var(--mg-primary);
+  border-radius: 50%;
+  animation: mg-spin 0.7s linear infinite;
+}
+
+@keyframes mg-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Inline uploading spinner (small) */
+.mg-spinner-sm {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: mg-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+
+/* ------------------------------------------------------------
+   Auth screens (unauthenticated + accept)
+   ------------------------------------------------------------ */
+
+#mg-unauthenticated,
+#mg-accept {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: var(--mg-surface);
+  z-index: 90;
+}
+
+#mg-unauthenticated[hidden],
+#mg-accept[hidden] {
+  display: none !important;
+}
+
+.mg-auth-card {
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+}
+
+.mg-app-icon {
+  width: 64px;
+  height: 64px;
+  background: var(--mg-primary);
+  border-radius: var(--mg-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.25rem;
+}
+
+.mg-auth-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--mg-text);
+  margin-bottom: 0.4rem;
+}
+
+.mg-auth-sub {
+  color: var(--mg-muted);
+  font-size: 0.95rem;
+  margin-bottom: 2rem;
+}
+
+/* Google sign-in button */
+.mg-google-btn {
+  width: 100%;
+  height: 52px;
+  border: 1px solid var(--mg-border);
+  background: var(--mg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  border-radius: var(--mg-radius);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--mg-text);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-google-btn:hover {
+  background: #f9fafb;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+.mg-google-btn:active {
+  background: #f3f4f6;
+}
+
+/* Accept-invite info block */
+.mg-accept-info {
+  background: #f0eeff;
+  border-radius: var(--mg-radius-sm);
+  padding: 1rem 1.25rem;
+  margin: 1.25rem 0 1.75rem;
+  text-align: left;
+}
+
+.mg-accept-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mg-muted);
+  margin-bottom: 0.2rem;
+}
+
+.mg-accept-value {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--mg-text);
+}
+
+/* ------------------------------------------------------------
+   App shell
+   ------------------------------------------------------------ */
+
+#mg-app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#mg-app[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Header
+   ------------------------------------------------------------ */
+
+.mg-header {
+  height: var(--mg-header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  background: var(--mg-surface);
+  border-bottom: 1px solid var(--mg-border);
+  box-shadow: var(--mg-shadow);
+  z-index: 10;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.mg-header-title {
+  flex: 1;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--mg-text);
+}
+
+.mg-icon-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mg-text);
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.mg-icon-btn:hover {
+  background: var(--mg-bg);
+}
+
+.mg-icon-btn:active {
+  background: var(--mg-border);
+}
+
+.mg-icon-btn[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Main content area
+   ------------------------------------------------------------ */
+
+.mg-main {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(var(--mg-nav-h) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ------------------------------------------------------------
+   Screens
+   ------------------------------------------------------------ */
+
+.mg-screen {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.mg-screen[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Upload bar
+   ------------------------------------------------------------ */
+
+.mg-upload-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* ------------------------------------------------------------
+   Buttons
+   ------------------------------------------------------------ */
+
+.mg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.mg-btn:active {
+  transform: scale(0.97);
+}
+
+.mg-btn-primary {
+  background: var(--mg-primary);
+  color: #fff;
+}
+
+.mg-btn-primary:hover {
+  background: var(--mg-primary-dk);
+}
+
+.mg-btn-secondary {
+  background: var(--mg-surface);
+  color: var(--mg-text);
+  border: 1px solid var(--mg-border);
+}
+
+.mg-btn-secondary:hover {
+  background: var(--mg-bg);
+}
+
+/* ------------------------------------------------------------
+   Pending badge
+   ------------------------------------------------------------ */
+
+.mg-pending-badge {
+  background: var(--mg-warning);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mg-pending-badge[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Receipt list
+   ------------------------------------------------------------ */
+
+.mg-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Receipt card */
+.mg-receipt-card {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  padding: 1rem;
+  box-shadow: var(--mg-shadow);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.1s ease;
+}
+
+.mg-receipt-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.mg-receipt-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--mg-radius-sm);
+  object-fit: cover;
+  background: var(--mg-bg);
+  flex-shrink: 0;
+}
+
+.mg-receipt-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mg-receipt-vendor {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--mg-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mg-receipt-date {
+  font-size: 0.8rem;
+  color: var(--mg-muted);
+  margin-top: 0.15rem;
+}
+
+.mg-receipt-total {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--mg-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Status badges */
+.mg-receipt-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  margin-top: 0.25rem;
+}
+
+.mg-receipt-status--queued {
+  background: #f3f4f6;
+  color: var(--mg-muted);
+}
+
+.mg-receipt-status--uploading {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.mg-receipt-status--done {
+  background: #f0fdf4;
+  color: var(--mg-success);
+}
+
+.mg-receipt-status--error {
+  background: #fef2f2;
+  color: var(--mg-error);
+}
+
+/* Empty state */
+.mg-empty-state {
+  text-align: center;
+  color: var(--mg-muted);
+  padding: 3rem 1rem;
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+/* ------------------------------------------------------------
+   Reports grid
+   ------------------------------------------------------------ */
+
+.mg-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.mg-report-card {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  padding: 1.25rem;
+  box-shadow: var(--mg-shadow);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  user-select: none;
+}
+
+.mg-report-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.mg-report-card:active {
+  transform: translateY(0);
+}
+
+.mg-report-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--mg-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mg-report-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--mg-text);
+}
+
+.mg-report-desc {
+  font-size: 0.78rem;
+  color: var(--mg-muted);
+  line-height: 1.4;
+}
+
+/* ------------------------------------------------------------
+   Bottom navigation
+   ------------------------------------------------------------ */
+
+.mg-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--mg-nav-h);
+  background: var(--mg-surface);
+  border-top: 1px solid var(--mg-border);
+  display: flex;
+  align-items: stretch;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.mg-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--mg-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  transition: color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mg-nav-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.mg-nav-btn.active {
+  color: var(--mg-primary);
+}
+
+.mg-nav-btn:hover {
+  color: var(--mg-text);
+}
+
+.mg-nav-btn.active:hover {
+  color: var(--mg-primary);
+}
+
+/* ------------------------------------------------------------
+   Off-site banner
+   ------------------------------------------------------------ */
+
+.mg-offsite-banner {
+  position: fixed;
+  top: var(--mg-header-h);
+  left: 0;
+  right: 0;
+  background: var(--mg-warning);
+  color: #fff;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  z-index: 9;
+}
+
+.mg-offsite-banner[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Loading screen hidden override
+   ------------------------------------------------------------ */
+
+#mg-loading[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Upload error banner
+   ------------------------------------------------------------ */
+
+.mg-upload-error {
+  background: #fef2f2;
+  color: var(--mg-error);
+  border: 1px solid #fecaca;
+  border-radius: var(--mg-radius-sm);
+  padding: 0.65rem 1rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------
+   Capture preview
+   ------------------------------------------------------------ */
+
+.mg-capture-preview {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  border: 1px solid var(--mg-border);
+  overflow: hidden;
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-capture-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--mg-border);
+  background: #f0eeff;
+}
+
+.mg-capture-count {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--mg-primary);
+}
+
+.mg-capture-btns {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.mg-capture-preview[hidden] {
+  display: none !important;
+}
+
+.mg-capture-vendor-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--mg-border);
+}
+
+.mg-capture-vendor-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--mg-muted);
+  white-space: nowrap;
+}
+
+.mg-capture-vendor-select {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.88rem;
+  color: var(--mg-text);
+  background: var(--mg-surface);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.mg-capture-vendor-select:focus {
+  border-color: var(--mg-primary);
+}
+
+.mg-capture-thumbs {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mg-capture-thumb-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.mg-capture-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--mg-radius-sm);
+  object-fit: cover;
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-border);
+}
+
+.mg-capture-thumb-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--mg-error);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.mg-capture-thumb-del:hover {
+  background: #dc2626;
+}
+
+.mg-capture-thumb-name {
+  font-size: 0.68rem;
+  color: var(--mg-muted);
+  text-align: center;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------
+   Filter bar
+   ------------------------------------------------------------ */
+
+.mg-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.mg-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.88rem;
+  color: var(--mg-text);
+  background: var(--mg-surface);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.mg-filter-input:focus {
+  border-color: var(--mg-primary);
+}
+
+.mg-filter-date {
+  flex: 0 1 140px;
+  min-width: 120px;
+}
+
+/* ------------------------------------------------------------
+   Pagination
+   ------------------------------------------------------------ */
+
+.mg-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.mg-pagination[hidden] {
+  display: none !important;
+}
+
+.mg-page-label {
+  font-size: 0.85rem;
+  color: var(--mg-muted);
+  min-width: 80px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------
+   IDB queue card extras
+   ------------------------------------------------------------ */
+
+.mg-receipt-card--idb {
+  opacity: 0.92;
+  cursor: default;
+}
+
+.mg-idb-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.mg-receipt-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--mg-radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mg-bg);
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.mg-receipt-icon-inner {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.mg-receipt-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+
+.mg-receipt-items {
+  font-size: 0.75rem;
+  color: var(--mg-muted);
+}
+
+.mg-receipt-status--review {
+  background: #f0eeff;
+  color: var(--mg-primary);
+}
+
+/* ------------------------------------------------------------
+   Buttons — size variants & danger
+   ------------------------------------------------------------ */
+
+.mg-btn-sm {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+}
+
+.mg-btn-ghost {
+  background: transparent;
+  color: var(--mg-muted);
+  border: 1px solid var(--mg-border);
+}
+
+.mg-btn-ghost:hover {
+  background: var(--mg-bg);
+  color: var(--mg-text);
+}
+
+.mg-btn-danger {
+  background: #fef2f2;
+  color: var(--mg-error);
+  border: 1px solid #fecaca;
+}
+
+.mg-btn-danger:hover {
+  background: #fee2e2;
+}
+
+/* ------------------------------------------------------------
+   Loading inline
+   ------------------------------------------------------------ */
+
+.mg-loading-inline {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 1rem;
+}
+
+.mg-empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.mg-empty-sub {
+  font-size: 0.85rem;
+}
+
+/* ------------------------------------------------------------
+   Receipt detail — read-only table
+   ------------------------------------------------------------ */
+
+.mg-detail-header {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  padding: 1rem 1.25rem;
+  box-shadow: var(--mg-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mg-detail-vendor {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--mg-text);
+}
+
+.mg-detail-meta {
+  font-size: 0.82rem;
+  color: var(--mg-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.mg-detail-sep {
+  color: var(--mg-border);
+}
+
+.mg-detail-total {
+  font-size: 0.9rem;
+  color: var(--mg-text);
+  margin-top: 0.25rem;
+}
+
+.mg-detail-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.mg-detail-table th {
+  background: var(--mg-bg);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--mg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--mg-border);
+  white-space: nowrap;
+}
+
+.mg-detail-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--mg-border);
+  color: var(--mg-text);
+  vertical-align: top;
+}
+
+.mg-detail-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.mg-td-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mg-linked-badge {
+  background: #f0fdf4;
+  color: #16a34a;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mg-unlinked-badge {
+  background: var(--mg-bg);
+  color: var(--mg-muted);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.mg-empty-cell {
+  text-align: center;
+  color: var(--mg-muted);
+  font-style: italic;
+  padding: 1.5rem;
+}
+
+/* ------------------------------------------------------------
+   Receipt review — editable form
+   ------------------------------------------------------------ */
+
+.mg-review-header {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  padding: 1rem 1.25rem;
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-review-badge {
+  background: #f0eeff;
+  color: var(--mg-primary);
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.mg-review-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mg-review-item {
+  background: var(--mg-surface);
+  border-radius: var(--mg-radius);
+  padding: 1rem;
+  box-shadow: var(--mg-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-left: 3px solid transparent;
+}
+
+.mg-review-item--unlinked {
+  border-left-color: var(--mg-warning, #f59e0b);
+  background: #fffbf0;
+}
+
+.mg-review-unlinked-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 3px;
+  padding: 1px 6px;
+  letter-spacing: 0.02em;
+}
+
+.mg-review-discount-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #065f46;
+  background: #d1fae5;
+  border-radius: 3px;
+  padding: 1px 6px;
+  letter-spacing: 0.02em;
+}
+
+.mg-review-item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+}
+
+.mg-review-item-num {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mg-muted);
+}
+
+.mg-review-item-del {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: var(--mg-bg);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mg-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mg-review-item-del:hover {
+  background: #fee2e2;
+  color: var(--mg-error);
+}
+
+.mg-review-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mg-muted);
+}
+
+.mg-review-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.9rem;
+  color: var(--mg-text);
+  background: var(--mg-surface);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mg-review-input:focus {
+  border-color: var(--mg-primary);
+  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.12);
+}
+
+.mg-review-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+}
+
+.mg-review-grid-4 .mg-review-label {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.mg-review-select {
+  width: 100%;
+  height: 40px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.88rem;
+  color: var(--mg-text);
+  background: var(--mg-surface);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.25rem;
+}
+
+.mg-review-select:focus {
+  border-color: var(--mg-primary);
+  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.12);
+}
+
+.mg-review-ing-wrap {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.mg-review-ing-wrap .mg-review-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mg-review-ing-new-btn {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--mg-primary);
+  border-radius: var(--mg-radius-sm);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--mg-primary);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mg-review-ing-new-btn:hover {
+  background: var(--mg-primary);
+  color: #fff;
+}
+
+.mg-review-new-ing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background: #f8f7ff;
+  border: 1px solid var(--mg-primary);
+  border-radius: var(--mg-radius-sm);
+}
+
+.mg-review-new-ing-form[hidden] {
+  display: none !important;
+}
+
+.mg-review-new-ing-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.mg-btn-sm {
+  height: 32px;
+  padding: 0 0.875rem;
+  font-size: 0.82rem;
+}
+
+.mg-review-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.5rem;
+}
+
+.mg-review-empty {
+  text-align: center;
+  color: var(--mg-muted);
+  font-style: italic;
+  padding: 1.5rem;
+  font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------
+   Phase 5 — POS Sync screen
+   ------------------------------------------------------------ */
+
+/* Location status card */
+
+.mg-location-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--mg-radius-sm);
+  margin-bottom: 1.25rem;
+  border: 1px solid transparent;
+}
+
+.mg-location-card--onsite {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.mg-location-card--offsite {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.mg-location-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mg-location-card--onsite  .mg-location-dot { background: var(--mg-success); }
+.mg-location-card--offsite .mg-location-dot { background: var(--mg-warning); }
+
+.mg-location-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--mg-text);
+}
+
+.mg-location-sub {
+  font-size: 0.78rem;
+  color: var(--mg-muted);
+  margin-top: 1px;
+}
+
+/* Section heading */
+
+.mg-section-heading {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--mg-muted);
+  margin-bottom: 0.5rem;
+}
+
+/* Sync ingredient list */
+
+.mg-sync-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.mg-sync-group {
+  margin-bottom: 1.25rem;
+}
+
+.mg-sync-group-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--mg-muted);
+  padding: 0.25rem 0 0.4rem;
+  border-bottom: 1px solid var(--mg-border);
+  margin-bottom: 0.25rem;
+}
+
+.mg-sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--mg-border);
+  gap: 0.75rem;
+}
+
+.mg-sync-row:last-child {
+  border-bottom: none;
+}
+
+.mg-sync-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.mg-sync-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--mg-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mg-sync-category {
+  font-size: 0.72rem;
+  color: var(--mg-muted);
+  text-transform: capitalize;
+}
+
+/* Toggle switch */
+
+.mg-toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.mg-toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.mg-toggle-thumb {
+  position: absolute;
+  inset: 0;
+  background: var(--mg-border);
+  border-radius: 13px;
+  transition: background 0.2s;
+}
+
+.mg-toggle-thumb::before {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  left: 3px;
+  top: 3px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s;
+}
+
+.mg-toggle-input:checked + .mg-toggle-thumb {
+  background: var(--mg-success);
+}
+
+.mg-toggle-input:checked + .mg-toggle-thumb::before {
+  transform: translateX(18px);
+}
+
+.mg-toggle-input:disabled + .mg-toggle-thumb {
+  opacity: 0.45;
+}
+
+.mg-toggle:has(.mg-toggle-input:disabled) {
+  cursor: not-allowed;
+}
+
+/* Offsite banner (enhanced) */
+
+.mg-offsite-banner {
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ------------------------------------------------------------
+   Phase 4 — Reports detail
+   ------------------------------------------------------------ */
+
+.mg-report-section {
+  padding: 0 0 2rem;
+}
+
+/* Bar chart */
+
+.mg-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0 0.5rem;
+  gap: 0.5rem;
+}
+
+.mg-chart-total {
+  font-size: 0.85rem;
+  color: var(--mg-muted);
+}
+
+.mg-chart-total strong {
+  color: var(--mg-text);
+}
+
+.mg-chart-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.mg-tab-btn {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--mg-border);
+  border-radius: 20px;
+  background: var(--mg-surface);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--mg-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mg-tab-btn.active {
+  background: var(--mg-primary);
+  color: #fff;
+  border-color: var(--mg-primary);
+}
+
+.mg-chart-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 0.25rem;
+}
+
+.mg-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-height: 160px;
+  padding: 0.25rem 0;
+}
+
+.mg-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 28px;
+}
+
+.mg-bar-value {
+  font-size: 0.65rem;
+  color: var(--mg-muted);
+  margin-bottom: 3px;
+  white-space: nowrap;
+}
+
+.mg-bar-track {
+  width: 100%;
+  height: 120px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--mg-bg);
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+}
+
+.mg-bar {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
+}
+
+.mg-bar-label {
+  font-size: 0.65rem;
+  color: var(--mg-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Tab strip (price-changes, shifts) */
+
+.mg-tab-strip {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 0 0.5rem;
+  border-bottom: 1px solid var(--mg-border);
+  margin-bottom: 0.75rem;
+}
+
+.mg-tab-pill {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--mg-border);
+  border-radius: 20px;
+  background: var(--mg-surface);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--mg-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mg-tab-pill.active {
+  background: var(--mg-primary);
+  color: #fff;
+  border-color: var(--mg-primary);
+}
+
+.mg-tab-panel {
+  /* toggled via hidden attribute — override any display rule */
+}
+
+.mg-tab-panel[hidden] {
+  display: none !important;
+}
+
+/* Delta badges */
+
+.mg-delta {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.mg-delta-up {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.mg-delta-dn {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.mg-delta-flat {
+  background: var(--mg-bg);
+  color: var(--mg-muted);
+}
+
+/* Price-change sparkline rows */
+
+.mg-pc-row {
+  cursor: pointer;
+}
+
+/* Secondary vendor rows within the same ingredient group */
+.mg-pc-row-vendor td:first-child {
+  padding-left: 1.25rem;
+  color: var(--mg-muted);
+  font-size: 0.85em;
+}
+
+.mg-pc-row:hover td {
+  background: #f9fafb;
+}
+
+.mg-pc-row:focus {
+  outline: 2px solid var(--mg-primary);
+  outline-offset: -2px;
+}
+
+.mg-pc-spark-row td {
+  background: #f9fafb;
+}
+
+.mg-pc-spark-cell {
+  padding: 0.5rem 0.75rem 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mg-pc-spark-label {
+  font-size: 0.75rem;
+  color: var(--mg-muted);
+  white-space: nowrap;
+}
+
+/* Last-receipt tab */
+
+.mg-pc-receipt-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem 0.25rem;
+  border-bottom: 1px solid var(--mg-border);
+  margin-bottom: 0.25rem;
+}
+
+.mg-pc-receipt-vendor {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mg-pc-receipt-date {
+  font-size: 0.8rem;
+  color: var(--mg-muted);
+}
+
+.mg-pc-prev-age {
+  font-size: 0.72rem;
+  color: var(--mg-muted);
+  margin-left: 0.2rem;
+}
+
+.mg-pc-ingr-tag {
+  font-size: 0.72rem;
+  color: var(--mg-primary);
+  background: color-mix(in srgb, var(--mg-primary) 10%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+}
+
+.mg-sparkline {
+  display: block;
+  flex-shrink: 0;
+}
+
+.mg-sparkline-empty {
+  font-size: 0.85rem;
+  color: var(--mg-muted);
+}
+
+/* Order warnings */
+
+.mg-warnings-count {
+  font-size: 0.85rem;
+  color: var(--mg-muted);
+  padding: 0.5rem 0 0.75rem;
+}
+
+.mg-warning-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mg-warning-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-warning-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.mg-warning-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--mg-text);
+}
+
+.mg-warning-meta {
+  font-size: 0.78rem;
+  color: var(--mg-muted);
+  line-height: 1.4;
+}
+
+.mg-overdue {
+  color: var(--mg-error);
+  font-weight: 500;
+}
+
+/* Vendor select */
+
+.mg-vendor-select-wrap {
+  padding: 0.5rem 0 0.75rem;
+}
+
+/* Date range bar (sales + shifts) */
+
+.mg-date-range-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.75rem;
+}
+
+.mg-date-sep {
+  color: var(--mg-muted);
+  font-size: 0.9rem;
+}
+
+.mg-preset-btn {
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-border);
+  color: var(--mg-text);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 1rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mg-preset-btn:hover {
+  background: var(--mg-hover);
+}
+
+/* Summary cards (sales) */
+
+.mg-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding-bottom: 1rem;
+}
+
+.mg-summary-card {
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  padding: 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-summary-label {
+  font-size: 0.72rem;
+  color: var(--mg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.mg-summary-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--mg-text);
+}
+
+/* Inline spinner for table loading rows */
+
+.mg-spinner-sm {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--mg-border);
+  border-top-color: var(--mg-primary);
+  border-radius: 50%;
+  animation: mg-spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+
+/* ------------------------------------------------------------
+   Responsive — tablet+
+   ------------------------------------------------------------ */
+
+@media (min-width: 480px) {
+  .mg-report-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 768px) {
+  .mg-main {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+}
+
+/* ------------------------------------------------------------
+   Ingredients price lookup screen
+   ------------------------------------------------------------ */
+
+#mg-screen-ingredients {
+  padding: 0; /* search bar is sticky flush at top; results div carries its own padding */
+}
+
+.mg-ing-search-wrap {
+  padding: 0.75rem 1rem 0.5rem;
+  background: var(--mg-surface);
+  border-bottom: 1px solid var(--mg-border);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.mg-ing-search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--mg-bg);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius);
+  padding: 0.6rem 0.75rem;
+  cursor: text;
+}
+
+.mg-ing-search-icon {
+  color: var(--mg-muted);
+  flex-shrink: 0;
+}
+
+.mg-ing-query {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  color: var(--mg-text);
+  outline: none;
+  min-width: 0;
+}
+
+.mg-ing-query::placeholder {
+  color: var(--mg-muted);
+}
+
+/* WebKit clear button */
+.mg-ing-query::-webkit-search-cancel-button {
+  -webkit-appearance: auto;
+  cursor: pointer;
+}
+
+.mg-ing-hint {
+  font-size: 0.72rem;
+  color: var(--mg-muted);
+  margin-top: 0.35rem;
+  padding-left: 0.25rem;
+}
+
+.mg-ing-results {
+  padding: 1rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* Chart card (online — has sparkline) */
+.mg-ing-chart-card {
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--mg-shadow);
+}
+
+.mg-ing-chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.mg-ing-chart-label {
+  font-size: 0.75rem;
+  color: var(--mg-muted);
+  margin-bottom: 0.2rem;
+}
+
+.mg-ing-chart-price {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--mg-text);
+  line-height: 1.2;
+}
+
+.mg-ing-chart-unit {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--mg-muted);
+}
+
+.mg-ing-chart-vendor {
+  font-size: 0.8rem;
+  color: var(--mg-muted);
+  margin-top: 0.25rem;
+}
+
+.mg-ing-live-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mg-success);
+  background: #dcfce7;
+  border-radius: 4px;
+  padding: 0.2rem 0.45rem;
+  flex-shrink: 0;
+}
+
+.mg-sparkline-wrap {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.mg-sparkline {
+  display: block;
+  width: 100%;
+  height: 64px;
+}
+
+.mg-sparkline-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--mg-muted);
+  margin-top: 0.2rem;
+}
+
+.mg-ing-chart-caption {
+  font-size: 0.72rem;
+  color: var(--mg-muted);
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+/* Offline result cards (one per matching description) */
+.mg-ing-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mg-ing-card {
+  background: var(--mg-surface);
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-sm);
+  padding: 0.75rem 1rem;
+}
+
+.mg-ing-card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.mg-ing-card-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--mg-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mg-ing-card-price {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--mg-primary);
+  flex-shrink: 0;
+}
+
+.mg-ing-card-unit {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--mg-muted);
+}
+
+.mg-ing-card-meta {
+  font-size: 0.75rem;
+  color: var(--mg-muted);
+  margin-top: 0.25rem;
+}
+
+/* Selectable ingredient card states */
+.mg-ing-card {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.mg-ing-card:hover,
+.mg-ing-card:focus {
+  outline: none;
+  border-color: var(--mg-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mg-primary) 20%, transparent);
+}
+.mg-ing-card--selected {
+  border-color: var(--mg-primary);
+  background: color-mix(in srgb, var(--mg-primary) 6%, var(--mg-surface));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mg-primary) 20%, transparent);
+}
+
+/* Chart section below results — shown after a card is selected */
+.mg-ing-chart-section {
+  padding: 0 1rem 1.5rem;
+}
+.mg-ing-chart-section:empty {
+  display: none;
+}
+
+/* Offline data banner (receipts list & report detail) */
+.mg-offline-banner {
+  background: #fef9c3;
+  color: #854d0e;
+  border-bottom: 1px solid #fde047;
+  padding: 0.4rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-align: center;
+  border-radius: var(--mg-radius-sm) var(--mg-radius-sm) 0 0;
+}

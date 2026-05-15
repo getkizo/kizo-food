@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WebAuthn routes — passkey / fingerprint login
  *
  * Implements WebAuthn Level 2 (W3C) using only Node.js built-in crypto.
@@ -34,12 +34,12 @@ const webauthn = new Hono()
 // Configuration
 // ---------------------------------------------------------------------------
 
-const RP_NAME = 'Kizo Register'
+const RP_NAME = 'Kizo Merchant'
 const CHALLENGE_TTL_MS = 5 * 60 * 1000  // 5 minutes
 
 /**
  * The expected WebAuthn RP ID, pinned at startup from the environment.
- * Set WEBAUTHN_EXPECTED_DOMAIN to the bare hostname (e.g. "hanuman-thai-cafe-kirkland.kizo.app").
+ * Set WEBAUTHN_EXPECTED_DOMAIN to the bare hostname (e.g. "demo-restaurant.kizo.example").
  * When set, getRpId/getOrigin ignore client-supplied Host/Origin headers entirely.
  * When absent (local dev), the headers are used as before.
  */
@@ -226,8 +226,7 @@ webauthn.post('/api/auth/webauthn/register/verify', async (c) => {
     // 5. Extract credential ID and public key from authData
     // authData layout: rpIdHash(32) + flags(1) + signCount(4) + aaguid(16) + credIdLen(2) + credId + coseKey
     let offset = 37  // after rpIdHash + flags + signCount
-    const aaguid = authDataBuf.slice(offset, offset + 16)
-    offset += 16
+    offset += 16 // skip aaguid (16 bytes)
     const credIdLen = authDataBuf.readUInt16BE(offset)
     offset += 2
     const extractedCredId = authDataBuf.slice(offset, offset + credIdLen).toString('base64url')
@@ -515,7 +514,7 @@ webauthn.delete('/api/auth/webauthn/credentials/:id', async (c) => {
   let payload: any
   try { payload = verifyJWT(token) } catch { return c.json({ error: 'Invalid token' }, 401) }
 
-  const credId = c.req.param('id')
+  const credId = c.req.param('id')!
   const db = getDatabase()
   db.run(
     `DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?`,
@@ -566,9 +565,6 @@ function verifyES256(coseMap: Map<number, any>, data: Buffer, sig: Buffer): bool
   const x = coseMap.get(-2) as Buffer
   const y = coseMap.get(-3) as Buffer
   if (!x || !y) return false
-
-  // Build uncompressed EC point (0x04 || x || y)
-  const uncompressed = Buffer.concat([Buffer.from([0x04]), x, y])
 
   const keyObject = createPublicKey({
     key: {

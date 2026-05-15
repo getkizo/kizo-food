@@ -1,4 +1,4 @@
-/**
+﻿/**
  * store-checkout.js — Checkout panel: order summary + customer info form
  *
  * Exposes: window.StoreCheckout = { render }
@@ -67,13 +67,16 @@
   // ---------------------------------------------------------------------------
 
   function renderSummary(model) {
-    const listEl     = document.getElementById('checkout-items-list')
-    const subtotalEl = document.getElementById('checkout-subtotal')
-    const taxEl      = document.getElementById('checkout-tax')
-    const tipRowEl   = document.getElementById('checkout-tip-row')
-    const tipEl      = document.getElementById('checkout-tip')
-    const totalEl    = document.getElementById('checkout-total')
-    const payTotalEl = document.getElementById('checkout-pay-total')
+    const listEl          = document.getElementById('checkout-items-list')
+    const campaignRowEl   = document.getElementById('checkout-campaign-row')
+    const campaignLabelEl = document.getElementById('checkout-campaign-label')
+    const discountEl      = document.getElementById('checkout-discount')
+    const subtotalEl      = document.getElementById('checkout-subtotal')
+    const taxEl           = document.getElementById('checkout-tax')
+    const tipRowEl        = document.getElementById('checkout-tip-row')
+    const tipEl           = document.getElementById('checkout-tip')
+    const totalEl         = document.getElementById('checkout-total')
+    const payTotalEl      = document.getElementById('checkout-pay-total')
 
     if (listEl) {
       listEl.innerHTML = model.cart.map((entry, idx) => {
@@ -85,12 +88,15 @@
         const noteTag = entry.kitchenNote
           ? `<p class="checkout-item-kitchen-note">${escHtml(entry.kitchenNote)}</p>`
           : ''
+        const instrTag = entry.instructionSurchargeCents > 0
+          ? `<p class="checkout-item-instr-surcharge">Special request: +${formatCents(entry.instructionSurchargeCents)}</p>`
+          : ''
         return `
           <li class="checkout-item">
             <div class="checkout-item-info checkout-item-edit" data-edit-idx="${idx}" role="button" tabindex="0" aria-label="Edit ${escHtml(entry.item.name)}">
               <p class="checkout-item-name">${escHtml(entry.item.name)}</p>
               ${modNames ? `<p class="checkout-item-mods">${escHtml(modNames)}</p>` : ''}
-              ${nameTag}${noteTag}
+              ${nameTag}${noteTag}${instrTag}
             </div>
             <div class="checkout-item-right">
               <div class="checkout-item-qty" role="group" aria-label="Quantity">
@@ -104,6 +110,56 @@
           </li>
         `
       }).join('')
+    }
+
+    // Campaign discount row
+    const discountCents = model.cartDiscountCents || 0
+    const hintEl = document.getElementById('checkout-offer-hint')
+    if (campaignRowEl) {
+      const campaign = model.selectedCampaign
+      if (discountCents > 0 && campaign) {
+        campaignRowEl.hidden = false
+        if (campaignLabelEl) campaignLabelEl.textContent = campaign.offer?.label || 'Promo'
+        if (discountEl)      discountEl.textContent = '−' + formatCents(discountCents)
+        if (hintEl)          hintEl.hidden = true
+      } else if (discountCents === 0 && campaign) {
+        // Campaign present but not applying — show why
+        campaignRowEl.hidden = false
+        if (campaignLabelEl) campaignLabelEl.textContent = campaign.offer?.label || 'Promo'
+        if (discountEl)      discountEl.textContent = '—'
+        if (hintEl) {
+          const sub      = model.cartSubtotalCents
+          const minOrder = campaign.offer?.min_order_cents || 0
+          let hint
+          if (sub < minOrder) {
+            hint = `Minimum order ${formatCents(minOrder)} required`
+          } else {
+            const schedText = campaign.schedule ? window.Store.fmtSchedule(campaign.schedule) : null
+            const schedRef    = model.scheduledFor ? new Date(model.scheduledFor) : undefined
+            const schedActive = schedText ? window.Store.isCampaignScheduleActive(campaign, schedRef) : true
+            hint = (!schedActive && schedText)
+              ? `Not valid now · Valid: ${schedText}`
+              : 'Not valid for this order'
+          }
+          hintEl.textContent = hint
+          hintEl.hidden = false
+        }
+      } else if (model.selectedCampaignSlug) {
+        // Slug stored but campaign no longer in activeCampaigns — e.g., the
+        // server returned already_redeemed for a QR coupon. Surface this
+        // explicitly instead of silently hiding the row, so the customer
+        // knows why the offer they expected isn't applying.
+        campaignRowEl.hidden = false
+        if (campaignLabelEl) campaignLabelEl.textContent = 'Coupon no longer available'
+        if (discountEl)      discountEl.textContent = '—'
+        if (hintEl) {
+          hintEl.textContent = 'This offer is no longer applicable to your order'
+          hintEl.hidden = false
+        }
+      } else {
+        campaignRowEl.hidden = true
+        if (hintEl) hintEl.hidden = true
+      }
     }
 
     const tipCents = model.tipCents || 0
@@ -329,6 +385,15 @@
     if (nameInput) nameInput.value    = entry.itemName    || ''
     if (noteInput) noteInput.value    = entry.kitchenNote || ''
 
+    // Sync character counter when sheet opens
+    const counterEl = document.getElementById('item-note-counter')
+    if (counterEl && noteInput) {
+      const len = noteInput.value.length
+      counterEl.textContent = `${len}/256`
+      counterEl.className   = 'kitchen-note-counter' +
+        (len >= 256 ? ' at-max' : len >= 220 ? ' near' : '')
+    }
+
     // Focus the name input when sheet opens (unless values already exist — then note)
     if (nameInput && !entry.itemName && !entry.kitchenNote) nameInput.focus()
     else if (noteInput) noteInput.focus()
@@ -337,6 +402,166 @@
   // ---------------------------------------------------------------------------
   // Wire buttons (called once)
   // ---------------------------------------------------------------------------
+
+  // ── Trigger-word regex (mirrors server-side TRIGGER_RE) ─────────────────────
+  const TRIGGER_RE = /\b(extra|add|more|additional|substitute|sub|swap|switch|replace|instead|change|upgrade|with|plus)\b/i
+
+  // ── Instruction review sheet ──────────────────────────────────────────────────
+
+  /**
+   * Show the instruction review sheet with preset messages + optional surcharge.
+   * Returns a Promise that resolves `true` (accept) or `false` (decline/dismiss).
+   */
+  function showInstructionReview(messages, surchargeCents) {
+    return new Promise((resolve) => {
+      const backdrop  = document.getElementById('instruction-review-backdrop')
+      const sheet     = document.getElementById('instruction-review-sheet')
+      const list      = document.getElementById('instruction-review-messages')
+      const totalRow  = document.getElementById('instruction-review-total')
+      const totalAmt  = document.getElementById('instruction-review-amount')
+      const acceptBtn = document.getElementById('instruction-accept-btn')
+      const declineBtn = document.getElementById('instruction-decline-btn')
+
+      if (!sheet || !list) { resolve(false); return }
+
+      // Populate messages
+      list.innerHTML = ''
+      for (const msg of messages) {
+        const li = document.createElement('li')
+        li.textContent = msg
+        list.appendChild(li)
+      }
+
+      // Show/hide charge row
+      if (totalRow && totalAmt) {
+        if (surchargeCents > 0) {
+          totalAmt.textContent = '+$' + (surchargeCents / 100).toFixed(2)
+          totalRow.hidden = false
+        } else {
+          totalRow.hidden = true
+        }
+      }
+
+      // Open sheet — remove [hidden] first (#instruction-review-sheet[hidden] has
+      // display:none !important which wins over .modifier-sheet display:block !important),
+      // then add .open to trigger the slide-up transform animation.
+      if (backdrop) { backdrop.hidden = false; backdrop.setAttribute('aria-hidden', 'false') }
+      sheet.removeAttribute('hidden')
+      sheet.classList.add('open')
+      sheet.setAttribute('aria-hidden', 'false')
+
+      const closeReview = (accepted) => {
+        sheet.classList.remove('open')
+        sheet.setAttribute('hidden', '')
+        sheet.setAttribute('aria-hidden', 'true')
+        if (backdrop) { backdrop.hidden = true; backdrop.setAttribute('aria-hidden', 'true') }
+        // Remove listeners to prevent double-fire
+        if (acceptBtn)  acceptBtn.removeEventListener('click',  onAccept)
+        if (declineBtn) declineBtn.removeEventListener('click', onDecline)
+        if (backdrop)   backdrop.removeEventListener('click',   onDecline)
+        resolve(accepted)
+      }
+
+      const onAccept  = () => closeReview(true)
+      const onDecline = () => closeReview(false)
+
+      if (acceptBtn)  acceptBtn.addEventListener('click',  onAccept)
+      if (declineBtn) declineBtn.addEventListener('click', onDecline)
+      if (backdrop)   backdrop.addEventListener('click',   onDecline)
+    })
+  }
+
+  // Guard against double-tap: set true while an async save is in flight.
+  let _noteSaving = false
+
+  /**
+   * Handle saving the per-item kitchen note, with optional AI parse intercept.
+   * Plain notes (no trigger words) are saved directly.
+   * Notes with trigger words go through POST /api/store/parse-instruction.
+   * Network/503 errors are surfaced to the customer — note is cleared.
+   */
+  async function saveItemNoteWithIntercept(nameInputEl, noteInputEl, cartIdx) {
+    if (_noteSaving) return
+    _noteSaving = true
+
+    // Disable Done button for the duration of the async call
+    const doneBtn = document.getElementById('item-note-done-btn')
+    if (doneBtn) doneBtn.disabled = true
+
+    try {
+      const itemName   = nameInputEl?.value ?? ''
+      const noteText   = noteInputEl?.value ?? ''
+      const model      = window.Store.getModel()
+      const cartEntry  = model?.cart?.[cartIdx]
+
+      // No trigger words → plain kitchen note, no API call
+      if (!noteText.trim() || !TRIGGER_RE.test(noteText)) {
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: noteText })
+        return
+      }
+
+      let parseResult = null
+      let fetchOk = false
+      try {
+        const res = await fetch('/api/store/parse-instruction', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ note: noteText.trim(), itemId: cartEntry?.item?.id ?? '' }),
+        })
+        fetchOk = res.ok
+        if (res.ok) parseResult = await res.json()
+      } catch { /* network error handled below */ }
+
+      // Network failure or 503 → show error to customer, clear note
+      if (!fetchOk || !parseResult) {
+        await showInstructionReview(["We're sorry, we couldn't process your special request right now. Please try again or place your order without it."], 0)
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: '' })
+        return
+      }
+
+      // No trigger recognised server-side → plain note
+      if (parseResult.outcome === 'no_trigger') {
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: noteText })
+        return
+      }
+
+      // Unfulfillable / jailbreak → show message, clear note
+      if (parseResult.outcome === 'unfulfillable' || parseResult.outcome === 'jailbreak') {
+        if (parseResult.messages?.length) {
+          await showInstructionReview(parseResult.messages, 0)
+        }
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: '' })
+        return
+      }
+
+      // no_charge → show informational messages, save as plain note
+      if (parseResult.outcome === 'no_charge') {
+        if (parseResult.messages?.length) {
+          await showInstructionReview(parseResult.messages, 0)
+        }
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: noteText })
+        return
+      }
+
+      // surcharge → show review sheet and await customer decision
+      const accepted = await showInstructionReview(parseResult.messages, parseResult.surchargeCents)
+      if (accepted) {
+        window.Store.actions.saveItemNote({
+          itemName,
+          kitchenNote:              noteText,
+          instructionToken:         parseResult.token,
+          instructionPerUnitCents:  parseResult.perUnitSurchargeCents ?? 0,
+          instructionPerEntryCents: (parseResult.surchargeCents ?? 0) - (parseResult.perUnitSurchargeCents ?? 0),
+        })
+      } else {
+        // Declined → clear note entirely
+        window.Store.actions.saveItemNote({ itemName, kitchenNote: '' })
+      }
+    } finally {
+      _noteSaving = false
+      if (doneBtn) doneBtn.disabled = false
+    }
+  }
 
   /** Wire note sheet once; the sheet itself re-renders on every model update. */
   let noteSheetWired = false
@@ -348,30 +573,45 @@
     const backdrop    = document.getElementById('item-note-backdrop')
     const modBtn      = document.getElementById('item-note-modifier-btn')
     const doneBtn     = document.getElementById('item-note-done-btn')
+    const noteInputEl = document.getElementById('item-note-kitchen-input')
+    const counterEl   = document.getElementById('item-note-counter')
 
-    const closeSheet = () => {
-      const nameInput = document.getElementById('item-note-name-input')
-      const noteInput = document.getElementById('item-note-kitchen-input')
-      window.Store.actions.saveItemNote({
-        itemName:    nameInput?.value ?? '',
-        kitchenNote: noteInput?.value ?? '',
+    // Character counter for the textarea
+    if (noteInputEl && counterEl) {
+      noteInputEl.addEventListener('input', () => {
+        const len = noteInputEl.value.length
+        counterEl.textContent = `${len}/256`
+        counterEl.className   = 'kitchen-note-counter' +
+          (len >= 256 ? ' at-max' : len >= 220 ? ' near' : '')
       })
     }
 
-    if (backdrop) backdrop.addEventListener('click', closeSheet)
-    if (doneBtn)  doneBtn.addEventListener('click',  closeSheet)
+    const doSave = async () => {
+      const nameInput = document.getElementById('item-note-name-input')
+      const model = window.Store.getModel()
+      const idx   = model?.editingNoteIdx
+      if (idx === null || idx === undefined || idx < 0) {
+        window.Store.actions.saveItemNote({ itemName: nameInput?.value ?? '', kitchenNote: noteInputEl?.value ?? '' })
+        return
+      }
+      await saveItemNoteWithIntercept(nameInput, noteInputEl, idx)
+    }
+
+    // Backdrop tap saves the note — but only when no async save is already in
+    // flight.  When _noteSaving is true the Done button is disabled, so the
+    // backdrop is the only tap target left; silently ignoring it avoids the
+    // confusing no-op while keeping the sheet open until the save resolves.
+    const doSaveFromBackdrop = () => { if (!_noteSaving) doSave() }
+
+    if (backdrop) backdrop.addEventListener('click', doSaveFromBackdrop)
+    if (doneBtn)  doneBtn.addEventListener('click',  doSave)
 
     if (modBtn) {
-      modBtn.addEventListener('click', () => {
-        // Save note first, then open modifier sheet for same entry
+      modBtn.addEventListener('click', async () => {
         const nameInput = document.getElementById('item-note-name-input')
-        const noteInput = document.getElementById('item-note-kitchen-input')
         const model = window.Store.getModel()
         const idx   = model?.editingNoteIdx
-        window.Store.actions.saveItemNote({
-          itemName:    nameInput?.value ?? '',
-          kitchenNote: noteInput?.value ?? '',
-        })
+        await saveItemNoteWithIntercept(nameInput, noteInputEl, idx)
         // editingNoteIdx is now null; open the modifier sheet
         if (idx !== null && idx >= 0) {
           window.Store.actions.editCartItem(idx)
@@ -495,6 +735,13 @@
           return
         }
 
+        // Phone is required when redeeming a campaign offer
+        const m = window.Store?.getModel()
+        if (m?.selectedCampaign && m.cartDiscountCents > 0 && !phone) {
+          showFieldError(document.getElementById('field-phone'), 'A phone number is required to redeem this offer.')
+          return
+        }
+
         const timeSelect   = document.getElementById('checkout-time-select')
         const scheduledFor = timeSelect?.value || null
 
@@ -576,6 +823,10 @@
         targetDate.setDate(now.getDate() + daysAhead)
         targetDate.setSeconds(0, 0)
 
+        // Skip dates that fall within a scheduled closure
+        const targetIso = targetDate.toLocaleDateString('sv', { timeZone: profile.timezone || 'UTC' })
+        if ((profile.scheduledClosures ?? []).some((c) => targetIso >= c.startDate && targetIso <= c.endDate)) continue
+
         const targetDow  = targetDate.getDay()
         const daySlots   = (profile.businessHours ?? [])
           .filter((h) => h.dayOfWeek === targetDow && !h.isClosed)
@@ -627,6 +878,24 @@
     // When closed the first slot should be pre-selected (no blank ASAP option)
     if (!isOpen && slots.length > 0) select.selectedIndex = 0
 
+    // Restore previously saved scheduled time (survives page refresh)
+    const savedFor = window.Store?.getModel()?.scheduledFor
+    if (savedFor) {
+      const matchOpt = Array.from(select.options).find(o => o.value === savedFor)
+      if (matchOpt) {
+        matchOpt.selected = true
+      } else {
+        // Saved slot is no longer available (expired) — discard it
+        window.Store?.actions.setScheduledFor(null)
+      }
+    }
+
+    // Update model immediately when customer changes the time —
+    // this re-evaluates the offer banner without waiting for Pay click.
+    select.addEventListener('change', () => {
+      window.Store?.actions.setScheduledFor(select.value || null)
+    })
+
     section.hidden = false
   }
 
@@ -636,6 +905,7 @@
 
   window.StoreCheckout = {
     render,
+    showInstructionReview,
   }
 
 })()

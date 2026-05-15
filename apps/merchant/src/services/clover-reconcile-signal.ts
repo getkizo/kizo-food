@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Clover reconciliation fast-poll signal.
  *
  * Call `notifyCloverPaymentInitiated()` whenever a Clover order is pushed to

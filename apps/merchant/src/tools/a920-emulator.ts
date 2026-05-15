@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PAX A920 Pro Emulator — Finix API mock / 9333 + Web Control UI / 9334
  *
  * Intercepts Finix terminal API calls so you can approve or decline payments

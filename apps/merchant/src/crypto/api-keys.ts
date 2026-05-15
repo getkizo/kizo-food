@@ -1,4 +1,4 @@
-/**
+﻿/**
  * API key encryption and storage
  * Protects merchant POS and payment credentials
  *
@@ -14,7 +14,7 @@ import { getDatabase } from '../db/connection'
 import { getDEK } from './dek'
 import { auditKeyAccess } from './audit'
 
-export type KeyType = 'pos' | 'payment' | 'cloud' | 'email'
+export type KeyType = 'pos' | 'payment' | 'cloud' | 'email' | 'ai'
 
 interface APIKeyRecord {
   id: string

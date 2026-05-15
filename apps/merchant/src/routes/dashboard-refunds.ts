@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Refund routes
  *
  * Routing by payment method:
@@ -39,8 +39,8 @@ dashboardRefunds.post(
   authenticate,
   async (c: AuthContext) => {
     const user = c.get('user')
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     // Check if staff may record refunds (merchant-level setting)
@@ -423,8 +423,8 @@ dashboardRefunds.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     type RefundRow = {

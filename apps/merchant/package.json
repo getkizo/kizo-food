@@ -1,5 +1,5 @@
-{
-  "name": "@kizo/register",
+﻿{
+  "name": "@kizo/merchant-appliance",
   "version": "1.0.0",
   "description": "ARM cluster appliance bridging customers and merchant POS systems",
   "type": "module",
@@ -14,6 +14,7 @@
     "verify": "bun run src/crypto/verify-code.ts",
     "db:migrate": "bun run src/db/migrate.ts",
     "db:seed": "bun run src/db/seed.ts",
+    "db:seed-gogs": "bun run scripts/seed-gogs-receipts.ts",
     "generate:vapid": "bun run scripts/generate-vapid.ts",
     "generate:icons": "bun run scripts/generate-icons.ts",
     "emulator": "bun run src/tools/printer-emulator.ts",
@@ -24,15 +25,16 @@
     "test:e2e:install": "bunx playwright install chromium"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.87.0",
+    "sam-fsm": "^1.0.0",
+    "sam-pattern": "1.6.1",
     "@noble/ed25519": "^2.3.0",
     "hono": "^4.12.8",
     "nodemailer": "^8.0.3",
     "puppeteer-core": "^22.15.0",
     "qrcode": "^1.5.4",
     "receiptline": "4.0.0",
-    "sam-fsm": "0.9.24",
-    "sam-pattern": "^1.5.10",
-    "sharp": "^0.34.5"
+    "sharp": "0.34.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -54,10 +56,6 @@
     "restaurant",
     "sam-pattern"
   ],
-  "author": {
-    "name": "Jean-Jacques Dubray",
-    "email": "cto@cognitivefab.com",
-    "url": "https://cognitivefab.com"
-  },
+  "author": "Kizo Contributors",
   "license": "MIT"
 }

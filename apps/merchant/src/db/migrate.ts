@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Database migration script
  * 1. Runs schema.sql (CREATE TABLE IF NOT EXISTS — safe to re-run)
  * 2. Runs ALTER TABLE column migrations for existing databases
@@ -330,6 +330,12 @@ const columnMigrations: Array<{
     column: 'scheduled_end',
     definition: 'TEXT',
   },
+  {
+    description: "Add language to employees (preferred language for clock-in/out UI: 'en' | 'es')",
+    table: 'employees',
+    column: 'language',
+    definition: "TEXT NOT NULL DEFAULT 'en'",
+  },
   // ── Online order lifecycle: estimated ready time ────────────────────────
   {
     description: 'Add estimated_ready_at to orders (ISO timestamp for estimated pickup readiness)',
@@ -472,6 +478,27 @@ const columnMigrations: Array<{
     column: 'receipt_email_from',
     definition: 'TEXT',
   },
+  // ── Google Analytics ──────────────────────────────────────────────────────
+  {
+    description: 'Add ga_tag_id to merchants (Google Analytics measurement ID, e.g. G-XXXXXXXXXX)',
+    table: 'merchants',
+    column: 'ga_tag_id',
+    definition: 'TEXT',
+  },
+  // ── Dine-in payment provider toggle ───────────────────────────────────────
+  {
+    description: "Add dine_in_provider to merchants ('finix' | 'clover') — selects terminal for dine-in card payments",
+    table: 'merchants',
+    column: 'dine_in_provider',
+    definition: "TEXT NOT NULL DEFAULT 'clover'",
+  },
+  // ── Counter payment provider toggle ───────────────────────────────────────
+  {
+    description: "Add counter_provider to merchants ('finix' | 'clover') — selects terminal for counter card payments",
+    table: 'merchants',
+    column: 'counter_provider',
+    definition: "TEXT NOT NULL DEFAULT 'finix'",
+  },
   {
     description: "Add smtp_provider to merchants ('gmail' | 'outlook' | 'yahoo' | 'sendgrid' | 'smtp' — controls SMTP host/port for outbound email)",
     table: 'merchants',
@@ -551,6 +578,12 @@ const columnMigrations: Array<{
     table: 'pending_course_fires',
     column: 'print_status',
     definition: "TEXT NOT NULL DEFAULT 'pending'",
+  },
+  {
+    description: "Add ticket_type to pending_course_fires ('course_2'|'non_gf') to distinguish GF-separation deferred prints from course-delay deferred prints",
+    table: 'pending_course_fires',
+    column: 'ticket_type',
+    definition: "TEXT NOT NULL DEFAULT 'course_2'",
   },
   {
     description: 'Add recipient_name to gift_card_purchases (name of the gift recipient, optional)',
@@ -645,6 +678,175 @@ const columnMigrations: Array<{
     table: 'merchants',
     column: 'suggested_tip_percentages',
     definition: "TEXT NOT NULL DEFAULT '[15,20,25]'",
+  },
+  {
+    description: 'Add reservation_busy_until to merchants (ISO datetime until which walk-in-only mode is active; NULL = taking reservations normally)',
+    table: 'merchants',
+    column: 'reservation_busy_until',
+    definition: 'TEXT DEFAULT NULL',
+  },
+  {
+    description: 'Add online_orders_paused_until to merchants (ISO datetime until which online ordering is paused; NULL = accepting orders normally)',
+    table: 'merchants',
+    column: 'online_orders_paused_until',
+    definition: 'TEXT DEFAULT NULL',
+  },
+  {
+    description: 'Add special_instruction_surcharge_cents to orders (sum of per-item instruction surcharges, included in subtotal)',
+    table: 'orders',
+    column: 'special_instruction_surcharge_cents',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    description: "Add finix_webhook_secret_enc to merchants (AES-256-GCM encrypted HMAC shared secret for Finix payment webhooks)",
+    table: 'merchants',
+    column: 'finix_webhook_secret_enc',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add tip_amount_cents to terminal_transactions (tip captured on-device during card-present sale)',
+    table: 'terminal_transactions',
+    column: 'tip_amount_cents',
+    definition: 'INTEGER',
+  },
+  {
+    description: 'Add entry_mode to terminal_transactions (CONTACTLESS | CHIP_ENTRY | SWIPED | etc.)',
+    table: 'terminal_transactions',
+    column: 'entry_mode',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add approved_amount_cents to terminal_transactions (Finix-reported charged amount = sent + tip)',
+    table: 'terminal_transactions',
+    column: 'approved_amount_cents',
+    definition: 'INTEGER',
+  },
+  {
+    description: 'Add signature_capture to merchants (1 = capture signature on the Kizo tablet, 0 = skip — handle on terminal)',
+    table: 'merchants',
+    column: 'signature_capture',
+    definition: 'INTEGER NOT NULL DEFAULT 1',
+  },
+  {
+    description: 'Add processor_fee_cents to payments (sum of Finix-reported fees, NULL = not yet fetched)',
+    table: 'payments',
+    column: 'processor_fee_cents',
+    definition: 'INTEGER',
+  },
+  {
+    description: 'Add superseded_at to payment_errors (ISO timestamp when a later successful payment on the same order marked this error as routine retry noise — used to hide CANCELLATION_VIA_API rows from audit views)',
+    table: 'payment_errors',
+    column: 'superseded_at',
+    definition: 'TEXT',
+  },
+  // ── Campaign attribution ──────────────────────────────────────────────────
+  {
+    description: 'Add campaign_id to orders (FK to local campaigns mirror — set when a campaign promo was applied)',
+    table: 'orders',
+    column: 'campaign_id',
+    definition: 'INTEGER',
+  },
+  {
+    description: 'Add campaign_slug to orders (denormalized slug for reporting without join)',
+    table: 'orders',
+    column: 'campaign_slug',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add coupon_code to orders (populated only for campaigns where each coupon has a unique code)',
+    table: 'orders',
+    column: 'coupon_code',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add max_uses_global to campaigns (total redemption cap across all customers; NULL = unlimited)',
+    table: 'campaigns',
+    column: 'max_uses_global',
+    definition: 'INTEGER',
+  },
+  {
+    description: 'Add schedule_json to campaigns (optional daypart windows: days of week + time range)',
+    table: 'campaigns',
+    column: 'schedule_json',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add campaign_type to campaigns (coupon | bogo)',
+    table: 'campaigns',
+    column: 'campaign_type',
+    definition: "TEXT NOT NULL DEFAULT 'coupon'",
+  },
+  {
+    description: 'Add target_json to campaigns (item-specific discount target)',
+    table: 'campaigns',
+    column: 'target_json',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add trigger_json to campaigns (bogo trigger condition)',
+    table: 'campaigns',
+    column: 'trigger_json',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add reward_json to campaigns (bogo reward definition)',
+    table: 'campaigns',
+    column: 'reward_json',
+    definition: 'TEXT',
+  },
+  // ── Bill feedback QR ──────────────────────────────────────────────────────
+  {
+    description: 'Add feedback_token to orders (opaque token for bill QR code feedback link, 12-hour expiry)',
+    table: 'orders',
+    column: 'feedback_token',
+    definition: 'TEXT',
+  },
+  {
+    description: 'Add manager_note to feedback (private note to kitchen/manager, not shown publicly)',
+    table: 'feedback',
+    column: 'manager_note',
+    definition: 'TEXT',
+  },
+  // ── SEC-005: PII retention — purge audit trail ────────────────────────────
+  {
+    description: 'Add pii_purged_at to orders (ISO timestamp when customer PII was nulled by nightly purge)',
+    table: 'orders',
+    column: 'pii_purged_at',
+    definition: 'TEXT DEFAULT NULL',
+  },
+  {
+    description: 'Add pii_purged_at to advance_orders (ISO timestamp when customer PII was nulled by nightly purge)',
+    table: 'advance_orders',
+    column: 'pii_purged_at',
+    definition: 'TEXT DEFAULT NULL',
+  },
+  // ── Print-first modifier groups ───────────────────────────────────────────
+  {
+    description: 'Add print_first to modifier_groups (1 = print this group before all others on kitchen/counter tickets)',
+    table: 'modifier_groups',
+    column: 'print_first',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
+  // ── Special instructions: per-unit vs per-entry surcharge ─────────────────
+  {
+    description: "Add charge_type to extra_ingredients ('per_unit' = multiply by qty, 'per_entry' = flat one-time)",
+    table: 'extra_ingredients',
+    column: 'charge_type',
+    definition: "TEXT NOT NULL DEFAULT 'per_entry'",
+  },
+  // ── Manager receipt review status ─────────────────────────────────────────
+  {
+    description: "Add status to supplier_receipts ('parsed' = OCR complete, needs review; 'reviewed' = locked by manager)",
+    table: 'supplier_receipts',
+    column: 'status',
+    definition: "TEXT NOT NULL DEFAULT 'parsed'",
+  },
+  // ── Content-hash dedup ────────────────────────────────────────────────────
+  {
+    description: 'Add content_hash to supplier_receipts for duplicate-upload detection (SHA-256 hex of raw file bytes)',
+    table: 'supplier_receipts',
+    column: 'content_hash',
+    definition: 'TEXT',
   },
 ]
 
@@ -1665,6 +1867,52 @@ const tableMigrations: Array<{
     },
   },
 
+  {
+    // Rebuild pending_terminal_sales to allow transfer_id to be NULL and add
+    // idempotency_key column. Supports the "verification pending" recovery path:
+    // when createTerminalSale times out and we don't know the transfer ID, we
+    // insert a row keyed by idempotency_key so the orphan sweep can query Finix
+    // by idempotency_id later.
+    description: 'Make pending_terminal_sales.transfer_id nullable and add idempotency_key column',
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='pending_terminal_sales'`
+      ).get()
+      if (!row) return false
+      // Need rebuild if transfer_id is still NOT NULL or idempotency_key column is missing
+      const needsNullable = row.sql.includes('transfer_id      TEXT NOT NULL') || row.sql.includes('transfer_id TEXT NOT NULL')
+      const needsIdemKey  = !row.sql.includes('idempotency_key')
+      return needsNullable || needsIdemKey
+    },
+    run: (db) => {
+      db.exec(`
+        BEGIN;
+        CREATE TABLE pending_terminal_sales_new (
+          id               TEXT PRIMARY KEY DEFAULT ('pts_' || lower(hex(randomblob(8)))),
+          merchant_id      TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id         TEXT NOT NULL,
+          transfer_id      TEXT,
+          idempotency_key  TEXT,
+          device_id        TEXT NOT NULL,
+          amount_cents     INTEGER NOT NULL,
+          status           TEXT NOT NULL DEFAULT 'pending',
+          created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO pending_terminal_sales_new (id, merchant_id, order_id, transfer_id, device_id, amount_cents, status, created_at)
+          SELECT id, merchant_id, order_id, transfer_id, device_id, amount_cents, status, created_at FROM pending_terminal_sales;
+        DROP TABLE pending_terminal_sales;
+        ALTER TABLE pending_terminal_sales_new RENAME TO pending_terminal_sales;
+        CREATE INDEX IF NOT EXISTS idx_pts_pending
+          ON pending_terminal_sales(status) WHERE status = 'pending';
+        CREATE INDEX IF NOT EXISTS idx_pending_terminal_status
+          ON pending_terminal_sales(status, created_at) WHERE status = 'pending';
+        CREATE INDEX IF NOT EXISTS idx_pts_idempotency
+          ON pending_terminal_sales(idempotency_key) WHERE idempotency_key IS NOT NULL;
+        COMMIT;
+      `)
+    },
+  },
+
   // DEDUP-RECONCILIATIONS: Add UNIQUE constraint on payment_id and remove
   // duplicate rows created by the old INSERT OR REPLACE (which keyed on random id).
   {
@@ -1886,6 +2134,7 @@ const tableMigrations: Array<{
           receipt_email              TEXT,
           gift_card_id               TEXT,
           gift_card_tax_offset_cents INTEGER NOT NULL DEFAULT 0,
+          processor_fee_cents        INTEGER,
           created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
           completed_at               TEXT
         );
@@ -1896,7 +2145,9 @@ const tableMigrations: Array<{
           card_type, card_last_four, cardholder_name, transaction_id, processor,
           auth_code, finix_transfer_id, signature_base64, signature_captured_at,
           split_mode, split_leg_number, split_total_legs, split_items_json,
-          receipt_printed, receipt_emailed, receipt_email, created_at, completed_at
+          receipt_printed, receipt_emailed, receipt_email,
+          processor_fee_cents,
+          created_at, completed_at
         )
         SELECT
           id, order_id, merchant_id, payment_type, amount_cents,
@@ -1904,7 +2155,9 @@ const tableMigrations: Array<{
           card_type, card_last_four, cardholder_name, transaction_id, processor,
           auth_code, finix_transfer_id, signature_base64, signature_captured_at,
           split_mode, split_leg_number, split_total_legs, split_items_json,
-          receipt_printed, receipt_emailed, receipt_email, created_at, completed_at
+          receipt_printed, receipt_emailed, receipt_email,
+          processor_fee_cents,
+          created_at, completed_at
         FROM _payments_old;
         DROP TABLE _payments_old;
 
@@ -2111,25 +2364,28 @@ const tableMigrations: Array<{
     run: (db) => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS terminal_transactions (
-          id                TEXT PRIMARY KEY DEFAULT ('ttx_' || lower(hex(randomblob(8)))),
-          terminal_id       TEXT NOT NULL REFERENCES terminals(id) ON DELETE CASCADE,
-          merchant_id       TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
-          order_id          TEXT REFERENCES orders(id) ON DELETE SET NULL,
-          tx_state          TEXT NOT NULL DEFAULT 'IDLE',
-          amount_cents      INTEGER,
-          finix_transfer_id TEXT,
-          idempotency_key   TEXT,
-          card_brand        TEXT,
-          card_last_four    TEXT,
-          approval_code     TEXT,
-          decline_code      TEXT,
-          decline_message   TEXT,
-          payment_id        TEXT REFERENCES payments(id) ON DELETE SET NULL,
-          started_at        TEXT,
-          completed_at      TEXT,
-          sam_state         TEXT,
-          created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+          id                    TEXT PRIMARY KEY DEFAULT ('ttx_' || lower(hex(randomblob(8)))),
+          terminal_id           TEXT NOT NULL REFERENCES terminals(id) ON DELETE CASCADE,
+          merchant_id           TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id              TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          tx_state              TEXT NOT NULL DEFAULT 'IDLE',
+          amount_cents          INTEGER,
+          finix_transfer_id     TEXT,
+          idempotency_key       TEXT,
+          card_brand            TEXT,
+          card_last_four        TEXT,
+          approval_code         TEXT,
+          entry_mode            TEXT,
+          tip_amount_cents      INTEGER,
+          approved_amount_cents INTEGER,
+          decline_code          TEXT,
+          decline_message       TEXT,
+          payment_id            TEXT REFERENCES payments(id) ON DELETE SET NULL,
+          started_at            TEXT,
+          completed_at          TEXT,
+          sam_state             TEXT,
+          created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_terminal_tx_terminal
           ON terminal_transactions(terminal_id);
@@ -2195,6 +2451,7 @@ const tableMigrations: Array<{
           receipt_email              TEXT,
           gift_card_id               TEXT,
           gift_card_tax_offset_cents INTEGER NOT NULL DEFAULT 0,
+          processor_fee_cents        INTEGER,
           created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
           completed_at               TEXT
         );
@@ -2207,6 +2464,7 @@ const tableMigrations: Array<{
           split_mode, split_leg_number, split_total_legs, split_items_json,
           receipt_printed, receipt_emailed, receipt_email,
           gift_card_id, gift_card_tax_offset_cents,
+          processor_fee_cents,
           created_at, completed_at
         )
         SELECT
@@ -2217,6 +2475,7 @@ const tableMigrations: Array<{
           split_mode, split_leg_number, split_total_legs, split_items_json,
           receipt_printed, receipt_emailed, receipt_email,
           gift_card_id, gift_card_tax_offset_cents,
+          processor_fee_cents,
           created_at, completed_at
         FROM _payments_old;
         DROP TABLE _payments_old;
@@ -2229,6 +2488,15 @@ const tableMigrations: Array<{
       `)
       db.exec(`PRAGMA legacy_alter_table = OFF`)
       db.exec(`PRAGMA foreign_keys = ON`)
+    },
+  },
+  {
+    description: 'Add unique index on orders.feedback_token (sparse — NULL rows excluded)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_orders_feedback_token'`
+    ).get(),
+    run: (db) => {
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_feedback_token ON orders(feedback_token) WHERE feedback_token IS NOT NULL`)
     },
   },
   {
@@ -2285,6 +2553,24 @@ const tableMigrations: Array<{
       db.exec(`CREATE INDEX IF NOT EXISTS idx_payments_order_created ON payments (order_id, created_at DESC)`)
     },
   },
+  // SAFETY-01: Unique constraint on payments(order_id, finix_transfer_id) to prevent duplicate
+  // charge rows from 422-retry / concurrent terminal-sale races.
+  // SQLite UNIQUE indexes allow multiple NULLs, so cash/manual rows with
+  // finix_transfer_id IS NULL are not affected. No WHERE clause needed, and
+  // omitting it is required for ON CONFLICT DO NOTHING to work.
+  {
+    description: 'Add unique index on payments(order_id, finix_transfer_id) to prevent duplicate charge rows',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_payments_order_transfer_unique'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_transfer_unique
+          ON payments(order_id, finix_transfer_id)
+      `)
+    },
+  },
+
   // PERF-06: Partial covering index for the auto-fire scheduled order background query.
   //   SELECT o.*, m.* FROM orders o JOIN merchants m ON m.id = o.merchant_id
   //   WHERE o.status IN ('submitted', 'received') AND o.pickup_time IS NOT NULL
@@ -2303,6 +2589,782 @@ const tableMigrations: Array<{
         CREATE INDEX IF NOT EXISTS idx_orders_active_pickup
           ON orders (merchant_id, pickup_time)
           WHERE status IN ('submitted', 'received') AND pickup_time IS NOT NULL
+      `)
+    },
+  },
+
+  // KEY-TYPE-AI: Widen api_keys CHECK to include 'ai' (Anthropic API key for special instructions).
+  {
+    description: "Rebuild api_keys with key_type CHECK that includes 'ai'",
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='api_keys'`
+      ).get()
+      return !!row && !row.sql.includes("'ai'")
+    },
+    run: (db) => {
+      db.exec(`PRAGMA legacy_alter_table = ON`)
+      db.exec(`
+        BEGIN;
+        ALTER TABLE api_keys RENAME TO _api_keys_old2;
+        CREATE TABLE api_keys (
+          id TEXT PRIMARY KEY,
+          merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          key_type TEXT NOT NULL CHECK(key_type IN ('pos', 'payment', 'cloud', 'email', 'ai')),
+          provider TEXT NOT NULL,
+          encrypted_value TEXT NOT NULL,
+          pos_merchant_id TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_used_at TEXT,
+          UNIQUE(merchant_id, key_type, provider)
+        );
+        INSERT INTO api_keys SELECT
+          id, merchant_id, key_type, provider, encrypted_value,
+          pos_merchant_id, created_at, last_used_at
+        FROM _api_keys_old2;
+        DROP TABLE _api_keys_old2;
+        CREATE INDEX IF NOT EXISTS idx_api_keys_merchant ON api_keys(merchant_id);
+        COMMIT;
+      `)
+    },
+  },
+
+  // SI-1: Extra ingredients catalog for special instruction pricing.
+  {
+    description: 'Create extra_ingredients table for special instruction add/substitute pricing',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='extra_ingredients'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS extra_ingredients (
+          id           TEXT PRIMARY KEY DEFAULT ('ingr_' || lower(hex(randomblob(6)))),
+          merchant_id  TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          name         TEXT NOT NULL,
+          display_name TEXT,
+          category     TEXT NOT NULL DEFAULT 'other',
+          price_cents  INTEGER NOT NULL DEFAULT 0,
+          is_available INTEGER NOT NULL DEFAULT 1,
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(merchant_id, name)
+        );
+      `)
+    },
+  },
+
+  // SI-2: Ingredient aliases for common customer terms.
+  {
+    description: 'Create ingredient_aliases table for special instruction term mapping',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='ingredient_aliases'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ingredient_aliases (
+          id              TEXT PRIMARY KEY DEFAULT ('alia_' || lower(hex(randomblob(6)))),
+          merchant_id     TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          alias_text      TEXT NOT NULL,
+          ingredient_id   TEXT REFERENCES extra_ingredients(id) ON DELETE SET NULL,
+          suggestion_text TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(merchant_id, alias_text)
+        );
+      `)
+    },
+  },
+
+  // SI-3: Special instruction log for COSA monitoring.
+  {
+    description: 'Create special_instruction_log table for COSA monitoring of parse outcomes',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='special_instruction_log'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS special_instruction_log (
+          id               TEXT PRIMARY KEY DEFAULT ('sil_' || lower(hex(randomblob(6)))),
+          merchant_id      TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id         TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          item_id          TEXT,
+          instruction_text TEXT NOT NULL,
+          outcome          TEXT NOT NULL CHECK(outcome IN (
+            'accepted', 'declined', 'no_charge', 'unfulfillable', 'jailbreak', 'too_long', 'error'
+          )),
+          surcharge_cents  INTEGER NOT NULL DEFAULT 0,
+          occurred_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_sil_merchant_time
+          ON special_instruction_log(merchant_id, occurred_at DESC);
+      `)
+    },
+  },
+
+  // COSA-D1: System metrics table for COSA monitoring Phase D.
+  // Rolling 24-row window of hourly req_per_min samples; used for anomaly detection.
+  {
+    description: 'Create system_metrics table for COSA monitoring (hourly req_per_min baseline)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='system_metrics'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS system_metrics (
+          sampled_at TEXT NOT NULL,
+          metric     TEXT NOT NULL,
+          value      REAL NOT NULL,
+          PRIMARY KEY (sampled_at, metric)
+        )
+      `)
+    },
+  },
+
+  // COSA-C1: Payment error log table for COSA monitoring Phase C.
+  // One row per terminal/processor failure; queried by GET /api/status.
+  {
+    description: 'Create payment_errors table for COSA monitoring (terminal failures, declined, timeouts)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='payment_errors'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payment_errors (
+          id          TEXT PRIMARY KEY DEFAULT ('perr_' || lower(hex(randomblob(8)))),
+          merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id    TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          occurred_at TEXT NOT NULL DEFAULT (datetime('now')),
+          error_type  TEXT NOT NULL CHECK(error_type IN (
+                         'terminal_timeout',
+                         'terminal_declined',
+                         'terminal_cancelled',
+                         'terminal_error',
+                         'reconcile_gap',
+                         'auth_failed',
+                         'network_error',
+                         'unknown'
+                       )),
+          detail      TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_errors_merchant_time
+          ON payment_errors(merchant_id, occurred_at DESC);
+      `)
+    },
+  },
+
+  // SI-4: Remove 'declined' from special_instruction_log CHECK constraint.
+  // 'declined' was never logged by the code — the outcome is derived from
+  // the customer's UI action, not a server-side parse result.  Removing it
+  // prevents accidental inserts of a value that carries no meaning.
+  {
+    description: "Rebuild special_instruction_log without 'declined' in outcome CHECK",
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='special_instruction_log'`
+      ).get()
+      return !!row && row.sql.includes("'declined'")
+    },
+    run: (db) => {
+      db.exec(`
+        BEGIN;
+        ALTER TABLE special_instruction_log RENAME TO _sil_old;
+        CREATE TABLE special_instruction_log (
+          id               TEXT PRIMARY KEY DEFAULT ('sil_' || lower(hex(randomblob(6)))),
+          merchant_id      TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id         TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          item_id          TEXT,
+          instruction_text TEXT NOT NULL,
+          outcome          TEXT NOT NULL CHECK(outcome IN (
+            'accepted', 'no_charge', 'unfulfillable', 'jailbreak', 'too_long', 'error'
+          )),
+          surcharge_cents  INTEGER NOT NULL DEFAULT 0,
+          occurred_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO special_instruction_log
+          SELECT id, merchant_id, order_id, item_id, instruction_text,
+                 CASE WHEN outcome = 'declined' THEN 'no_charge' ELSE outcome END,
+                 surcharge_cents, occurred_at
+          FROM _sil_old;
+        DROP TABLE _sil_old;
+        CREATE INDEX IF NOT EXISTS idx_sil_merchant_time
+          ON special_instruction_log(merchant_id, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_sil_merchant_outcome_time
+          ON special_instruction_log(merchant_id, outcome, occurred_at DESC);
+        COMMIT;
+      `)
+    },
+  },
+
+  // SI-5: Add covering index on special_instruction_log(merchant_id, outcome, occurred_at)
+  // for the GET /api/status COSA query that filters by outcome.
+  {
+    description: 'Add idx_sil_merchant_outcome_time covering index on special_instruction_log',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_sil_merchant_outcome_time'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_sil_merchant_outcome_time
+          ON special_instruction_log(merchant_id, outcome, occurred_at DESC);
+      `)
+    },
+  },
+
+  // CATERING-1: Widen orders.order_type CHECK to include 'catering' for Finix payment-link orders.
+  {
+    description: "Add 'catering' to orders.order_type CHECK constraint",
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='orders'`
+      ).get()
+      return !!row && !row.sql.includes("'catering'")
+    },
+    run: (db) => {
+      db.exec(`PRAGMA foreign_keys = OFF`)
+      db.exec(`PRAGMA legacy_alter_table = ON`)
+      db.exec(`
+        BEGIN;
+        ALTER TABLE orders RENAME TO _orders_old;
+        CREATE TABLE orders (
+          id TEXT PRIMARY KEY,
+          merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          customer_name TEXT NOT NULL,
+          customer_phone TEXT,
+          customer_email TEXT,
+          items TEXT NOT NULL,
+          subtotal_cents INTEGER NOT NULL,
+          tax_cents INTEGER NOT NULL DEFAULT 0,
+          total_cents INTEGER NOT NULL,
+          status TEXT NOT NULL CHECK(status IN (
+            'pending_payment', 'received', 'submitted', 'confirmed', 'preparing',
+            'ready', 'picked_up', 'completed', 'cancelled', 'pos_error', 'paid', 'refunded'
+          )) DEFAULT 'received',
+          sam_state TEXT,
+          pos_order_id TEXT,
+          pos_provider TEXT,
+          order_type TEXT NOT NULL CHECK(order_type IN ('pickup', 'delivery', 'dine_in', 'catering')) DEFAULT 'pickup',
+          pickup_code TEXT,
+          pickup_time TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          completed_at TEXT,
+          source TEXT NOT NULL DEFAULT 'local',
+          notes TEXT,
+          utensils_needed INTEGER NOT NULL DEFAULT 0,
+          table_label TEXT,
+          room_label TEXT,
+          course_mode INTEGER NOT NULL DEFAULT 0,
+          employee_id TEXT,
+          employee_nickname TEXT,
+          tip_cents INTEGER NOT NULL DEFAULT 0,
+          paid_amount_cents INTEGER NOT NULL DEFAULT 0,
+          payment_method TEXT,
+          estimated_ready_at TEXT,
+          payment_checkout_form_id TEXT,
+          payment_transfer_id TEXT,
+          discount_cents INTEGER NOT NULL DEFAULT 0,
+          discount_label TEXT,
+          delivery_address TEXT,
+          delivery_instructions TEXT,
+          service_charge_cents INTEGER NOT NULL DEFAULT 0,
+          service_charge_label TEXT,
+          party_size INTEGER,
+          clover_order_id TEXT,
+          special_instruction_surcharge_cents INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO orders SELECT
+          id, merchant_id, customer_name, customer_phone, customer_email,
+          items, subtotal_cents, tax_cents, total_cents,
+          status, sam_state, pos_order_id, pos_provider,
+          order_type, pickup_code, pickup_time,
+          created_at, updated_at, completed_at,
+          COALESCE(source, 'local'), notes, COALESCE(utensils_needed, 0),
+          table_label, room_label, COALESCE(course_mode, 0),
+          employee_id, employee_nickname,
+          COALESCE(tip_cents, 0), COALESCE(paid_amount_cents, 0), payment_method,
+          estimated_ready_at, payment_checkout_form_id, payment_transfer_id,
+          COALESCE(discount_cents, 0), discount_label,
+          delivery_address, delivery_instructions,
+          COALESCE(service_charge_cents, 0), service_charge_label, party_size,
+          clover_order_id, COALESCE(special_instruction_surcharge_cents, 0)
+        FROM _orders_old;
+        DROP TABLE _orders_old;
+        CREATE INDEX IF NOT EXISTS idx_orders_merchant ON orders(merchant_id);
+        CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+        CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+        CREATE INDEX IF NOT EXISTS idx_orders_pickup_code ON orders(pickup_code);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_clover_order_id ON orders(clover_order_id) WHERE clover_order_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_orders_merchant_created ON orders(merchant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_orders_merchant_status_created ON orders(merchant_id, status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_orders_active_pickup ON orders(merchant_id, pickup_time)
+          WHERE status IN ('submitted', 'received') AND pickup_time IS NOT NULL;
+        COMMIT;
+      `)
+      db.exec(`PRAGMA legacy_alter_table = OFF`)
+      db.exec(`PRAGMA foreign_keys = ON`)
+    },
+  },
+  {
+    description: 'Create advance_orders table for pre-paid orders placed days/weeks in advance',
+    isNeeded: (db) => {
+      const row = db.query<{ name: string }, [string]>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
+      ).get('advance_orders')
+      return !row
+    },
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS advance_orders (
+          id                  TEXT PRIMARY KEY DEFAULT ('ao_' || lower(hex(randomblob(8)))),
+          merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          customer_name       TEXT NOT NULL,
+          customer_phone      TEXT,
+          scheduled_for       TEXT NOT NULL,
+          items               TEXT NOT NULL DEFAULT '[]',
+          notes               TEXT,
+          status              TEXT NOT NULL DEFAULT 'pending'
+                              CHECK(status IN ('pending', 'ready', 'cancelled')),
+          reminder_24h_fired  INTEGER NOT NULL DEFAULT 0,
+          reminder_day_fired  INTEGER NOT NULL DEFAULT 0,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_advance_orders_merchant_sched
+          ON advance_orders(merchant_id, scheduled_for);
+      `)
+    },
+  },
+  // ── Campaign mirror table (synced from marketing-engine redirector) ────────
+  {
+    description: 'Create campaigns mirror table for order attribution',
+    isNeeded: (db) => {
+      const row = db.query<{ name: string }, [string]>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='campaigns'`
+      ).get('campaigns')
+      return !row
+    },
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS campaigns (
+          id                    INTEGER PRIMARY KEY,
+          slug                  TEXT NOT NULL UNIQUE,
+          name                  TEXT NOT NULL,
+          channel               TEXT NOT NULL,
+          mode                  TEXT NOT NULL DEFAULT 'single',
+          coupon_code_required  INTEGER NOT NULL DEFAULT 0,
+          status                TEXT NOT NULL,
+          start_at              INTEGER NOT NULL,
+          end_at                INTEGER NOT NULL,
+          discount_type         TEXT NOT NULL,
+          discount_value        INTEGER NOT NULL,
+          min_order_cents       INTEGER NOT NULL DEFAULT 0,
+          fulfillment_restriction TEXT,
+          max_uses_per_customer INTEGER NOT NULL DEFAULT 1,
+          max_uses_global       INTEGER,
+          schedule_json         TEXT,
+          campaign_type         TEXT NOT NULL DEFAULT 'coupon',
+          target_json           TEXT,
+          trigger_json          TEXT,
+          reward_json           TEXT,
+          synced_at             INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_campaigns_slug ON campaigns(slug);
+        CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+      `)
+    },
+  },
+  // ── Campaign redemptions ──────────────────────────────────────────────────
+  {
+    description: 'Create campaign_redemptions table',
+    isNeeded: (db) => {
+      const row = db.query<{ name: string }, [string]>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='campaign_redemptions'`
+      ).get('campaign_redemptions')
+      return !row
+    },
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS campaign_redemptions (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id      INTEGER NOT NULL REFERENCES campaigns(id),
+          coupon_code      TEXT,
+          order_id         TEXT NOT NULL REFERENCES orders(id),
+          customer_phone   TEXT,
+          discount_cents   INTEGER NOT NULL,
+          ts               INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        );
+        CREATE INDEX IF NOT EXISTS idx_redemptions_campaign ON campaign_redemptions(campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_redemptions_phone ON campaign_redemptions(customer_phone, campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_redemptions_code ON campaign_redemptions(campaign_id, coupon_code);
+      `)
+    },
+  },
+
+  // SEC-005: Make campaign_redemptions.customer_phone nullable so the nightly PII purge
+  // can NULL it out after 24 hours. Existing DBs were created with NOT NULL — rebuild needed.
+  {
+    description: 'Make campaign_redemptions.customer_phone nullable for PII purge (SEC-005)',
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, [string]>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='campaign_redemptions'`
+      ).get('campaign_redemptions')
+      // Only needed if the column is still NOT NULL
+      return !!row && row.sql.includes('customer_phone   TEXT NOT NULL')
+    },
+    run: (db) => {
+      db.exec(`PRAGMA foreign_keys = OFF`)
+      db.exec(`PRAGMA legacy_alter_table = ON`)
+      db.exec(`
+        BEGIN;
+        ALTER TABLE campaign_redemptions RENAME TO _cr_pii_old;
+        CREATE TABLE campaign_redemptions (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          campaign_id      INTEGER NOT NULL REFERENCES campaigns(id),
+          coupon_code      TEXT,
+          order_id         TEXT NOT NULL REFERENCES orders(id),
+          customer_phone   TEXT,
+          discount_cents   INTEGER NOT NULL,
+          ts               INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+        );
+        INSERT INTO campaign_redemptions
+          SELECT id, campaign_id, coupon_code, order_id, customer_phone, discount_cents, ts
+          FROM _cr_pii_old;
+        DROP TABLE _cr_pii_old;
+        CREATE INDEX IF NOT EXISTS idx_redemptions_campaign ON campaign_redemptions(campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_redemptions_phone ON campaign_redemptions(customer_phone, campaign_id);
+        CREATE INDEX IF NOT EXISTS idx_redemptions_code ON campaign_redemptions(campaign_id, coupon_code);
+        COMMIT;
+      `)
+      db.exec(`PRAGMA legacy_alter_table = OFF`)
+      db.exec(`PRAGMA foreign_keys = ON`)
+    },
+  },
+  {
+    description: 'Add idx_redemptions_code composite index (campaign_id, coupon_code) for v2 coupon-code lookups',
+    isNeeded: (db) => {
+      const row = db.query<{ name: string }, [string]>(
+        `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_redemptions_code'`
+      ).get('idx_redemptions_code')
+      return !row
+    },
+    run: (db) => {
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_redemptions_code ON campaign_redemptions(campaign_id, coupon_code)`)
+    },
+  },
+  // ── Coupon hash redemptions (privacy-preserving per-customer duplicate check) ─
+  {
+    description: 'Create coupon_hash_redemptions table for hashed-identifier redemption tracking',
+    isNeeded: (db) => {
+      const row = db.query<{ name: string }, [string]>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='coupon_hash_redemptions'`
+      ).get('coupon_hash_redemptions')
+      return !row
+    },
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS coupon_hash_redemptions (
+          id              TEXT PRIMARY KEY DEFAULT ('chr_' || lower(hex(randomblob(6)))),
+          campaign_id     INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          identifier_hash TEXT NOT NULL,
+          identifier_type TEXT NOT NULL CHECK(identifier_type IN ('email', 'phone', 'name')),
+          order_id        TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          redeemed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(campaign_id, identifier_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_chr_campaign ON coupon_hash_redemptions(campaign_id);
+      `)
+    },
+  },
+  {
+    description: "Rebuild coupon_hash_redemptions CHECK to allow identifier_type 'name'",
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='coupon_hash_redemptions'`
+      ).get()
+      return !!row && !row.sql.includes("'name'")
+    },
+    run: (db) => {
+      db.exec(`PRAGMA legacy_alter_table = ON`)
+      db.exec(`
+        BEGIN;
+        ALTER TABLE coupon_hash_redemptions RENAME TO _chr_old;
+        CREATE TABLE coupon_hash_redemptions (
+          id              TEXT PRIMARY KEY DEFAULT ('chr_' || lower(hex(randomblob(6)))),
+          campaign_id     INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          identifier_hash TEXT NOT NULL,
+          identifier_type TEXT NOT NULL CHECK(identifier_type IN ('email', 'phone', 'name')),
+          order_id        TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          redeemed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(campaign_id, identifier_hash)
+        );
+        INSERT INTO coupon_hash_redemptions SELECT * FROM _chr_old;
+        DROP TABLE _chr_old;
+        CREATE INDEX IF NOT EXISTS idx_chr_campaign ON coupon_hash_redemptions(campaign_id);
+        COMMIT;
+      `)
+      db.exec(`PRAGMA legacy_alter_table = OFF`)
+    },
+  },
+
+  // ── Manager App: Phase 1 tables ──────────────────────────────────────────
+  {
+    description: 'Create manager_invites table for pending manager invitations',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='manager_invites'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS manager_invites (
+          id          TEXT PRIMARY KEY,
+          merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          email       TEXT NOT NULL,
+          token_hash  TEXT NOT NULL UNIQUE,
+          expires_at  TEXT NOT NULL,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_manager_invites_merchant ON manager_invites(merchant_id);
+      `)
+    },
+  },
+  {
+    description: 'Create supplier_receipts table for parsed OCR supplier documents',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='supplier_receipts'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS supplier_receipts (
+          id              TEXT PRIMARY KEY,
+          merchant_id     TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          ocr_name        TEXT NOT NULL UNIQUE,
+          vendor_name     TEXT NOT NULL,
+          vendor_tax_id   TEXT,
+          document_type   TEXT NOT NULL DEFAULT 'receipt',
+          document_number TEXT,
+          receipt_date    TEXT,
+          subtotal        REAL,
+          tax_amount      REAL,
+          total           REAL NOT NULL,
+          currency        TEXT NOT NULL DEFAULT 'USD',
+          raw_json        TEXT NOT NULL,
+          uploaded_by     TEXT REFERENCES users(id),
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          content_hash    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_supplier_receipts_merchant_date
+          ON supplier_receipts(merchant_id, receipt_date);
+        CREATE INDEX IF NOT EXISTS idx_supplier_receipts_content_hash
+          ON supplier_receipts(merchant_id, content_hash) WHERE content_hash IS NOT NULL;
+      `)
+    },
+  },
+  {
+    description: 'Add content_hash index to existing supplier_receipts installs',
+    isNeeded: (db) => {
+      const tbl = db.query<{ name: string }, []>(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='supplier_receipts'`
+      ).get()
+      if (!tbl) return false
+      return !db.query<{ name: string }, []>(
+        `SELECT name FROM sqlite_master WHERE type='index' AND name='idx_supplier_receipts_content_hash'`
+      ).get()
+    },
+    run: (db) => {
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_supplier_receipts_content_hash ON supplier_receipts(merchant_id, content_hash) WHERE content_hash IS NOT NULL`)
+    },
+  },
+  {
+    description: 'Create receipt_line_items table for individual line items on supplier receipts',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='receipt_line_items'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS receipt_line_items (
+          id                  TEXT PRIMARY KEY,
+          supplier_receipt_id TEXT NOT NULL REFERENCES supplier_receipts(id) ON DELETE CASCADE,
+          merchant_id         TEXT NOT NULL,
+          description         TEXT NOT NULL,
+          quantity            REAL,
+          unit                TEXT,
+          unit_price          REAL,
+          total_price         REAL NOT NULL,
+          category            TEXT,
+          ingredient_id       TEXT REFERENCES extra_ingredients(id) ON DELETE SET NULL,
+          auto_matched        INTEGER NOT NULL DEFAULT 0,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_receipt_line_items_merchant
+          ON receipt_line_items(merchant_id);
+        CREATE INDEX IF NOT EXISTS idx_receipt_line_items_ingredient
+          ON receipt_line_items(ingredient_id, merchant_id);
+      `)
+    },
+  },
+  {
+    description: 'Create ingredient_order_snoozes table for suppressing reorder warnings',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='ingredient_order_snoozes'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ingredient_order_snoozes (
+          ingredient_id TEXT NOT NULL REFERENCES extra_ingredients(id) ON DELETE CASCADE,
+          merchant_id   TEXT NOT NULL,
+          snoozed_until TEXT NOT NULL,
+          PRIMARY KEY (ingredient_id, merchant_id)
+        );
+      `)
+    },
+  },
+  {
+    description: 'Create oauth_states table (persist CSRF state across server restarts)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_states'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS oauth_states (
+          key        TEXT PRIMARY KEY,
+          value      TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        );
+      `)
+    },
+  },
+  {
+    description: 'Create oauth_sessions table (persist short-lived session tokens across server restarts)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_sessions'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS oauth_sessions (
+          key        TEXT PRIMARY KEY,
+          value      TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        );
+      `)
+    },
+  },
+  // COUPON-INSTANCES: per-scan claim tickets for QR-distributed campaigns.
+  // One row created at scan time; redeemed=1 set on order submit.
+  // Prevents coupon URL sharing — each scan gets a unique token the server requires.
+  {
+    description: 'Create coupon_instances table for scan-token-based coupon gating',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='coupon_instances'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS coupon_instances (
+          id          TEXT    PRIMARY KEY DEFAULT ('ci_' || lower(hex(randomblob(8)))),
+          campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+          scan_token  TEXT    NOT NULL UNIQUE,
+          scanned_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+          expires_at  TEXT    NOT NULL,
+          redeemed    INTEGER NOT NULL DEFAULT 0,
+          order_id    TEXT    REFERENCES orders(id) ON DELETE SET NULL,
+          redeemed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ci_scan_token ON coupon_instances(scan_token);
+        CREATE INDEX IF NOT EXISTS idx_ci_campaign   ON coupon_instances(campaign_id);
+      `)
+    },
+  },
+  {
+    description: 'Rebuild feedback table — repair order_id FK broken by orders rename migration',
+    isNeeded: (db) => {
+      const row = db.query<{ sql: string }, []>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='feedback'`
+      ).get()
+      return !!row && row.sql.includes('_orders_old')
+    },
+    run: (db) => {
+      db.exec(`PRAGMA legacy_alter_table = ON`)
+      db.exec(`
+        BEGIN;
+        ALTER TABLE feedback RENAME TO _feedback_old;
+        CREATE TABLE feedback (
+          id            TEXT PRIMARY KEY DEFAULT ('fb_' || lower(hex(randomblob(8)))),
+          merchant_id   TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id      TEXT REFERENCES orders(id) ON DELETE SET NULL,
+          type          TEXT NOT NULL CHECK(type IN ('app', 'order')),
+          stars         INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
+          comment       TEXT,
+          manager_note  TEXT,
+          dish_ratings  TEXT,
+          contact       TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO feedback SELECT * FROM _feedback_old;
+        DROP TABLE _feedback_old;
+        CREATE INDEX IF NOT EXISTS idx_feedback_merchant ON feedback(merchant_id, created_at);
+        COMMIT;
+      `)
+      db.exec(`PRAGMA legacy_alter_table = OFF`)
+    },
+  },
+
+  // ── Phase 2: order_split_sessions ────────────────────────────────────────
+  // Persists in-progress / paused split-payment sessions so staff can pause
+  // mid-split (PIN-gated) and resume from any device. The row is created on
+  // the first record-payment leg and marked 'completed' when isLastLeg is
+  // returned. PATCH /split-session/pause sets 'paused'.
+  {
+    description: 'Create order_split_sessions table (Phase 2: pause/resume splits)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='order_split_sessions'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        -- current_leg_number = "next leg to pay" = paid_leg_bases.length + 1.
+        --   After leg 1 paid: 2.   After leg 2 paid: 3.   etc.
+        --   Source of truth is paid_leg_bases_json — current_leg_number is a cached counter.
+        --
+        -- paid_indices_json: by_items only. Item indices already covered by paid legs.
+        --   Bounded by orders.items.length (typically <50, never more than ~200).
+        --
+        -- expected_total_legs: equal/custom only. NULL for by_items (variable, derived
+        --   from item coverage at record-payment time).
+        CREATE TABLE IF NOT EXISTS order_split_sessions (
+          order_id              TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+          merchant_id           TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          split_mode            TEXT NOT NULL CHECK(split_mode IN ('equal','by_items','custom')),
+          expected_total_legs   INTEGER,
+          current_leg_number    INTEGER NOT NULL,
+          paid_leg_bases_json   TEXT NOT NULL DEFAULT '[]',
+          paid_indices_json     TEXT NOT NULL DEFAULT '[]',
+          status                TEXT NOT NULL CHECK(status IN ('in_progress','paused','completed')),
+          paused_at             TEXT,
+          paused_by_employee_id TEXT,
+          created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_split_sessions_merchant_status
+          ON order_split_sessions(merchant_id, status, updated_at DESC);
+      `)
+    },
+  },
+  {
+    description: 'Create cnp_attempts table — log every card-not-present charge attempt (succeeded and failed)',
+    isNeeded: (db) => !db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='cnp_attempts'`
+    ).get(),
+    run: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cnp_attempts (
+          id                TEXT PRIMARY KEY,
+          merchant_id       TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+          order_id          TEXT,
+          amount_cents      INTEGER,
+          state             TEXT NOT NULL,
+          card_brand        TEXT,
+          card_last_four    TEXT,
+          approval_code     TEXT,
+          finix_transfer_id TEXT,
+          decline_message   TEXT,
+          created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cnp_attempts_merchant_created
+          ON cnp_attempts(merchant_id, created_at DESC);
       `)
     },
   },

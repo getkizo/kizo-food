@@ -1,0 +1,21 @@
+﻿[bluetooth]
+adapter_name = "Star Micronics"
+rfcomm_channel = 1
+pairing_mode = "just_works"   # or "pin"
+pairing_pin = "0000"
+
+[printer]
+host = "192.168.1.100"
+port = 9100
+connect_timeout_sec = 3
+write_timeout_sec = 5
+
+[queue]
+root = "/var/lib/btprint/queue"
+max_retries = 5
+initial_backoff_sec = 5
+max_backoff_sec = 300
+
+[logging]
+level = "info"
+dump_raw_payloads = false       # flip to true in Phase 0

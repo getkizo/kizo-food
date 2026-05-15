@@ -1,4 +1,4 @@
-/**
+﻿/**
  * payment-modal.css — Review & Pay modal overlay
  * Centered card dialog with dark backdrop; tablet-optimized, portrait-first layout
  */
@@ -576,50 +576,53 @@
 }
 
 /* ── Receipt options screen ────────────────────────────────────────────── */
+/* Tightened ~20% in vertical rhythm so the action bar (Done & Close Tab)
+   stays visible above the fold on the server tablet's 7" viewport. */
 
 .pm-receipt-screen {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 1.5rem 1rem;
-  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  gap: 0.5rem;
 }
 
 .pm-receipt-screen .pm-success-icon {
   text-align: center;
-  font-size: 3rem;
-  margin-bottom: 0.25rem;
+  font-size: 2rem;
+  margin-bottom: 0;
+  line-height: 1;
 }
 
 .pm-receipt-screen h3 {
   text-align: center;
-  margin: 0 0 0.5rem;
-  font-size: 1.2rem;
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
 }
 
 .pm-receipt-summary {
   background: #f9f9f9;
   border-radius: 8px;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   font-size: 0.9rem;
 }
 
 .pm-receipt-summary .pm-totals-row {
-  padding: 0.2rem 0;
+  padding: 0.15rem 0;
   font-size: 0.9rem;
 }
 
 .pm-receipt-actions {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
   padding: 0 1rem;
 }
 
 .pm-receipt-action-btn {
   width: 100%;
   font-size: 1rem;
-  padding: 0.7rem 1rem;
+  padding: 0.55rem 1rem;
 }
 
 .pm-email-receipt-row {
@@ -772,6 +775,13 @@
 
 .pm-btn-success {
   background: #27ae60;
+  color: #fff;
+}
+
+/* Used by the "Customer Left" exit option — destructive but distinct from the
+ * "Pause & Exit" red so staff don't confuse the two. Amber, not red. */
+.pm-btn-warning {
+  background: #d97706;
   color: #fff;
 }
 
@@ -943,6 +953,36 @@
   font-size: 0.9rem;
   color: #555;
   white-space: nowrap;
+}
+
+/* Already-paid items in by_items split */
+.pm-split-item-row--paid {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: default;
+}
+.pm-split-item-row--paid .pm-split-item-name,
+.pm-split-item-row--paid .pm-split-item-price {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+.pm-split-paid-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #aaa;
+}
+.pm-split-paid-divider::before,
+.pm-split-paid-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e0e0e0;
 }
 
 .pm-split-item-subtotal {

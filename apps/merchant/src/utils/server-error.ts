@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Centralised 5xx response helper.
  *
  * Logs the real error internally and returns a generic message to the client

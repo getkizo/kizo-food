@@ -1,4 +1,4 @@
-/**
+﻿/**
  * S3 auto-backup scheduler
  *
  * Fires 60 minutes after each merchant's last close time for the day.
@@ -15,6 +15,7 @@ import { getDatabase } from '../db/connection'
 import { getAPIKey } from '../crypto/api-keys'
 import { s3PutObject, type S3Config } from './s3'
 import { generateBackup } from '../routes/backup'
+import { logger } from '../utils/logger'
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 
@@ -142,7 +143,7 @@ async function runBackupForMerchant(merchantId: string, backupDate: string): Pro
     try {
       s3Config = JSON.parse(raw) as S3Config
     } catch {
-      console.warn(`[auto-backup] Bad S3 config JSON for merchant ${merchantId}`)
+      logger.warn('[auto-backup]', 'Bad S3 config JSON', { merchantId })
       return
     }
 
@@ -151,9 +152,9 @@ async function runBackupForMerchant(merchantId: string, backupDate: string): Pro
     const key = `${merchantId}/orders/${backupDate}.json`
 
     await s3PutObject(s3Config, key, body, 'application/json')
-    console.log(`[auto-backup] Uploaded s3://${s3Config.bucket}/${key}`)
+    logger.info('[auto-backup]', 'Uploaded backup', { bucket: s3Config.bucket, key })
   } catch (error) {
-    console.error(`[auto-backup] Failed for merchant ${merchantId}:`, error)
+    logger.error('[auto-backup]', 'Backup failed', { merchantId, err: String(error) })
   }
 }
 
@@ -167,7 +168,7 @@ async function runBackupForMerchant(merchantId: string, backupDate: string): Pro
  */
 async function checkAndRun(): Promise<void> {
   if (_backupUploading) {
-    console.warn('[auto-backup] skipping tick — previous upload still running')
+    logger.warn('[auto-backup]', 'Skipping tick — previous upload still running')
     return
   }
 
@@ -236,10 +237,10 @@ export function startAutoBackup(): void {
 
   schedulerTimer = setInterval(() => {
     checkAndRun().catch((err) =>
-      console.error('[auto-backup] Unhandled error during check:', err)
+      logger.error('[auto-backup]', 'Unhandled error during check', { err: String(err) })
     )
   }, 60_000)
-  console.log('[auto-backup] Scheduler started (fires 60 min after close, or 02:00 if no hours set)')
+  logger.info('[auto-backup]', 'Scheduler started (fires 60 min after close, or 02:00 if no hours set)')
 }
 
 /**
@@ -249,6 +250,6 @@ export function stopAutoBackup(): void {
   if (schedulerTimer !== null) {
     clearInterval(schedulerTimer)
     schedulerTimer = null
-    console.log('[auto-backup] Scheduler stopped')
+    logger.info('[auto-backup]', 'Scheduler stopped')
   }
 }

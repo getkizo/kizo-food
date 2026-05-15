@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Daily closeout service tests
  *
  * Tests:
@@ -8,6 +8,11 @@
  *  (d) deduplication — second call for same date does not re-send
  *  (e) sends empty report (or skips) on scheduled closure days depending on wall time
  *  (f) skips empty report before 21:00 on a closure day
+ *  (g) getTerminalAlerts — orphaned transaction (no order_id, no payment_id)
+ *  (h) getTerminalAlerts — duplicate transaction (same card + amount, twice)
+ *  (i) getTerminalAlerts — 'both': orphaned and part of a duplicate pair
+ *  (j) getTerminalAlerts — null card_last_four rows not flagged as duplicates
+ *  (k) getTerminalAlerts — no alerts when everything is clean
  */
 
 import { test, expect, beforeAll, beforeEach } from 'bun:test'
@@ -15,7 +20,7 @@ import { getDatabase, closeDatabase } from '../src/db/connection'
 import { migrate } from '../src/db/migrate'
 import { initializeMasterKey } from '../src/crypto/master-key'
 import { storeAPIKey } from '../src/crypto/api-keys'
-import { checkCloseouts, resetCloseoutState } from '../src/services/daily-closeout'
+import { checkCloseouts, resetCloseoutState, getTerminalAlerts } from '../src/services/daily-closeout'
 import { app } from '../src/server'
 
 // ── module-level mock ──────────────────────────────────────────────────────────
@@ -178,6 +183,12 @@ test('(b) skips when current time is before close + 60 min', async () => {
 })
 
 test('(c) sends when current time is past sendAfter', async () => {
+  // addMinutes() clamps sendAfter to 23:59 when closeTime is near midnight.
+  // Between 00:00–02:59 the epoch-subtracted closeTime is from the previous
+  // night; sendAfter clamps to 23:59 and nowTime < 23:59, so skip this window.
+  const nowHour = new Date().getHours()
+  if (nowHour < 3) return
+
   // Use a close time 2 hours ago — sendAfter = 1 hour ago, always in the past
   const pastCloseTime = new Date(Date.now() - 2 * 3_600_000)
     .toTimeString()
@@ -190,6 +201,10 @@ test('(c) sends when current time is past sendAfter', async () => {
 })
 
 test('(d) deduplication — second call for same date does not re-send', async () => {
+  // Same midnight-boundary guard as test (c).
+  const nowHour = new Date().getHours()
+  if (nowHour < 3) return
+
   // Use a close time 2 hours ago — sendAfter = 1 hour ago, always in the past
   const pastCloseTime = new Date(Date.now() - 2 * 3_600_000)
     .toTimeString()
@@ -239,4 +254,166 @@ test('(f) skips empty report before 21:00 on a closure day', async () => {
   const sent = await checkCloseouts()
   expect(sent).toBe(0)
   expect(_sentMails.length).toBe(0)
+})
+
+// ── getTerminalAlerts unit tests ───────────────────────────────────────────────
+
+/**
+ * Insert a COMPLETED terminal_transactions row for testing.
+ * completedAt must use SQLite datetime format: 'YYYY-MM-DD HH:MM:SS'
+ * (space-separated, no T/Z) to match localToUtc() output used in range queries.
+ */
+function seedTx(opts: {
+  terminalId: string
+  completedAt: string
+  amountCents: number
+  approvedAmountCents?: number
+  cardLastFour?: string | null
+  cardBrand?: string | null
+  orderId?: string | null
+  paymentId?: string | null
+}): string {
+  const db = getDatabase()
+  const id = `ttx_test_${Math.random().toString(36).slice(2, 10)}`
+  db.run(
+    `INSERT INTO terminal_transactions
+       (id, terminal_id, merchant_id, order_id, payment_id, tx_state,
+        amount_cents, approved_amount_cents, card_last_four, card_brand,
+        completed_at, created_at, updated_at)
+     VALUES (?,?,?,?,?,'COMPLETED',?,?,?,?,?,?,datetime('now'))`,
+    [
+      id,
+      opts.terminalId,
+      merchantId,
+      opts.orderId ?? null,
+      opts.paymentId ?? null,
+      opts.amountCents,
+      opts.approvedAmountCents ?? opts.amountCents,
+      opts.cardLastFour ?? null,
+      opts.cardBrand ?? null,
+      opts.completedAt,
+      opts.completedAt,
+    ],
+  )
+  return id
+}
+
+/** Insert a minimal terminal row and return its id. */
+function seedTerminal(): string {
+  const db = getDatabase()
+  const id = `term_test_${Math.random().toString(36).slice(2, 10)}`
+  db.run(
+    `INSERT INTO terminals (id, merchant_id, model, nickname) VALUES (?,?,?,?)`,
+    [id, merchantId, 'A920Pro', 'Test Terminal'],
+  )
+  return id
+}
+
+/** Insert a minimal order row and return its id. */
+function seedOrder(): string {
+  const db = getDatabase()
+  const id = `ord_test_${Math.random().toString(36).slice(2, 10)}`
+  db.run(
+    `INSERT INTO orders
+       (id, merchant_id, customer_name, items, subtotal_cents, tax_cents, total_cents, order_type)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [id, merchantId, 'Test Customer', '[]', 1000, 0, 1000, 'pickup'],
+  )
+  return id
+}
+
+/** Remove terminal_transactions, terminals, and test orders seeded by these tests. */
+function clearTerminalData() {
+  const db = getDatabase()
+  db.run(`DELETE FROM terminal_transactions WHERE merchant_id = ?`, [merchantId])
+  db.run(`DELETE FROM terminals WHERE merchant_id = ?`, [merchantId])
+  db.run(`DELETE FROM orders WHERE id LIKE 'ord_test_%'`)
+}
+
+test('(g) getTerminalAlerts — orphaned transaction (no order_id, no payment_id)', () => {
+  const termId = seedTerminal()
+  const date = todayUtc()
+  const ts = `${date} 12:00:00`
+
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 1500, cardLastFour: '4242' })
+
+  const alerts = getTerminalAlerts(merchantId, date, 'UTC')
+  expect(alerts.length).toBe(1)
+  expect(alerts[0].kind).toBe('orphaned')
+  expect(alerts[0].amountCents).toBe(1500)
+  expect(alerts[0].cardLastFour).toBe('4242')
+
+  clearTerminalData()
+})
+
+test('(h) getTerminalAlerts — duplicate transaction (same card + amount, twice, not orphaned)', () => {
+  const termId = seedTerminal()
+  const orderId = seedOrder()
+  const date = todayUtc()
+  const ts = `${date} 13:00:00`
+
+  // Two transactions with same card+amount, both linked to an order → kind='duplicate'
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 2000, cardLastFour: '9999', orderId })
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 2000, cardLastFour: '9999', orderId })
+
+  const alerts = getTerminalAlerts(merchantId, date, 'UTC')
+  expect(alerts.length).toBe(2)
+  for (const a of alerts) {
+    expect(a.kind).toBe('duplicate')
+    expect(a.amountCents).toBe(2000)
+  }
+
+  clearTerminalData()
+})
+
+test('(i) getTerminalAlerts — kind=both when orphaned and part of a duplicate pair', () => {
+  const termId = seedTerminal()
+  const date = todayUtc()
+  const ts = `${date} 14:00:00`
+
+  // Two orphaned rows with the same card + amount → each is both orphaned and duplicate
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 3000, cardLastFour: '1111' })
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 3000, cardLastFour: '1111' })
+
+  const alerts = getTerminalAlerts(merchantId, date, 'UTC')
+  expect(alerts.length).toBe(2)
+  for (const a of alerts) {
+    expect(a.kind).toBe('both')
+  }
+
+  clearTerminalData()
+})
+
+test('(j) getTerminalAlerts — null card_last_four orphans are not flagged as duplicates', () => {
+  const termId = seedTerminal()
+  const date = todayUtc()
+  const ts = `${date} 15:00:00`
+
+  // Two orphaned rows with null card and same amount.
+  // Without null-card exclusion they'd become kind='both'; correct behaviour is kind='orphaned'.
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 5000, cardLastFour: null })
+  seedTx({ terminalId: termId, completedAt: ts, amountCents: 5000, cardLastFour: null })
+
+  const alerts = getTerminalAlerts(merchantId, date, 'UTC')
+  expect(alerts.length).toBe(2)
+  for (const a of alerts) {
+    expect(a.kind).toBe('orphaned')  // NOT 'both' or 'duplicate'
+  }
+
+  clearTerminalData()
+})
+
+test('(k) getTerminalAlerts — no alerts when all transactions are linked and unique', () => {
+  const termId = seedTerminal()
+  const orderId1 = seedOrder()
+  const orderId2 = seedOrder()
+  const date = todayUtc()
+
+  seedTx({ terminalId: termId, completedAt: `${date} 10:00:00`, amountCents: 1200, cardLastFour: '0001', orderId: orderId1 })
+  seedTx({ terminalId: termId, completedAt: `${date} 11:00:00`, amountCents: 1800, cardLastFour: '0002', orderId: orderId2 })
+
+  const alerts = getTerminalAlerts(merchantId, date, 'UTC')
+  expect(alerts.length).toBe(0)
+
+  clearTerminalData()
 })

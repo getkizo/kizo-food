@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SQLite database connection and utilities
  * Uses bun:sqlite for embedded, zero-config database
  */
@@ -58,34 +58,42 @@ export function transaction<T>(fn: (db: Database) => T): T {
 /**
  * Type-safe query wrapper
  */
-export interface QueryOptions<T> {
+export interface QueryOptions<_T> {
   sql: string
-  params?: unknown[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params?: any[]
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function query<T = unknown>(options: QueryOptions<T>): T[] {
   const database = getDatabase()
-  const stmt = database.query<T, unknown[]>(options.sql)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stmt = database.query<T, any[]>(options.sql)
   return stmt.all(...(options.params || []))
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function queryOne<T = unknown>(options: QueryOptions<T>): T | null {
   const database = getDatabase()
-  const stmt = database.query<T, unknown[]>(options.sql)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stmt = database.query<T, any[]>(options.sql)
   return stmt.get(...(options.params || [])) || null
 }
 
 export function execute(options: QueryOptions<unknown>): void {
   const database = getDatabase()
-  database.run(options.sql, ...(options.params || []))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  database.run(options.sql, ...(options.params as any[] || []))
 }
 
 /**
  * Prepared statement cache for performance
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- cached statements have heterogeneous return types; narrowing requires a generic wrapper not worth the complexity here
 const stmtCache = new Map<string, any>()
 
-export function prepareStatement<T = unknown, P extends unknown[] = unknown[]>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function prepareStatement<T = unknown, P extends any[] = any[]>(
   sql: string
 ) {
   if (stmtCache.has(sql)) {
@@ -94,7 +102,7 @@ export function prepareStatement<T = unknown, P extends unknown[] = unknown[]>(
 
   if (stmtCache.size >= 500) {
     const first = stmtCache.keys().next().value
-    stmtCache.delete(first)
+    stmtCache.delete(first!)
   }
 
   const database = getDatabase()

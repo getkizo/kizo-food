@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Report endpoints — sales, shifts, tips
  *
  * All three reports require manager or owner role.
@@ -64,7 +64,7 @@ function localToUtc(localDate: string, localTime: string, tz: string): string {
 
 /** Convert a UTC datetime string (from SQLite) to merchant-local YYYY-MM-DD HH:MM:SS */
 function utcToLocal(utcStr: string, tz: string): string {
-  const d = new Date(utcStr.replace(' ', 'T') + 'Z')
+  const d = new Date(utcStr.replace(' ', 'T').replace(/Z?$/, 'Z'))
   const datePart = new Intl.DateTimeFormat('sv', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(d)
@@ -107,7 +107,7 @@ reports.get(
       return c.json({ error: 'Access denied' }, 403)
     }
 
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     // Fetch merchant timezone for local date calculations
@@ -134,6 +134,7 @@ reports.get(
       p_card_cents: number | null
       p_cash_cents: number | null
       p_gift_card_cents: number | null
+      processor_fee_cents: number | null
     }
 
     // Convert merchant-local date range to UTC bounds for SQL comparison
@@ -156,7 +157,8 @@ reports.get(
            COALESCE(r.refunded_cents, 0)              AS refunded_cents,
            p.p_card_cents,
            p.p_cash_cents,
-           p.p_gift_card_cents
+           p.p_gift_card_cents,
+           p.processor_fee_cents
          FROM orders o
          LEFT JOIN (
            SELECT order_id, SUM(refund_amount_cents) AS refunded_cents
@@ -168,7 +170,8 @@ reports.get(
              order_id,
              SUM(CASE WHEN payment_type = 'card'      THEN amount_cents ELSE 0 END) AS p_card_cents,
              SUM(CASE WHEN payment_type = 'cash'      THEN amount_cents ELSE 0 END) AS p_cash_cents,
-             SUM(CASE WHEN payment_type = 'gift_card' THEN amount_cents ELSE 0 END) AS p_gift_card_cents
+             SUM(CASE WHEN payment_type = 'gift_card' THEN amount_cents ELSE 0 END) AS p_gift_card_cents,
+             SUM(processor_fee_cents)                                               AS processor_fee_cents
            FROM payments WHERE merchant_id = ?
            GROUP BY order_id
          ) p ON p.order_id = o.id
@@ -193,6 +196,7 @@ reports.get(
     let cardAmountCents        = 0
     let cashAmountCents        = 0
     let giftCardAmountCents    = 0
+    let processorFeeCents      = 0
 
     const byDay: Record<string, {
       orders: number
@@ -203,6 +207,7 @@ reports.get(
       serviceChargeCents: number
       tipCents: number
       amountCollectedCents: number
+      processorFeeCents: number
     }> = {}
 
     type OrderDetail = {
@@ -217,6 +222,7 @@ reports.get(
       tipCents: number
       amountCollectedCents: number
       refundedCents: number
+      processorFeeCents: number | null
     }
     const orderRows: OrderDetail[] = []
 
@@ -229,6 +235,7 @@ reports.get(
       serviceChargeCents   += r.service_charge_cents
       tipCents             += r.tip_cents
       amountCollectedCents += r.paid_amount_cents
+      processorFeeCents    += r.processor_fee_cents ?? 0
 
       // In-restaurant orders have rows in the payments table with per-leg tender
       // breakdown (card/cash/gift_card). Online orders (Converge/Finix) have no
@@ -252,6 +259,7 @@ reports.get(
       if (!byDay[localDate]) byDay[localDate] = {
         orders: 0, grossSalesCents: 0, discountCents: 0, refundedCents: 0,
         taxCents: 0, serviceChargeCents: 0, tipCents: 0, amountCollectedCents: 0,
+        processorFeeCents: 0,
       }
       byDay[localDate].orders++
       byDay[localDate].grossSalesCents      += r.subtotal_cents
@@ -261,6 +269,7 @@ reports.get(
       byDay[localDate].serviceChargeCents   += r.service_charge_cents
       byDay[localDate].tipCents             += r.tip_cents
       byDay[localDate].amountCollectedCents += r.paid_amount_cents
+      byDay[localDate].processorFeeCents    += r.processor_fee_cents ?? 0
 
       orderRows.push({
         id: r.id,
@@ -274,6 +283,7 @@ reports.get(
         tipCents: r.tip_cents,
         amountCollectedCents: r.paid_amount_cents,
         refundedCents: r.refunded_cents,
+        processorFeeCents: r.processor_fee_cents,
       })
     }
 
@@ -316,6 +326,7 @@ reports.get(
       if (!byDay[localDate]) byDay[localDate] = {
         orders: 0, grossSalesCents: 0, discountCents: 0, refundedCents: 0,
         taxCents: 0, serviceChargeCents: 0, tipCents: 0, amountCollectedCents: 0,
+        processorFeeCents: 0,
       }
       byDay[localDate].orders++
       byDay[localDate].grossSalesCents      += g.net_revenue_cents
@@ -334,6 +345,7 @@ reports.get(
         tipCents: 0,
         amountCollectedCents: g.total_cents,
         refundedCents: 0,
+        processorFeeCents: null,
       })
     }
 
@@ -350,6 +362,7 @@ reports.get(
       serviceChargeCents: d.serviceChargeCents,
       tipCents:           d.tipCents,
       amountCollectedCents: d.amountCollectedCents,
+      processorFeeCents:  d.processorFeeCents,
     }))
 
     return c.json({
@@ -365,6 +378,7 @@ reports.get(
         tipCents,
         serviceChargeCents,
         amountCollectedCents,
+        processorFeeCents,
         tenders: { card: cardAmountCents, cash: cashAmountCents, giftCard: giftCardAmountCents },
         // Legacy aliases — kept so older client builds don't break
         totalSalesCents:   netSalesCents,
@@ -394,7 +408,7 @@ reports.get(
       return c.json({ error: 'Access denied' }, 403)
     }
 
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     // Fetch break rule and timezone from merchant profile
@@ -512,7 +526,7 @@ reports.get(
       return c.json({ error: 'Access denied' }, 403)
     }
 
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     // Fetch merchant timezone

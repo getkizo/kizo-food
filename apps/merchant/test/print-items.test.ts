@@ -1,4 +1,4 @@
-/**
+﻿/**
  * print-items utility tests
  *
  * Covers enrichItemsWithCategory:

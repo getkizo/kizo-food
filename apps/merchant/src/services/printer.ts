@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Receipt printer service
  *
  * Supported protocols:
@@ -45,6 +45,7 @@ import {
   buildCustomerBillRaster,
   buildTestPageRaster,
   buildGiftCardReceiptRaster,
+  buildCouponTicketRaster,
 } from './star-raster'
 import {
   renderHtmlToRasterBuffer,
@@ -53,7 +54,7 @@ import {
   buildCustomerBillHtml,
   buildCustomerReceiptHtml,
 } from './html-receipt'
-import type { PrintItem, KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions, GiftCardReceiptOptions } from './print-types'
+import type { KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions, GiftCardReceiptOptions, CouponTicketOptions } from './print-types'
 import { LANG, type Lang } from './print-lang'
 
 // ---------------------------------------------------------------------------
@@ -68,7 +69,10 @@ import { LANG, type Lang } from './print-lang'
 const COLS    = 42
 const COLS_2X = 21
 
-/** Blank lines at top and bottom of every ticket. */
+/** Blank lines at the top of every ticket (one line keeps the cutter clear). */
+const PRINT_HEADER_LINES = 1
+
+/** Blank lines at the bottom of every ticket (feeds past the platen before cut). */
 const PRINT_MARGIN_LINES = 10
 
 /** Standard raw-print TCP port used by Star and ESC/POS printers. */
@@ -209,6 +213,10 @@ function txt(s: string): Buffer {
   return Buffer.from(s + '\n', 'utf8')
 }
 
+function stripParens(s: string): string {
+  return s.replace(/\s*\([^)]*\)/g, '').trim()
+}
+
 function divider(ch = '-', width = COLS): Buffer {
   return txt(ch.repeat(width))
 }
@@ -256,8 +264,10 @@ function parseDate(iso?: string | null): Date {
   return new Date(iso)
 }
 
-function fmtTime(iso?: string | null): string {
-  return parseDate(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+function fmtTime(iso?: string | null, timezone?: string | null): string {
+  const fmt: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
+  if (timezone) fmt.timeZone = timezone
+  return parseDate(iso).toLocaleTimeString('en-US', fmt)
 }
 
 function fmtDate(iso?: string | null): string {
@@ -270,8 +280,8 @@ function fmtDate(iso?: string | null): string {
 
 export type { PrintItem, KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions } from './print-types'
 
-import { sortItemsByCourse, kitchenItems, course1Items, course2Items } from '../utils/course-items'
-export { sortItemsByCourse, kitchenItems, course1Items, course2Items }
+import { sortItemsByCourse, kitchenItems, course1Items, course2Items, gfItems, nonGfItems } from '../utils/course-items'
+export { sortItemsByCourse, kitchenItems, course1Items, course2Items, gfItems, nonGfItems }
 
 // ---------------------------------------------------------------------------
 // Kitchen ticket builder
@@ -315,8 +325,23 @@ export function buildKitchenTicket(opts: KitchenTicketOptions): Buffer {
   const parts: Buffer[] = [
     C.INIT,
     C.COLOR_BLACK,
-    C.FEED(PRINT_MARGIN_LINES),
+    C.FEED(PRINT_HEADER_LINES),
+  ]
 
+  if (opts.showGlutenFreeBanner) {
+    parts.push(
+      C.ALIGN_CENTER,
+      C.SIZE_2X,
+      C.BOLD_ON,
+      divider('='),
+      txt('  GLUTEN FREE'),
+      divider('='),
+      C.BOLD_OFF,
+      C.SIZE_NORMAL,
+    )
+  }
+
+  parts.push(
     C.ALIGN_CENTER,
     C.SIZE_2X,
     C.BOLD_ON,
@@ -328,7 +353,7 @@ export function buildKitchenTicket(opts: KitchenTicketOptions): Buffer {
 
     C.SIZE_2X,
     cols2(`#${shortId}`, time, COLS_2X),
-  ]
+  )
 
   const locParts: string[] = []
   if (opts.roomLabel)  locParts.push(opts.roomLabel)
@@ -344,19 +369,34 @@ export function buildKitchenTicket(opts: KitchenTicketOptions): Buffer {
 
   parts.push(C.SIZE_NORMAL, divider('='))
 
+  if (opts.scheduledFor) {
+    const readyAt = fmtTime(opts.scheduledFor, opts.timezone)
+    parts.push(
+      C.ALIGN_CENTER,
+      C.SIZE_2X,
+      C.BOLD_ON,
+      txt('SCHEDULED ORDER'),
+      txt(`Ready at ${readyAt}`),
+      C.BOLD_OFF,
+      C.SIZE_NORMAL,
+      C.ALIGN_LEFT,
+      divider('='),
+    )
+  }
+
   for (const item of sortedItems) {
     parts.push(
       C.SIZE_2X,
       C.BOLD_ON,
       C.COLOR_BLACK,
-      txt(` ${item.quantity}  ${item.dishName}`),
+      txt(` ${item.quantity}  ${stripParens(item.dishName)}`),
       C.BOLD_OFF,
     )
 
     if ((item.modifiers?.length ?? 0) > 0) {
-      parts.push(C.SIZE_DBL_H, C.COLOR_RED)
+      parts.push(C.SIZE_2X, C.COLOR_RED)
       for (const mod of item.modifiers!) {
-        parts.push(txt(`   - ${mod.name}`))
+        parts.push(txt(`   - ${stripParens(mod.name)}`))
       }
       parts.push(C.COLOR_BLACK)
     }
@@ -414,7 +454,7 @@ export function buildCounterTicket(opts: CounterTicketOptions): Buffer {
   const parts: Buffer[] = [
     C.INIT,
     C.SIZE_NORMAL,
-    C.FEED(PRINT_MARGIN_LINES),
+    C.FEED(PRINT_HEADER_LINES),
 
     C.ALIGN_CENTER,
     C.BOLD_ON,
@@ -441,15 +481,28 @@ export function buildCounterTicket(opts: CounterTicketOptions): Buffer {
 
   parts.push(divider('-', COLS))
 
+  if (opts.scheduledFor) {
+    const readyAt = fmtTime(opts.scheduledFor, opts.timezone)
+    parts.push(
+      C.ALIGN_CENTER,
+      C.BOLD_ON,
+      txt('SCHEDULED ORDER'),
+      txt(`Ready at ${readyAt}`),
+      C.BOLD_OFF,
+      C.ALIGN_LEFT,
+      divider('-', COLS),
+    )
+  }
+
   for (const item of opts.items) {
-    parts.push(txt(` ${item.quantity}  ${item.dishName}`))
+    parts.push(txt(` ${item.quantity}  ${stripParens(item.dishName)}`))
 
     if ((item.modifiers?.length ?? 0) > 0) {
       for (const mod of item.modifiers!) {
         const extra = mod.priceCents !== 0
           ? `  ${mod.priceCents > 0 ? '+' : ''}${fmtCents(Math.abs(mod.priceCents))}`
           : ''
-        parts.push(txt(`       - ${mod.name}${extra}`))
+        parts.push(txt(`       - ${stripParens(mod.name)}${extra}`))
       }
     }
 
@@ -871,6 +924,7 @@ async function connectAndPrintLinux(ip: string, port: number, data: Buffer): Pro
     let offset = 0                                        // bytes written so far
     let endTimer: ReturnType<typeof setTimeout> | null = null
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bun:net Socket lacks full TypeScript bindings; using any avoids a cast on every write call
     function writeRemaining(socket: any) {
       while (offset < data.length) {
         const chunk = data.subarray(offset)
@@ -1016,7 +1070,7 @@ async function webprntWithFallback(
       await connectAndPrint(ip, tcpPort, await rasterBuffer())
       return { webprntFallbackUsed: true }
     } else {
-      throw err
+      throw new Error(`[printer] webprnt fallback failed for ${ip}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
     }
   }
 }
@@ -1064,13 +1118,11 @@ export async function printDiagnostic(ip: string, port = PRINTER_TCP_PORT): Prom
 
   // ─── Test 1: HTTP probe — is the printer's web server reachable? ───
   console.log(`\n[printer] ═══ Diagnostic 1: HTTP probe http://${ip}/ ═══`)
-  let httpReachable = false
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 4000)
     const res = await fetch(`http://${ip}/`, { signal: controller.signal })
     clearTimeout(timer)
-    httpReachable = true
     const bodySnippet = await res.text().catch(() => '')
     const isStar = bodySnippet.includes('Star') || bodySnippet.includes('star') || bodySnippet.includes('TSP')
     console.log(`[printer] ✓ HTTP ${res.status} — ${isStar ? 'Star printer web UI detected' : 'web server responded'}`)
@@ -1315,7 +1367,7 @@ export async function printCustomerBill(opts: CustomerBillOptions): Promise<{ we
   console.log(`[printer] Customer bill: style=${opts.receiptStyle} protocol=${opts.printerProtocol} ip=${opts.printerIp} → ${useHtml ? 'HTML/Puppeteer' : opts.printerProtocol === 'star-graphic' ? 'star-raster' : 'text-mode'}`)
   if (useHtml) {
     await connectAndPrint(opts.printerIp, opts.printerPort ?? PRINTER_TCP_PORT,
-      await renderHtmlToRasterBuffer(buildCustomerBillHtml(opts)))
+      await renderHtmlToRasterBuffer(await buildCustomerBillHtml(opts)))
     return { webprntFallbackUsed: false }
   }
   if (opts.printerProtocol === 'webprnt') {
@@ -1409,4 +1461,15 @@ export async function printGiftCardReceipt(opts: GiftCardReceiptOptions): Promis
   } else {
     await connectAndPrint(opts.printerIp, opts.printerPort ?? PRINTER_TCP_PORT, buildGiftCardReceiptText(opts))
   }
+}
+
+/**
+ * Print a marketing coupon ticket to the counter printer.
+ *
+ * Coupon tickets use the raster path (receiptline) for all protocols because
+ * they contain a QR code, which text-mode Star Line / ESC/POS cannot render.
+ * Callers should route to the counter printer IP/protocol, not the receipt printer.
+ */
+export async function printCouponTicket(opts: CouponTicketOptions): Promise<void> {
+  await connectAndPrint(opts.printerIp, opts.printerPort ?? PRINTER_TCP_PORT, await buildCouponTicketRaster(opts))
 }

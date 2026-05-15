@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Dashboard - Kizo Register</title>
+  <title>Dashboard - Kizo Merchant</title>
 
   <!-- PWA -->
   <link rel="manifest" href="/manifest.json">
@@ -17,9 +17,9 @@
 
   <!-- Styles -->
   <link rel="stylesheet" href="/css/styles.css?v=3">
-  <link rel="stylesheet" href="/css/dashboard.css?v=67">
-  <link rel="stylesheet" href="/css/order-entry.css?v=23">
-  <link rel="stylesheet" href="/css/payment-modal.css?v=10">
+  <link rel="stylesheet" href="/css/dashboard.css?v=93">
+  <link rel="stylesheet" href="/css/order-entry.css?v=31">
+  <link rel="stylesheet" href="/css/payment-modal.css?v=12">
 
   <style>
     /* View Transitions API — smooth tab switching */
@@ -94,6 +94,12 @@
         </a>
       </li>
       <li>
+        <a href="#special-instructions" class="sidebar-link" data-section="special-instructions">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z"/><path d="M12 8v4l3 3"/></svg>
+          Special Instructions
+        </a>
+      </li>
+      <li>
         <a href="#orders" class="sidebar-link" data-section="orders">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
           Orders
@@ -142,6 +148,12 @@
         </a>
       </li>
       <li>
+        <a href="#oos" class="sidebar-link" data-section="oos">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+          86'd
+        </a>
+      </li>
+      <li>
         <a href="#maintenance" class="sidebar-link" data-section="maintenance">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
           Maintenance
@@ -153,20 +165,21 @@
           Health
         </a>
       </li>
+      <li>
+        <a href="#weather" class="sidebar-link" data-section="weather">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>
+          Weather
+        </a>
+      </li>
     </ul>
-    <!-- Background sync status indicator -->
-    <div id="sync-indicator" class="sync-indicator" role="status" aria-live="polite" aria-atomic="true" hidden>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
-      <span id="sync-indicator-text">Syncing…</span>
-    </div>
     <div class="sidebar-footer">
-      <button id="emp-return-keypad-btn" class="sidebar-link sidebar-return-keypad" type="button" hidden>
+      <button id="emp-return-keypad-btn" class="sidebar-link sidebar-return-keypad" type="button">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-        Return to Keypad
+        Switch Employee
       </button>
       <button id="logout-btn" class="sidebar-link sidebar-logout" type="button">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Log out
+        Sign out
       </button>
     </div>
   </nav>
@@ -355,6 +368,29 @@
                       </label>
                       <button type="button" class="btn btn-danger btn-sm" id="finix-remove-btn">Remove credentials</button>
                     </div>
+
+                    <!-- Finix webhook bearer token -->
+                    <div class="finix-webhook-secret-section">
+                      <div class="finix-webhook-secret-header">
+                        <span class="finix-webhook-secret-label">Webhook Bearer Token</span>
+                        <span id="finix-webhook-status-badge" class="payment-status-badge badge-inactive">Not set</span>
+                      </div>
+                      <p class="finix-webhook-secret-hint">
+                        Generate a random token (e.g. <code>openssl rand -hex 32</code>), save it here,
+                        then paste the same value into Finix Dashboard → Developer → Webhooks → Bearer Token.
+                        Finix will send it as <code>Authorization: Bearer …</code> on every event.
+                      </p>
+                      <div id="finix-webhook-set-view">
+                        <div class="finix-webhook-secret-row">
+                          <input type="password" id="finix-webhook-secret-input" class="input input-sm"
+                            placeholder="Paste bearer token here" autocomplete="new-password" spellcheck="false">
+                          <button type="button" class="btn btn-primary btn-sm" id="finix-webhook-secret-save-btn">Save</button>
+                        </div>
+                      </div>
+                      <div id="finix-webhook-remove-view" hidden>
+                        <button type="button" class="btn btn-ghost btn-sm" id="finix-webhook-secret-remove-btn">Remove bearer token</button>
+                      </div>
+                    </div>
                   </div>
 
                   <!-- Setup state -->
@@ -385,6 +421,36 @@
                     <div class="finix-save-row">
                       <button type="button" class="btn btn-primary btn-sm" id="finix-save-btn">Save Finix credentials</button>
                     </div>
+                  </div>
+                </div>
+
+                <!-- Dine-in Terminal toggle — shown only when Finix is configured + Clover is configured -->
+                <div id="dine-in-provider-row" class="payment-provider-card" hidden>
+                  <div class="payment-provider-header">
+                    <span class="payment-provider-name">Dine-in Terminal</span>
+                    <span class="payment-status-badge badge-active">Live switch</span>
+                  </div>
+                  <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 10px">
+                    Choose which terminal handles dine-in card payments. Takes effect immediately.
+                  </p>
+                  <div class="dine-in-toggle-row">
+                    <button type="button" class="btn dine-in-btn" id="dine-in-btn-finix" data-value="finix">Finix A920 Pro</button>
+                    <button type="button" class="btn dine-in-btn" id="dine-in-btn-clover" data-value="clover">Clover Flex</button>
+                  </div>
+                </div>
+
+                <!-- Counter Terminal toggle — shown only when Clover is configured (Finix D135 is the default) -->
+                <div id="counter-provider-row" class="payment-provider-card" hidden>
+                  <div class="payment-provider-header">
+                    <span class="payment-provider-name">Counter Terminal</span>
+                    <span class="payment-status-badge badge-active">Live switch</span>
+                  </div>
+                  <p style="font-size:0.85rem;color:var(--text-muted);margin:0 0 10px">
+                    Choose which terminal handles counter card payments. Takes effect immediately.
+                  </p>
+                  <div class="dine-in-toggle-row">
+                    <button type="button" class="btn dine-in-btn" id="counter-btn-finix" data-value="finix">Finix D135</button>
+                    <button type="button" class="btn dine-in-btn" id="counter-btn-clover" data-value="clover">Clover Flex</button>
                   </div>
                 </div>
 
@@ -619,6 +685,17 @@
                   </div>
                   <small class="helper-text">Select 2 to 4 tip percentages shown on the terminal screen.</small>
                 </div>
+              </div>
+
+              <!-- ── Signature Capture (Kizo tablet) ─────────────────── -->
+              <div class="form-group full-width">
+                <label>Signature Capture</label>
+                <label class="profile-toggle-row" for="store-signature-capture">
+                  <input type="checkbox" id="store-signature-capture" class="profile-toggle-check" checked>
+                  <span class="profile-toggle-knob" aria-hidden="true"></span>
+                  <span>Capture customer signature on the Kizo tablet</span>
+                </label>
+                <small class="helper-text">Turn off if customers sign on the payment terminal instead. Only affects card payments on tablets with a screen.</small>
               </div>
 
               <!-- ── Discount Presets ────────────────────────────────────── -->
@@ -915,6 +992,15 @@
             <p class="field-hint" style="margin-top:.375rem">Leave blank to show no welcome message.</p>
           </div>
 
+          <div class="form-group full-width">
+            <label for="ga-tag-id-input" class="brand-image-label">
+              Google Analytics Tag ID
+              <span class="label-hint">Measurement ID from your GA4 property</span>
+            </label>
+            <input id="ga-tag-id-input" type="text" class="input" placeholder="G-XXXXXXXXXX" maxlength="30" spellcheck="false">
+            <p class="field-hint" style="margin-top:.375rem">Leave blank to disable analytics. Changes take effect on the next store page load.</p>
+          </div>
+
         </div>
 
         <div class="card dash-card">
@@ -1000,6 +1086,10 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/></svg>
               Rotate
             </button>
+            <label class="layout-no-res-label" style="margin-left:16px;display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="layout-table-no-res">
+              Walk-in only (no reservations)
+            </label>
           </div>
 
           <!-- Table Groups — combinable tables for large parties -->
@@ -1088,6 +1178,37 @@
           </div>
         </div>
 
+        <!-- Manager App Access -->
+        <div class="card dash-card" id="manager-access-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Manager App Access</h2>
+              <p class="card-subtitle">Invite managers to <code>/manager-app</code> for invoice scanning and cost reports. They sign in with Google using the emailed link.</p>
+            </div>
+          </div>
+
+          <div class="manager-section">
+            <h3 class="card-section-title">Active Managers</h3>
+            <ul id="manager-users-list" class="manager-list" aria-label="Active managers"></ul>
+            <p id="manager-users-empty" class="helper-text" hidden>No active managers yet.</p>
+          </div>
+
+          <div class="manager-section">
+            <h3 class="card-section-title">Pending Invites</h3>
+            <ul id="manager-invites-list" class="manager-list" aria-label="Pending invites"></ul>
+            <p id="manager-invites-empty" class="helper-text" hidden>No pending invites.</p>
+          </div>
+
+          <div class="form-group" style="margin-top:1.25rem">
+            <label class="form-label" for="manager-invite-email">Invite by email</label>
+            <div class="input-row">
+              <input type="email" id="manager-invite-email" class="input" placeholder="manager@example.com" autocomplete="off">
+              <button type="button" class="btn btn-primary" id="manager-invite-btn">Send Invite</button>
+            </div>
+            <p id="manager-invite-status" class="helper-text" hidden></p>
+          </div>
+        </div>
+
       </section>
 
       <!-- ================================================================ -->
@@ -1100,11 +1221,20 @@
           <div class="oe-type-bar" role="group" aria-label="Order type">
             <button class="oe-type-pill active" data-type="dine_in" aria-pressed="true">Dine-in</button>
             <button class="oe-type-pill" data-type="pickup" aria-pressed="false">Takeout</button>
+            <button type="button" class="oe-type-pill oe-online-pause-btn" id="online-pause-btn"
+                    title="Pause or resume online ordering">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              Online
+            </button>
           </div>
           <div class="oe-room-pills" id="oe-room-pills"></div>
           <div class="oe-edit-banner" id="oe-edit-banner" hidden>
             <span class="oe-edit-banner-text">Editing <strong id="oe-edit-order-id"></strong></span>
             <button type="button" class="oe-edit-cancel-btn" id="oe-edit-cancel-btn">Cancel Edit</button>
+          </div>
+          <div class="oe-stash-banner" id="oe-stash-banner" hidden>
+            <span class="oe-stash-banner-text" id="oe-stash-banner-text">Parked order</span>
+            <button type="button" class="oe-stash-resume-btn" id="oe-stash-resume-btn">Resume</button>
           </div>
           <div class="oe-lang-bar" role="group" aria-label="Ticket language">
             <button type="button" class="oe-lang-btn" data-lang="en" aria-pressed="true">EN</button>
@@ -1146,8 +1276,11 @@
             <div class="oe-order-panel">
 
               <div class="oe-order-header">
-                <h2 class="oe-order-title">Current Order</h2>
-                <button type="button" class="oe-order-clear-btn" id="oe-clear-btn" title="Cancel this order">Cancel Order</button>
+                <h2 class="oe-order-title" id="oe-order-title">Current Order</h2>
+                <div class="oe-order-header-actions">
+                  <button type="button" class="oe-move-table-btn" id="oe-move-table-btn" title="Move this order to a different table" hidden>Move Table</button>
+                  <button type="button" class="oe-order-clear-btn" id="oe-clear-btn" title="Cancel this order">Cancel Order</button>
+                </div>
               </div>
 
               <div class="oe-order-items" id="oe-order-items" aria-label="Order items" aria-live="polite">
@@ -1198,7 +1331,7 @@
         <div class="oe-confirm-overlay" id="oe-confirm-overlay" hidden aria-modal="true" role="alertdialog" aria-labelledby="oe-confirm-title">
           <div class="oe-confirm-dialog">
             <p class="oe-confirm-title" id="oe-confirm-title">Cancel this order?</p>
-            <p class="oe-confirm-body">All items will be removed.</p>
+            <p class="oe-confirm-body" id="oe-confirm-body">All items will be removed.</p>
             <div class="oe-confirm-actions">
               <button type="button" class="btn btn-secondary oe-confirm-btn-cancel" id="oe-confirm-btn-cancel">Keep order</button>
               <button type="button" class="btn btn-danger oe-confirm-btn-ok" id="oe-confirm-btn-ok">Cancel order</button>
@@ -1243,6 +1376,14 @@
                 </svg>
                 Voice
               </button>
+              <button class="btn btn-secondary btn-sm" id="menu-export-md-btn" type="button" title="Download menu as Markdown">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Export .md
+              </button>
+              <button class="btn btn-secondary btn-sm" id="menu-export-pdf-btn" type="button" title="Download menu as PDF">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                Export PDF
+              </button>
             </div>
           </div>
 
@@ -1267,7 +1408,224 @@
 
       </section>
 
+      <!-- PDF export modal -->
+      <div id="menu-pdf-modal" class="picker-modal" role="dialog" aria-modal="true"
+           aria-labelledby="menu-pdf-modal-title" hidden>
+        <div class="picker-modal-inner menu-pdf-modal-inner">
+          <div class="picker-modal-header">
+            <h2 id="menu-pdf-modal-title" class="picker-modal-title">Export Menu as PDF</h2>
+            <button type="button" class="btn-close" id="menu-pdf-modal-close" aria-label="Close">&times;</button>
+          </div>
+          <div class="menu-pdf-modal-body">
+
+            <!-- Format + Orientation row -->
+            <div class="menu-pdf-row">
+              <div>
+                <label class="menu-pdf-field-label" for="menu-pdf-format">Page Format</label>
+                <select id="menu-pdf-format" class="form-control">
+                  <option value="Letter">Letter (8.5 × 11 in)</option>
+                  <option value="Tabloid">Tabloid (11 × 17 in)</option>
+                  <option value="Legal">Legal (8.5 × 14 in)</option>
+                  <option value="half-letter">Half Letter (5.5 × 8.5 in)</option>
+                  <option value="4x6">4 × 6 in</option>
+                </select>
+              </div>
+              <div>
+                <span class="menu-pdf-field-label">Orientation</span>
+                <div class="menu-pdf-orientation-group">
+                  <label>
+                    <input type="radio" name="menu-pdf-orientation" value="portrait" checked>
+                    <span class="menu-pdf-orientation-icon portrait"></span>
+                    Portrait
+                  </label>
+                  <label>
+                    <input type="radio" name="menu-pdf-orientation" value="landscape">
+                    <span class="menu-pdf-orientation-icon landscape"></span>
+                    Landscape
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Include images -->
+            <div>
+              <label class="menu-pdf-checkbox-row">
+                <input type="checkbox" id="menu-pdf-images">
+                Include item images
+              </label>
+            </div>
+
+            <!-- Category selector -->
+            <div>
+              <div class="menu-pdf-cat-header">
+                <span class="menu-pdf-field-label" style="margin:0">Categories</span>
+                <button type="button" class="btn-link" id="menu-pdf-cat-toggle">Deselect all</button>
+              </div>
+              <div class="menu-pdf-cat-list" id="menu-pdf-cat-list">
+                <!-- populated by JS -->
+              </div>
+            </div>
+
+          </div>
+          <div class="picker-modal-footer">
+            <button class="btn btn-ghost" id="menu-pdf-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" id="menu-pdf-generate-btn">Generate PDF</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ================================================================ -->
+      <!-- SPECIAL INSTRUCTIONS                                               -->
+      <!-- ================================================================ -->
+      <section id="section-special-instructions" class="dash-section" aria-label="Special Instructions" hidden>
+
+        <div class="section-header-row">
+          <div>
+            <h2 class="section-title">Special Instructions</h2>
+            <p class="section-subtitle">Manage add-on ingredients and the AI key that powers dish-note parsing.</p>
+          </div>
+        </div>
+
+        <!-- AI Key -->
+        <div class="profile-card" style="margin-bottom:24px">
+          <h3 class="profile-card-title">AI Features</h3>
+          <div class="form-row">
+            <div class="form-group" style="flex:1">
+              <label for="ai-key-input">Anthropic API Key</label>
+              <input id="ai-key-input" type="password" class="form-control" placeholder="sk-ant-…" autocomplete="off">
+              <small class="helper-text">Used to parse customer dish notes. Stored encrypted. Owner only.</small>
+            </div>
+            <div class="form-group" style="align-self:flex-end">
+              <span id="ai-key-status-badge" class="status-badge status-badge--gray">Not set</span>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="ai-key-save-btn">Save Key</button>
+            <button type="button" class="btn btn-danger btn-sm" id="ai-key-remove-btn" hidden>Remove Key</button>
+          </div>
+        </div>
+
+        <!-- Extra Ingredients -->
+        <div class="profile-card" style="margin-bottom:24px">
+          <div class="card-header-row">
+            <h3 class="profile-card-title">Extra Ingredients</h3>
+            <button type="button" class="btn btn-primary btn-sm" id="ingr-add-btn">+ Add ingredient</button>
+          </div>
+          <p class="section-subtitle" style="margin-bottom:12px">Ingredients customers can request to add or substitute, and their prices.</p>
+
+          <div id="ingr-add-form" class="inline-add-form" hidden>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Name <small>(canonical, lowercase)</small></label>
+                <input id="ingr-name-input" type="text" class="form-control" placeholder="e.g. shrimp" maxlength="80">
+              </div>
+              <div class="form-group">
+                <label>Display Name</label>
+                <input id="ingr-display-input" type="text" class="form-control" placeholder="e.g. Shrimp" maxlength="80">
+              </div>
+              <div class="form-group">
+                <label>Category</label>
+                <select id="ingr-category-select" class="form-control">
+                  <option value="protein">Protein</option>
+                  <option value="vegetable">Vegetable</option>
+                  <option value="sauce">Sauce</option>
+                  <option value="spice">Spice</option>
+                  <option value="dairy">Dairy</option>
+                  <option value="other" selected>Other</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Price ($)</label>
+                <input id="ingr-price-input" type="number" class="form-control" min="0" step="0.01" value="0.00" style="width:90px">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="ingr-save-btn">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="ingr-cancel-btn">Cancel</button>
+            </div>
+          </div>
+
+          <table class="data-table" id="ingr-table">
+            <thead>
+              <tr>
+                <th>Name</th><th>Category</th><th>Price</th><th>Available</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="ingr-tbody">
+              <tr><td colspan="5" class="table-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Ingredient Aliases -->
+        <div class="profile-card">
+          <div class="card-header-row">
+            <h3 class="profile-card-title">Ingredient Aliases</h3>
+            <button type="button" class="btn btn-primary btn-sm" id="alias-add-btn">+ Add alias</button>
+          </div>
+          <p class="section-subtitle" style="margin-bottom:12px">Map customer terms (e.g. "chili oil") to ingredients or show a suggestion.</p>
+
+          <div id="alias-add-form" class="inline-add-form" hidden>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Alias Text</label>
+                <input id="alias-text-input" type="text" class="form-control" placeholder="e.g. chili oil" maxlength="120">
+              </div>
+              <div class="form-group" style="flex:1">
+                <label>Resolves To</label>
+                <select id="alias-ingredient-select" class="form-control">
+                  <option value="">— Not available —</option>
+                </select>
+              </div>
+              <div class="form-group" style="flex:1">
+                <label>Suggestion Text <small>(shown when not available)</small></label>
+                <input id="alias-suggestion-input" type="text" class="form-control" placeholder="e.g. dry chili flakes or sriracha" maxlength="200">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="alias-save-btn">Save</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="alias-cancel-btn">Cancel</button>
+            </div>
+          </div>
+
+          <table class="data-table" id="alias-table">
+            <thead>
+              <tr>
+                <th>Alias</th><th>Resolves To</th><th>Suggestion</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="alias-tbody">
+              <tr><td colspan="4" class="table-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Recent Activity Log -->
+        <div class="profile-card" style="margin-top:24px">
+          <div class="card-header-row">
+            <h3 class="profile-card-title">Recent Activity <span class="text-muted" style="font-size:13px;font-weight:400">(last 3 days)</span></h3>
+            <button type="button" class="btn btn-ghost btn-sm" id="sil-refresh-btn">Refresh</button>
+          </div>
+          <p class="section-subtitle" style="margin-bottom:12px">Every special instruction parsed by Claude, and what was decided.</p>
+          <table class="data-table" id="sil-table">
+            <thead>
+              <tr>
+                <th style="width:130px">Time</th>
+                <th>Instruction</th>
+                <th>Item</th>
+                <th>Outcome</th>
+                <th style="width:80px">Surcharge</th>
+                <th style="width:90px">Order</th>
+              </tr>
+            </thead>
+            <tbody id="sil-tbody">
+              <tr><td colspan="6" class="table-empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
       <!-- MODIFIERS                                                          -->
       <!-- ================================================================ -->
       <section id="section-modifiers" class="dash-section" aria-label="Modifier groups" hidden>
@@ -1317,6 +1675,7 @@
               <button type="button" class="btn btn-secondary btn-sm" id="orders-custom-apply">Apply</button>
             </div>
           </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="manual-order-btn">+ New Manual Order</button>
           <!-- Sync from Clover button hidden — backend code retained for future use -->
           <button type="button" class="btn btn-primary btn-sm" id="sync-orders-btn" hidden>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
@@ -1340,10 +1699,32 @@
             Payments
             <span class="orders-tab-badge orders-tab-badge--alert" id="payments-alert-badge" hidden>!</span>
           </button>
+          <button type="button" class="orders-tab" role="tab"
+                  aria-selected="false" data-tab="future" id="tab-future">
+            Future Orders
+          </button>
+        </div>
+
+
+        <!-- Table / order-type quick filter (in-store tab only) -->
+        <div id="table-filter-bar" class="tbl-filter-bar" hidden></div>
+
+        <!-- Future Orders tab content -->
+        <div id="future-orders-panel" hidden>
+          <div class="future-orders-header">
+            <h3 class="future-orders-title">Future Orders</h3>
+            <button type="button" class="btn btn-primary btn-sm" id="future-order-new-btn">+ New Order</button>
+          </div>
+          <div id="future-orders-loading" class="orders-loading" hidden>Loading…</div>
+          <div id="future-orders-empty" class="orders-empty" hidden>No upcoming advance orders.</div>
+          <div id="future-orders-list"></div>
         </div>
 
         <!-- Payments tab content -->
         <div id="payments-panel" hidden>
+          <div class="payments-toolbar">
+            <button type="button" class="btn btn-secondary btn-sm" id="terminal-status-btn">📟 Terminal Status</button>
+          </div>
           <div id="payments-loading" class="orders-loading" hidden>Loading payments…</div>
           <div id="payments-empty" class="orders-empty" hidden>No payments found for this period.</div>
           <div id="payments-summary" class="payments-summary" hidden></div>
@@ -1380,6 +1761,11 @@
             <span class="orders-fin-item">
               <span class="orders-fin-label">Tips</span>
               <span class="orders-fin-value" id="orders-fin-tips"></span>
+            </span>
+            <span class="orders-fin-sep" id="orders-fin-fees-sep" aria-hidden="true" hidden>·</span>
+            <span class="orders-fin-item" id="orders-fin-fees-wrap" hidden>
+              <span class="orders-fin-label">Fees</span>
+              <span class="orders-fin-value" id="orders-fin-fees"></span>
             </span>
             <span class="orders-fin-sep" aria-hidden="true">·</span>
             <span class="orders-fin-item orders-fin-item--total">
@@ -1512,9 +1898,10 @@
 
         <!-- Sub-tabs -->
         <div class="reports-subtabs" role="tablist" aria-label="Report type">
-          <button class="reports-subtab-btn active" data-report="sales"  role="tab" aria-selected="true"  aria-controls="reports-panel-sales">Sales</button>
-          <button class="reports-subtab-btn"         data-report="shifts" role="tab" aria-selected="false" aria-controls="reports-panel-shifts">Shifts</button>
-          <button class="reports-subtab-btn"         data-report="tips"   role="tab" aria-selected="false" aria-controls="reports-panel-tips">Tips</button>
+          <button class="reports-subtab-btn active" data-report="sales"        role="tab" aria-selected="true"  aria-controls="reports-panel-sales">Sales</button>
+          <button class="reports-subtab-btn"         data-report="shifts"      role="tab" aria-selected="false" aria-controls="reports-panel-shifts">Shifts</button>
+          <button class="reports-subtab-btn"         data-report="tips"        role="tab" aria-selected="false" aria-controls="reports-panel-tips">Tips</button>
+          <button class="reports-subtab-btn"         data-report="open-splits" role="tab" aria-selected="false" aria-controls="reports-panel-open-splits">Partial Payments <span class="reports-subtab-badge" id="open-splits-count" hidden>0</span></button>
         </div>
 
         <!-- Shared date/preset controls -->
@@ -1569,15 +1956,37 @@
                 <tr>
                   <th>Employee</th>
                   <th>Role</th>
-                  <th>Date</th>
-                  <th>Clock In</th>
-                  <th>Clock Out</th>
-                  <th class="num">Hours</th>
+                  <th class="num">Shifts</th>
+                  <th class="num">Total Hours</th>
                 </tr>
               </thead>
               <tbody id="shifts-tbody"></tbody>
             </table>
             <div class="reports-empty" id="shifts-empty" hidden>No shifts recorded in this period.</div>
+
+            <!-- Shift detail modal -->
+            <div id="shifts-detail-modal" class="picker-modal" role="dialog" aria-modal="true"
+                 aria-labelledby="shifts-detail-modal-title" hidden>
+              <div class="picker-modal-inner shifts-detail-modal-inner">
+                <div class="picker-modal-header">
+                  <h2 id="shifts-detail-modal-title" class="picker-modal-title">Shifts</h2>
+                  <button type="button" class="btn-close" id="shifts-detail-modal-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="shifts-detail-modal-body">
+                  <table class="reports-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Clock In</th>
+                        <th>Clock Out</th>
+                        <th class="num">Hours</th>
+                      </tr>
+                    </thead>
+                    <tbody id="shifts-detail-tbody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1606,6 +2015,31 @@
               <tbody id="tips-tbody"></tbody>
             </table>
             <div class="reports-empty" id="tips-empty" hidden>No tips recorded in this period.</div>
+          </div>
+        </div>
+
+        <!-- ── Partial Payments panel (Phase 5: paused split sessions) ─── -->
+        <div id="reports-panel-open-splits" class="reports-panel" role="tabpanel" aria-label="Partial payments report" hidden>
+          <p class="reports-panel-intro">
+            Orders where a customer started but did not finish a split payment.
+            At end-of-day, write off the unpaid balance as a discount to close out the order.
+          </p>
+          <div class="reports-table-wrap">
+            <table class="reports-table" id="open-splits-table" hidden>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Split mode</th>
+                  <th class="num">Order total</th>
+                  <th class="num">Paid (pre-tip)</th>
+                  <th class="num">Unpaid base</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="open-splits-tbody"></tbody>
+            </table>
+            <div class="reports-empty" id="open-splits-empty" hidden>No partial-payment orders.</div>
           </div>
         </div>
 
@@ -1854,6 +2288,13 @@
           <span id="res-upcoming-list"></span>
         </div>
 
+        <!-- Busy mode active banner -->
+        <div id="res-busy-bar" class="res-busy-bar" hidden>
+          <span class="res-busy-bar-dot" aria-hidden="true"></span>
+          <span>Busy mode — walk-ins only until <strong id="res-busy-until-label"></strong></span>
+          <button type="button" class="btn btn-sm res-busy-clear-btn" id="res-busy-clear-btn">Turn off</button>
+        </div>
+
         <!-- Date navigation + header actions -->
         <div class="res-date-nav">
           <button type="button" class="btn btn-secondary btn-sm" id="res-prev-day" aria-label="Previous day">&#8592;</button>
@@ -1861,6 +2302,25 @@
           <button type="button" class="btn btn-secondary btn-sm" id="res-next-day" aria-label="Next day">&#8594;</button>
           <button type="button" class="btn btn-secondary btn-sm" id="res-today-btn">Today</button>
           <div style="flex:1"></div>
+          <!-- Busy mode toggle -->
+          <div class="res-busy-toggle-row" id="res-busy-toggle-row">
+            <button type="button" class="toggle-switch" id="res-busy-toggle"
+                    role="switch" aria-checked="false" aria-label="Busy mode — stop taking reservations">
+              <span class="toggle-thumb" aria-hidden="true"></span>
+            </button>
+            <span class="res-busy-toggle-label">Busy mode</span>
+            <div id="res-busy-setter" class="res-busy-setter" hidden>
+              <span class="res-busy-setter-for">for</span>
+              <select id="res-busy-hours-sel" class="input input-sm res-busy-hours-sel">
+                <option value="1">1 hour</option>
+                <option value="2" selected>2 hours</option>
+                <option value="3">3 hours</option>
+                <option value="4">4 hours</option>
+                <option value="0">rest of day</option>
+              </select>
+              <button type="button" class="btn btn-sm btn-warning" id="res-busy-confirm-btn">Apply</button>
+            </div>
+          </div>
           <button type="button" class="btn btn-primary btn-sm" id="res-add-btn">+ Add Reservation</button>
         </div>
 
@@ -1873,59 +2333,6 @@
         </div>
         <div id="res-list" class="res-list">
           <!-- Rows rendered by JS -->
-        </div>
-
-        <!-- Add / Edit reservation modal -->
-        <div id="res-modal" class="res-modal-backdrop" hidden>
-          <div class="res-modal" role="dialog" aria-modal="true" aria-labelledby="res-modal-title">
-            <div class="res-modal-header">
-              <h3 class="res-modal-title" id="res-modal-title">New Reservation</h3>
-              <button type="button" class="res-modal-close" id="res-modal-close" aria-label="Close">&times;</button>
-            </div>
-            <div class="res-modal-body">
-              <div class="form-group">
-                <label for="res-m-name">Name <span class="required">*</span></label>
-                <input type="text" id="res-m-name" class="input" maxlength="100" autocomplete="off">
-              </div>
-              <div class="form-group">
-                <label for="res-m-phone">Phone</label>
-                <input type="tel" id="res-m-phone" class="input" maxlength="20" autocomplete="off">
-              </div>
-              <div class="form-group">
-                <label for="res-m-email">Email</label>
-                <input type="email" id="res-m-email" class="input" maxlength="100" autocomplete="off">
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="res-m-date">Date <span class="required">*</span></label>
-                  <input type="date" id="res-m-date" class="input">
-                </div>
-                <div class="form-group">
-                  <label for="res-m-time">Time <span class="required">*</span></label>
-                  <input type="time" id="res-m-time" class="input">
-                </div>
-                <div class="form-group">
-                  <label for="res-m-party">Party Size <span class="required">*</span></label>
-                  <input type="number" id="res-m-party" class="input" min="1" max="99" value="2">
-                </div>
-              </div>
-              <div class="form-group">
-                <label for="res-m-table">Table</label>
-                <select id="res-m-table" class="input">
-                  <option value="">Unassigned</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="res-m-notes">Notes</label>
-                <textarea id="res-m-notes" class="input" rows="2" maxlength="500"></textarea>
-              </div>
-              <p id="res-m-error" class="error-text" hidden></p>
-            </div>
-            <div class="res-modal-footer">
-              <button type="button" class="btn btn-secondary" id="res-m-cancel">Cancel</button>
-              <button type="button" class="btn btn-primary" id="res-m-save">Save Reservation</button>
-            </div>
-          </div>
         </div>
 
       </section>
@@ -2001,6 +2408,68 @@
       <!-- ================================================================== -->
       <!-- MAINTENANCE                                                         -->
       <!-- ================================================================== -->
+      <!-- ── 86'd / Out-of-Stock Management ───────────────────────────────── -->
+      <section id="section-oos" class="dash-section" aria-label="86'd — Out of Stock" hidden>
+        <div class="oos-section">
+
+          <!-- Ingredient shortcuts panel -->
+          <div class="oos-panel">
+            <div class="oos-panel-hd">
+              <div class="oos-panel-hd-left">
+                <span class="oos-panel-title">Ingredient Shortcuts</span>
+                <span class="oos-panel-hint">Tap to bulk-mark all linked dishes &amp; options OOS</span>
+              </div>
+              <button class="btn btn-sm btn-secondary oos-mgr-only" id="oos-add-ingr-btn" type="button">+ Add</button>
+            </div>
+            <div class="oos-ingr-grid" id="oos-ingr-grid">
+              <div class="oos-empty" id="oos-ingr-empty">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Dishes panel -->
+          <div class="oos-panel">
+            <div class="oos-panel-hd">
+              <div class="oos-panel-hd-left">
+                <span class="oos-panel-title">Dishes</span>
+                <span class="oos-panel-hint">OOS dishes shown below — search to find &amp; toggle any dish</span>
+              </div>
+            </div>
+            <div class="oos-search-wrap">
+              <input type="search" class="oos-search" id="oos-dish-q" placeholder="Search dishes…" autocomplete="off">
+            </div>
+            <div class="oos-item-list" id="oos-dish-list"></div>
+          </div>
+
+          <!-- Modifier options panel -->
+          <div class="oos-panel">
+            <div class="oos-panel-hd">
+              <div class="oos-panel-hd-left">
+                <span class="oos-panel-title">Modifier Options</span>
+                <span class="oos-panel-hint">OOS options shown below — search to find &amp; toggle any option</span>
+              </div>
+            </div>
+            <div class="oos-search-wrap">
+              <input type="search" class="oos-search" id="oos-mod-q" placeholder="Search options…" autocomplete="off">
+            </div>
+            <div class="oos-item-list" id="oos-mod-list"></div>
+          </div>
+
+        </div>
+
+        <!-- Configure ingredient modal (manager/owner) -->
+        <div id="oos-config-modal" class="picker-modal" role="dialog" aria-modal="true" aria-labelledby="oos-config-title" hidden>
+          <div class="picker-modal-inner oos-config-modal-inner">
+            <div class="picker-modal-header">
+              <h2 id="oos-config-title" class="picker-modal-title">Configure Ingredient</h2>
+              <button type="button" class="btn-close" id="oos-config-close" aria-label="Close">&times;</button>
+            </div>
+            <div id="oos-config-body" class="oos-config-body"><!-- populated by JS --></div>
+          </div>
+        </div>
+        <div id="oos-config-backdrop" class="panel-backdrop" hidden></div>
+
+      </section>
+
       <section id="section-maintenance" class="dash-section" aria-label="Maintenance" hidden>
 
         <div class="section-header-row">
@@ -2157,6 +2626,34 @@
             <p class="health-empty">No errors recorded</p>
           </div>
         </div>
+
+      </section>
+
+      <!-- ── Weather ───────────────────────────────────────────────────────── -->
+      <section id="section-weather" class="dash-section" aria-label="Weather" hidden>
+
+        <div class="weather-header">
+          <span class="weather-location">Kirkland, WA</span>
+          <span id="weather-updated" class="weather-updated">—</span>
+          <button id="weather-unit-toggle" class="btn-secondary btn-sm" aria-label="Toggle temperature unit">°F</button>
+          <button id="weather-refresh-btn" class="btn-secondary btn-sm">Refresh</button>
+        </div>
+
+        <div id="weather-hero" class="weather-hero" hidden>
+          <img id="weather-hero-icon" class="weather-hero-icon" src="" alt="">
+          <div class="weather-hero-body">
+            <div id="weather-hero-name" class="weather-hero-name">—</div>
+            <div id="weather-hero-temp" class="weather-hero-temp">—</div>
+            <div id="weather-hero-short" class="weather-hero-short">—</div>
+            <div id="weather-hero-wind" class="weather-hero-wind">—</div>
+          </div>
+        </div>
+
+        <div id="weather-periods" class="weather-periods"></div>
+
+        <p id="weather-empty" class="health-empty" hidden>Unable to load forecast.</p>
+
+        <p class="weather-credit">Forecast data provided by the <a href="https://www.weather.gov" target="_blank" rel="noopener noreferrer">U.S. National Weather Service</a> (api.weather.gov) — public domain, no commercial restrictions.</p>
 
       </section>
 
@@ -2335,6 +2832,17 @@
         </div>
 
         <div class="form-group">
+          <div class="form-inline-toggle">
+            <label class="form-label" for="edit-group-print-first">Print first on ticket</label>
+            <button type="button" class="toggle-switch" id="edit-group-print-first"
+              role="switch" aria-checked="false" aria-label="Print first on ticket">
+              <span class="toggle-thumb"></span>
+            </button>
+          </div>
+          <p class="form-hint">When on, selections from this group print before all other modifiers on kitchen and counter tickets (e.g. "No egg", dietary flags).</p>
+        </div>
+
+        <div class="form-group">
           <div class="form-row-pair">
             <div>
               <label class="form-label" for="edit-group-min">Min selections</label>
@@ -2428,6 +2936,24 @@
     </div>
   </div>
   <div id="oos-modal-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Online orders pause modal — lives outside all sections so position:fixed works -->
+  <div id="online-pause-modal" class="online-pause-modal" hidden role="dialog" aria-modal="true" aria-labelledby="online-pause-modal-title">
+    <div class="online-pause-modal-inner">
+      <div class="online-pause-modal-header">
+        <h3 id="online-pause-modal-title" class="online-pause-modal-title">Pause Online Orders</h3>
+        <button type="button" class="btn-close" id="online-pause-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <p class="online-pause-status-text">How long do you want to pause online ordering?</p>
+      <div class="online-pause-actions">
+        <button type="button" class="btn btn-secondary" id="online-pause-15-btn">Close 15 min</button>
+        <button type="button" class="btn btn-secondary" id="online-pause-30-btn">Close 30 min</button>
+        <button type="button" class="btn btn-secondary" id="online-pause-60-btn">Close 60 min</button>
+        <button type="button" class="btn btn-danger" id="online-pause-today-btn">Close for today</button>
+      </div>
+    </div>
+  </div>
+  <div id="online-pause-modal-backdrop" class="panel-backdrop" hidden></div>
 
   <!-- Camera capture modal -->
   <div id="camera-modal" class="camera-modal" role="dialog" aria-modal="true" aria-labelledby="camera-modal-title" hidden>
@@ -2542,6 +3068,59 @@
     </div>
   </div>
 
+  <!-- Add / Edit reservation modal -->
+  <div id="res-modal" class="res-modal-backdrop" hidden>
+    <div class="res-modal" role="dialog" aria-modal="true" aria-labelledby="res-modal-title">
+      <div class="res-modal-header">
+        <h3 class="res-modal-title" id="res-modal-title">New Reservation</h3>
+        <button type="button" class="res-modal-close" id="res-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="res-modal-body">
+        <div class="form-group">
+          <label for="res-m-name">Name <span class="required">*</span></label>
+          <input type="text" id="res-m-name" class="input" maxlength="100" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="res-m-phone">Phone</label>
+          <input type="tel" id="res-m-phone" class="input" maxlength="20" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label for="res-m-email">Email</label>
+          <input type="email" id="res-m-email" class="input" maxlength="100" autocomplete="off">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="res-m-date">Date <span class="required">*</span></label>
+            <input type="date" id="res-m-date" class="input">
+          </div>
+          <div class="form-group">
+            <label for="res-m-time">Time <span class="required">*</span></label>
+            <input type="time" id="res-m-time" class="input">
+          </div>
+          <div class="form-group">
+            <label for="res-m-party">Party Size <span class="required">*</span></label>
+            <input type="number" id="res-m-party" class="input" min="1" max="99" value="2">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="res-m-table">Table</label>
+          <select id="res-m-table" class="input">
+            <option value="">Unassigned</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="res-m-notes">Notes</label>
+          <textarea id="res-m-notes" class="input" rows="2" maxlength="500"></textarea>
+        </div>
+        <p id="res-m-error" class="error-text" hidden></p>
+      </div>
+      <div class="res-modal-footer">
+        <button type="button" class="btn btn-secondary" id="res-m-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="res-m-save">Save Reservation</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Print error alert modal -->
   <div id="print-error-overlay" class="od-overlay" hidden>
     <div class="od-modal print-error-modal">
@@ -2618,6 +3197,19 @@
     </div>
   </div>
 
+  <!-- Terminal events status modal -->
+  <div id="terminal-events-overlay" class="od-overlay" hidden>
+    <div class="od-modal terminal-events-modal">
+      <div class="od-header">
+        <h2 class="od-title">Terminal Activity</h2>
+        <button class="od-close" id="terminal-events-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="terminal-events-body" class="od-body terminal-events-body">
+        <p class="od-loading">Loading…</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Order detail modal (opened from Payments tab) -->
   <div id="order-detail-overlay" class="od-overlay" hidden>
     <div class="od-modal">
@@ -2642,6 +3234,66 @@
     </div>
   </div>
 
+  <!-- Manual Order modal -->
+  <div id="manual-order-backdrop" class="panel-backdrop" hidden></div>
+  <div id="manual-order-modal" class="mo-modal" role="dialog" aria-modal="true" aria-labelledby="mo-modal-title" hidden>
+    <div class="mo-modal-inner">
+      <div class="picker-modal-header">
+        <h2 id="mo-modal-title" class="picker-modal-title">New Manual Order</h2>
+        <button type="button" class="btn-close" id="mo-close-btn" aria-label="Close">&times;</button>
+      </div>
+      <div class="mo-modal-body">
+        <div class="mo-row">
+          <div class="form-group">
+            <label for="mo-customer-name">Customer Name</label>
+            <input type="text" id="mo-customer-name" class="input" placeholder="Catering Order" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="mo-customer-email">Customer Email</label>
+            <input type="email" id="mo-customer-email" class="input" placeholder="optional" autocomplete="off">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="mo-notes">Description / Notes</label>
+          <input type="text" id="mo-notes" class="input" placeholder="optional" autocomplete="off">
+        </div>
+        <div class="mo-row">
+          <div class="form-group">
+            <label for="mo-subtotal">Subtotal ($)</label>
+            <input type="number" id="mo-subtotal" class="input" min="0" step="0.01" placeholder="0.00">
+          </div>
+          <div class="form-group">
+            <label for="mo-discount">Discount ($)</label>
+            <input type="number" id="mo-discount" class="input" min="0" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <div class="mo-row">
+          <div class="form-group">
+            <label for="mo-tax">Tax ($) <span class="mo-auto-label">auto</span></label>
+            <input type="text" id="mo-tax" class="input" readonly tabindex="-1">
+          </div>
+          <div class="form-group">
+            <label for="mo-tip">Tip / Service ($)</label>
+            <input type="number" id="mo-tip" class="input" min="0" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="mo-total">Total ($)</label>
+          <input type="text" id="mo-total" class="input mo-total-input" readonly tabindex="-1">
+        </div>
+        <div class="form-group">
+          <label for="mo-transfer-id">Finix Transfer ID <span class="mo-auto-label">optional — reconcile payment</span></label>
+          <input type="text" id="mo-transfer-id" class="input" placeholder="e.g. TRobWrktZchk4Fbej9kVZFQw" autocomplete="off" spellcheck="false">
+        </div>
+        <div id="mo-status-msg" class="mo-status-msg" hidden></div>
+      </div>
+      <div class="picker-modal-footer">
+        <button type="button" class="btn btn-ghost" id="mo-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-primary" id="mo-save-btn">Save Order</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/js/qr.js?v=2"></script>
   <script src="/js/webauthn.js?v=2"></script>
   <!--
@@ -2649,9 +3301,9 @@
     applicationId and merchantId are public; API password stays server-side.
   -->
   <script src="https://js.finix.com/v/2/finix.js" defer></script>
-  <script src="/js/dashboard.js?v=122"></script>
-  <script src="/js/payment-modal.js?v=35"></script>
-  <script src="/js/order-entry.js?v=41"></script>
+  <script src="/js/dashboard.js?v=174"></script>
+  <script src="/js/payment-modal.js?v=54"></script>
+  <script src="/js/order-entry.js?v=53"></script>
   <script src="/js/pwa.js?v=3"></script>
   <script src="/js/sync.js?v=3"></script>
   <script src="/js/voice.js?v=2"></script>
@@ -2700,6 +3352,25 @@
         <button type="button" class="btn btn-success ppr-pay-btn" id="pay-preview-confirm">Pay</button>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ── Coupon modal ─────────────────────────────────────────────────────── -->
+  <div id="coupon-modal" class="ppr-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="coupon-modal-title" hidden>
+    <div class="ppr-inner">
+      <div class="ppr-header">
+        <h2 id="coupon-modal-title" class="ppr-title">🎟 Print Coupon</h2>
+        <button type="button" class="btn-close" id="coupon-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="ppr-body">
+        <p class="ppr-body-hint" id="coupon-modal-hint">Select a campaign to print a coupon ticket.</p>
+        <div id="coupon-campaign-list" class="coupon-campaign-list"></div>
+      </div>
+      <div class="ppr-footer">
+        <button type="button" class="btn btn-secondary" id="coupon-modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="coupon-print-btn" disabled>Print</button>
+      </div>
     </div>
   </div>
 
@@ -2820,6 +3491,14 @@
         </div>
 
         <div class="form-group">
+          <label for="emp-form-language">Language</label>
+          <select id="emp-form-language" class="input">
+            <option value="en">🇺🇸 English</option>
+            <option value="es">🇲🇽 Español</option>
+          </select>
+        </div>
+
+        <div class="form-group">
           <label>Schedule</label>
           <div class="emp-schedule-grid" id="emp-schedule-grid">
             <!-- Populated by JS -->
@@ -2871,6 +3550,8 @@
         <button class="emp-pin-key" data-key="0">0</button>
         <button class="emp-pin-key emp-pin-key--empty" disabled></button>
       </div>
+
+      <button type="button" id="emp-pin-owner-btn" class="emp-pin-admin-link">Use as owner</button>
 
     </div>
   </div>
@@ -2965,6 +3646,74 @@
   <!-- ── Finix payment modal ── centered dialog, no redirect ─────────────── -->
   <!-- Finix payments use Checkout Pages (redirect flow) — no inline modal needed -->
 
+  <!-- ── Advance order form panel (slide-in) ──────────────────────────────── -->
+  <div id="ao-panel-backdrop" class="panel-backdrop" hidden></div>
+  <div id="ao-panel" class="item-panel" role="dialog" aria-modal="true" aria-labelledby="ao-panel-title" hidden>
+    <div class="item-panel-header">
+      <h3 id="ao-panel-title" class="item-panel-title">New Advance Order</h3>
+      <button type="button" class="btn-close" id="ao-panel-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="item-panel-body">
+      <input type="hidden" id="ao-panel-id">
+
+      <label class="form-label" for="ao-customer-name">Customer name <span aria-hidden="true">*</span></label>
+      <input type="text" id="ao-customer-name" class="input" placeholder="Full name" autocomplete="off">
+
+      <label class="form-label" for="ao-customer-phone">Phone</label>
+      <input type="tel" id="ao-customer-phone" class="input" placeholder="Optional">
+
+      <label class="form-label">Date &amp; Time <span aria-hidden="true">*</span></label>
+      <div class="ao-datetime-row">
+        <input type="date" id="ao-scheduled-date" class="input">
+        <input type="time" id="ao-scheduled-time" class="input">
+      </div>
+
+      <div class="form-label">Items <span aria-hidden="true">*</span></div>
+      <div id="ao-items-list"></div>
+      <button type="button" class="btn btn-ghost btn-sm ao-add-item-btn" id="ao-add-item-btn">+ Add item</button>
+
+      <label class="form-label" for="ao-notes">Notes</label>
+      <textarea id="ao-notes" class="input" rows="3" placeholder="Kitchen notes (optional)"></textarea>
+
+      <div id="ao-panel-error" class="form-error" hidden></div>
+    </div>
+    <div class="item-panel-footer">
+      <button type="button" class="btn btn-ghost" id="ao-panel-cancel-btn">Cancel</button>
+      <button type="button" class="btn btn-primary" id="ao-panel-save-btn">Save Order</button>
+    </div>
+  </div>
+
+  <!-- ── Advance order reminder modal ─────────────────────────────────────── -->
+  <div id="ao-reminder-modal" class="online-pause-modal" hidden role="dialog" aria-modal="true"
+       aria-labelledby="ao-reminder-title">
+    <div class="online-pause-modal-inner">
+      <div class="online-pause-modal-header">
+        <h3 id="ao-reminder-title" class="online-pause-modal-title">Advance Order Reminder</h3>
+        <button type="button" class="btn-close" id="ao-reminder-close-btn" aria-label="Close">&times;</button>
+      </div>
+      <p id="ao-reminder-msg" class="online-pause-status-text"></p>
+      <div class="online-pause-actions">
+        <button type="button" class="btn btn-primary" id="ao-reminder-print-btn">Print Ticket</button>
+        <button type="button" class="btn btn-ghost"   id="ao-reminder-dismiss-btn">Dismiss</button>
+      </div>
+    </div>
+  </div>
+  <div id="ao-reminder-modal-backdrop" class="panel-backdrop" hidden></div>
+
+  <!-- Move order to another table modal -->
+  <div id="move-table-modal" class="picker-modal" role="dialog" aria-modal="true" aria-labelledby="move-table-modal-title" hidden>
+    <div class="picker-modal-inner move-table-modal-inner">
+      <div class="picker-modal-header">
+        <h2 id="move-table-modal-title" class="picker-modal-title">Move table</h2>
+        <button type="button" class="btn-close" id="move-table-cancel-btn" aria-label="Close">&times;</button>
+      </div>
+      <div id="move-table-modal-body" class="move-table-modal-body">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+  </div>
+  <div id="move-table-modal-backdrop" class="panel-backdrop" hidden></div>
+
   <!-- ── Review & Pay full-screen overlay ─────────────────────────────────── -->
   <div id="payment-modal-overlay" hidden aria-modal="true" role="dialog"
        aria-labelledby="pm-modal-title">
@@ -2980,6 +3729,7 @@
       <div class="pm-screen"></div>
     </div>
   </div>
+
 
 </body>
 </html>

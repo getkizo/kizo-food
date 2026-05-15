@@ -1,4 +1,4 @@
-# Development Guide
+﻿# Development Guide
 
 Quick guide to getting started with the Merchant Onboarding UI in development mode.
 

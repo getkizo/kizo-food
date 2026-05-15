@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Toast Menu Importer (stub)
  * Placeholder for future Toast POS menu import integration.
  */

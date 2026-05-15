@@ -1,0 +1,31 @@
+﻿[Unit]
+Description=Kizo Invoice OCR Service
+Documentation=https://github.com/YOUR_ORG/kizo-food
+After=network.target kizo.service
+Wants=kizo.service
+
+[Service]
+Type=simple
+User=kizo
+Group=kizo
+WorkingDirectory=/opt/kizo/v2/tools/invoice-ocr
+EnvironmentFile=/opt/kizo/v2/tools/invoice-ocr/.env
+ExecStart=/opt/kizo/v2/tools/invoice-ocr/venv/bin/uvicorn \
+    app.main:app \
+    --host 127.0.0.1 \
+    --port 8765 \
+    --workers 1
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kizo-ocr
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/kizo/v2/tools/invoice-ocr
+
+[Install]
+WantedBy=multi-user.target

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # =============================================================================
 # mem-check.sh — Memory leak monitor for the Bun merchant appliance
 #

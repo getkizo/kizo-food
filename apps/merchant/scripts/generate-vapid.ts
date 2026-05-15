@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Generate VAPID key pair for Web Push notifications.
  * Run once: bun run scripts/generate-vapid.ts
  * Then copy the output into your .env file.
@@ -24,5 +24,5 @@ console.log('✅ VAPID keys generated successfully!\n')
 console.log('Add these to your .env file:\n')
 console.log(`VAPID_PUBLIC_KEY=${pubKeyBase64}`)
 console.log(`VAPID_PRIVATE_KEY=${privKeyBase64}`)
-console.log(`VAPID_SUBJECT=mailto:dev@kizo.app\n`)
+console.log(`VAPID_SUBJECT=mailto:dev@kizo.example\n`)
 console.log('⚠️  Keep VAPID_PRIVATE_KEY secret — never commit it!')

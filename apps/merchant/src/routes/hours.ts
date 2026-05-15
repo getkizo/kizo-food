@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Business hours and scheduled closures routes
  *
  * Hours are per-merchant, per-service-type ('regular' | 'catering'), per day-of-week.
@@ -62,8 +62,9 @@ function isValidDate(d: string): boolean {
 hours.get(
   '/api/merchants/:id/hours',
   authenticate,
+  requireOwnMerchant,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const db = getDatabase()
@@ -125,7 +126,7 @@ hours.put(
   requireOwnMerchant,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const body = await c.req.json()
@@ -205,10 +206,11 @@ hours.put(
 hours.delete(
   '/api/merchants/:id/hours/:day',
   authenticate,
+  requireOwnMerchant,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const dayParam = c.req.param('day')
+    const merchantId = c.req.param('id')!
+    const dayParam = c.req.param('day')!
     const serviceType = c.req.query('serviceType') as ServiceType
 
     const dayOfWeek = parseInt(dayParam, 10)
@@ -249,7 +251,7 @@ hours.get(
   '/api/merchants/:id/closures',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const db = getDatabase()
@@ -300,7 +302,7 @@ hours.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const body = await c.req.json()
@@ -364,8 +366,8 @@ hours.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const closureId = c.req.param('closureId')
+    const merchantId = c.req.param('id')!
+    const closureId = c.req.param('closureId')!
 
     try {
       const db = getDatabase()
@@ -460,8 +462,8 @@ hours.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const closureId = c.req.param('closureId')
+    const merchantId = c.req.param('id')!
+    const closureId = c.req.param('closureId')!
 
     try {
       const db = getDatabase()
@@ -484,5 +486,153 @@ hours.delete(
     }
   }
 )
+
+// ---------------------------------------------------------------------------
+// Public hours feed — GET /api/store/hours.json
+// ---------------------------------------------------------------------------
+
+/**
+ * OPTIONS /api/store/hours.json
+ * CORS preflight for cross-origin requests from the merchant's external website.
+ */
+hours.options('/api/store/hours.json', (c) => {
+  setHoursCorsHeaders(c)
+  return new Response(null, { status: 204 })
+})
+
+/**
+ * GET /api/store/hours.json
+ * Public endpoint — no authentication required.
+ *
+ * Returns current business hours and upcoming scheduled closures so an
+ * external website can display accurate open/closed status.
+ *
+ * CORS: only the origin matching `merchants.website` receives the
+ * Access-Control-Allow-Origin header, so browser JS from any other
+ * domain cannot read the response.
+ */
+hours.get('/api/store/hours.json', (c) => {
+  try {
+    const db = getDatabase()
+
+    const merchant = db
+      .query<{ id: string; timezone: string | null; website: string | null }, []>(
+        `SELECT id, timezone, website FROM merchants WHERE status = 'active' ORDER BY created_at ASC LIMIT 1`
+      )
+      .get()
+
+    if (!merchant) return c.json({ error: 'Not found' }, 404)
+
+    const tz = merchant.timezone ?? 'America/Los_Angeles'
+
+    // Today's date in the merchant's local timezone (YYYY-MM-DD)
+    const todayLocal = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date())
+
+    // Current day-of-week in merchant timezone (0=Sun … 6=Sat)
+    const dowLocal = new Date(
+      new Date().toLocaleString('en-US', { timeZone: tz })
+    ).getDay()
+
+    // Current HH:MM in merchant timezone
+    const timeLocal = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date())    // → "HH:MM"
+
+    // Regular business hours
+    const regularHours = db
+      .query<
+        { day_of_week: number; open_time: string; close_time: string; slot_index: number },
+        [string]
+      >(
+        `SELECT day_of_week, open_time, close_time, slot_index
+         FROM business_hours
+         WHERE merchant_id = ? AND service_type = 'regular'
+         ORDER BY day_of_week ASC, slot_index ASC`
+      )
+      .all(merchant.id)
+      .map((h) => ({
+        dayOfWeek: h.day_of_week,
+        openTime:  h.open_time,
+        closeTime: h.close_time,
+        slotIndex: h.slot_index,
+      }))
+
+    // Upcoming scheduled closures (today onward, next 90 days)
+    const ninetyDaysOut = new Date()
+    ninetyDaysOut.setDate(ninetyDaysOut.getDate() + 90)
+    const limitDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(ninetyDaysOut)
+
+    const scheduledClosures = db
+      .query<
+        { start_date: string; end_date: string; label: string },
+        [string, string, string]
+      >(
+        `SELECT start_date, end_date, label
+         FROM scheduled_closures
+         WHERE merchant_id = ? AND end_date >= ? AND start_date <= ?
+         ORDER BY start_date ASC`
+      )
+      .all(merchant.id, todayLocal, limitDate)
+      .map((r) => ({
+        startDate: r.start_date,
+        endDate:   r.end_date,
+        label:     r.label,
+      }))
+
+    // Is today a scheduled closure?
+    const closedTodayClosure = scheduledClosures.find(
+      (cl) => cl.startDate <= todayLocal && cl.endDate >= todayLocal
+    ) ?? null
+
+    // Are we within any regular-hours slot for today?
+    const todaySlots = regularHours.filter((h) => h.dayOfWeek === dowLocal)
+    const openNow = !closedTodayClosure && todaySlots.some(
+      (h) => timeLocal >= h.openTime && timeLocal < h.closeTime
+    )
+
+    // Set CORS header if the requesting origin matches the merchant's website
+    setHoursCorsHeaders(c, merchant.website)
+
+    // Cache for 10 minutes — external site polls every hour, this smooths bursts
+    c.header('Cache-Control', 'public, max-age=600, stale-while-revalidate=300')
+
+    return c.json({
+      timezone:          tz,
+      isOpen:            openNow,
+      closedToday:       closedTodayClosure !== null,
+      closedTodayLabel:  closedTodayClosure?.label ?? null,
+      regularHours,
+      scheduledClosures,
+      generatedAt:       new Date().toISOString(),
+    })
+  } catch (error) {
+    return serverError(c, '[hours] GET /api/store/hours.json', error, 'Failed to fetch hours')
+  }
+})
+
+/**
+ * Set CORS headers for the public hours feed.
+ * Only allows the origin that matches `merchantWebsite`; all others receive no ACAO header
+ * so browsers will block cross-origin reads (same-origin requests always work).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Hono context type varies by router; using any avoids coupling this helper to a specific Hono generic
+function setHoursCorsHeaders(c: any, merchantWebsite?: string | null): void {
+  if (!merchantWebsite) return
+  let siteOrigin: string
+  try { siteOrigin = new URL(merchantWebsite).origin } catch { return }
+  if (!siteOrigin || siteOrigin === 'null') return
+
+  const requestOrigin = c.req.header('Origin') ?? ''
+  if (requestOrigin === siteOrigin) {
+    c.header('Access-Control-Allow-Origin', siteOrigin)
+    c.header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+    c.header('Access-Control-Max-Age', '86400')
+    c.header('Vary', 'Origin')
+  }
+}
 
 export { hours }

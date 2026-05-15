@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Star WebPRNT — HTTP-based printing for TSP100 III and compatible printers.
  *
  * Instead of raw TCP on port 9100, the TSP100 III exposes a built-in web
@@ -17,7 +17,8 @@
  */
 
 import { LANG, type Lang } from './print-lang'
-import type { PrintItem, KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions } from './print-types'
+import type { KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions } from './print-types'
+import { sortItemsByCourse, kitchenItems } from '../utils/course-items'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -240,8 +241,18 @@ export function buildKitchenTicketXml(opts: KitchenTicketOptions): string {
 
   x.text(dividerStr('='))
 
-  // Items
-  for (const item of opts.items) {
+  if (opts.scheduledFor) {
+    const readyAt = fmtTime(opts.scheduledFor, opts.timezone)
+    x.align('center')
+     .text('SCHEDULED ORDER', { emphasis: true, width: 2, height: 2 })
+     .text(`Ready at ${readyAt}`, { emphasis: true, width: 2, height: 2 })
+     .align('left')
+     .text(dividerStr('='))
+  }
+
+  // Items — sorted by course (appetizers → mains → desserts), counter-only items stripped
+  const sortedItems = sortItemsByCourse(kitchenItems(opts.items))
+  for (const item of sortedItems) {
     x.text(` ${item.quantity}  ${truncate(item.dishName, 80, 'dish name')}`, { emphasis: true, width: 2, height: 2 })
 
     if ((item.modifiers?.length ?? 0) > 0) {
@@ -307,6 +318,15 @@ export function buildCounterTicketXml(opts: CounterTicketOptions): string {
   }
 
   x.text(dividerStr())
+
+  if (opts.scheduledFor) {
+    const readyAt = fmtTime(opts.scheduledFor, opts.timezone)
+    x.align('center')
+     .text('SCHEDULED ORDER', { emphasis: true, width: 2, height: 2 })
+     .text(`Ready at ${readyAt}`, { emphasis: true, width: 2, height: 2 })
+     .align('left')
+     .text(dividerStr())
+  }
 
   for (const item of opts.items) {
     x.text(` ${item.quantity}  ${truncate(item.dishName, 80, 'dish name')}`)

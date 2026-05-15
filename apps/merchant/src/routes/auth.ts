@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Authentication routes
  * Handles login, token refresh, and user registration
  */
@@ -12,7 +12,6 @@ import {
   createRefreshToken,
   verifyJWT,
   extractTokenFromHeader,
-  generateSecureToken,
 } from '../utils/jwt'
 import { logSecurityEvent } from '../services/security-log'
 import { serverError } from '../utils/server-error'
@@ -41,6 +40,49 @@ function recordFailedLogin(ip: string): void {
   } else {
     loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Security state exports — consumed by GET /api/status
+// ---------------------------------------------------------------------------
+
+/** Total failed login attempts recorded in the last 1 hour across all IPs. */
+export function getFailedAuthCount1h(): number {
+  const oneHourAgo = Date.now() - 60 * 60 * 1000
+  let total = 0
+  for (const record of loginAttempts.values()) {
+    if (record.resetAt > oneHourAgo) total += record.count
+  }
+  return total
+}
+
+/** IPs currently in rate-limit penalty state (count ≥ LOGIN_MAX_ATTEMPTS and window not expired). */
+export function getBlockedIps(): string[] {
+  const now = Date.now()
+  const result: string[] = []
+  for (const [ip, record] of loginAttempts.entries()) {
+    if (record.resetAt > now && record.count >= LOGIN_MAX_ATTEMPTS) result.push(ip)
+  }
+  return result
+}
+
+/** Sliding 1-hour counter: requests blocked by the login rate limiter. */
+let _rateLimited1h = 0
+let _rateLimitResetAt = 0
+
+/** Increment the rate-limited counter. Call when a login is rejected due to rate limiting. */
+export function recordRateLimitedRequest(): void {
+  const now = Date.now()
+  if (now >= _rateLimitResetAt) {
+    _rateLimited1h = 0
+    _rateLimitResetAt = now + 60 * 60 * 1000
+  }
+  _rateLimited1h++
+}
+
+/** Return the number of rate-limited requests in the current 1-hour window. */
+export function getRateLimited1h(): number {
+  return Date.now() < _rateLimitResetAt ? _rateLimited1h : 0
 }
 
 /**
@@ -228,6 +270,7 @@ auth.post('/api/auth/login', async (c) => {
   const attempt = loginAttempts.get(ip)
   if (attempt && attempt.resetAt > now && attempt.count >= LOGIN_MAX_ATTEMPTS) {
     logSecurityEvent('login_rate_limited', { ip, path: '/api/auth/login' })
+    recordRateLimitedRequest()
     return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
   }
 

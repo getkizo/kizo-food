@@ -1,4 +1,4 @@
-# Merchant Appliance v2
+﻿# Merchant Appliance v2
 
 ARM cluster appliance bridging customers and merchant POS systems.
 
@@ -67,7 +67,7 @@ v2/
 
 ## Architecture
 
-See [docs/architecture/README.md](./docs/architecture/README.md) for complete architecture documentation.
+See [docs/architecture/README.md](../docs/architecture/README.md) for complete architecture documentation.
 
 ### Technology Stack
 
@@ -439,7 +439,7 @@ A server started without payment/OAuth/push/email variables will run normally bu
 
 ### Raspberry Pi / ARM Device
 
-See [docs/architecture/README.md#deployment](./docs/architecture/README.md#deployment) for full deployment instructions.
+See [docs/architecture/README.md#deployment](../docs/architecture/README.md#deployment) for full deployment instructions.
 
 Quick deploy:
 
@@ -458,7 +458,7 @@ tar -xzf merchant-v2.0.0.tar.gz -C /opt/kizo
 cd /opt/kizo && bun install
 
 # 5. Install systemd service
-cp systemd/kizo-register.service /etc/systemd/system/
+cp systemd/kizo.service /etc/systemd/system/
 systemctl enable kizo
 systemctl start kizo
 ```
@@ -474,7 +474,7 @@ chmod +x /usr/local/bin/cloudflared
 # 2. Create tunnel
 cloudflared tunnel login
 cloudflared tunnel create merchant-cluster-001
-cloudflared tunnel route dns merchant-cluster-001 merchants.kizo.app
+cloudflared tunnel route dns merchant-cluster-001 merchants.kizo.example
 
 # 3. Install service
 cp systemd/cloudflared.service /etc/systemd/system/
@@ -568,7 +568,7 @@ WebPRNT is **not enabled by default**. Without it the printer returns HTTP 405 a
 | HTML receipt has wrong font | Google Fonts CDN unreachable (offline/firewall) | Font falls back to Helvetica/Arial automatically |
 | `DEBUG_PRINT_MARKUP` shows correct bytes but nothing prints | ASB handshake rejected by printer | The relevant code path may have `skipAsb: false`; set `skipAsb: true` for non-ASB printers |
 
-See [docs/payment_modal.md](./docs/payment_modal.md) for in-person payment flow and split-payment documentation.
+See [docs/payment_modal.md](../docs/payment_modal.md) for in-person payment flow and split-payment documentation.
 
 ## Known Security Limitations
 
@@ -583,6 +583,6 @@ Proprietary — © 2026 Kizo Inc.
 
 ## Support
 
-- Documentation: [docs/architecture/](./docs/architecture/)
+- Documentation: [docs/architecture/](../docs/architecture/)
 - Issues: GitHub Issues
-- Email: support@kizo.app
+- Email: support@kizo.example

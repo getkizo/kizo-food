@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dashboard orders route tests
  *
  * Covers:
@@ -419,5 +419,184 @@ describe('PATCH /api/merchants/:id/orders/:orderId/service-charge', () => {
   test('non-existent order returns 404', async () => {
     const res = await patchServiceCharge('ord_doesnotexist', { serviceChargeCents: 200 })
     expect(res.status).toBe(404)
+  })
+})
+
+// ── PATCH /api/merchants/:id/orders/:orderId — edit items ────────────────────
+
+/** PATCH the main items-edit endpoint. */
+async function patchOrderItems(
+  orderId: string,
+  body:    Record<string, unknown>,
+  token =  ownerToken,
+): Promise<Response> {
+  return app.fetch(new Request(
+    `http://localhost:3000/api/merchants/${merchantId}/orders/${orderId}`,
+    {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body:    JSON.stringify(body),
+    },
+  ))
+}
+
+describe('PATCH /api/merchants/:id/orders/:orderId — edit items on unfinalized orders', () => {
+
+  test('recomputes tax and total from new subtotal (preserves merchant tax_rate)', async () => {
+    // Order starts with subtotal $10, tax $1 (10%), total $11.
+    const orderId = insertOrder({ status: 'received', subtotalCents: 1000, taxCents: 100, totalCents: 1100 })
+
+    const res = await patchOrderItems(orderId, {
+      items: [
+        { itemId: 'A', name: 'Thing', priceCents: 1500, quantity: 1 },
+        { itemId: 'B', name: 'Side',  priceCents: 300,  quantity: 2 },
+      ],
+    })
+    expect(res.status).toBe(200)
+
+    const row = getDatabase()
+      .query<{ subtotal_cents: number; tax_cents: number; total_cents: number; status: string }, [string]>(
+        `SELECT subtotal_cents, tax_cents, total_cents, status FROM orders WHERE id = ?`,
+      )
+      .get(orderId)
+
+    // Subtotal = 1500 + 2*300 = 2100. Tax at 10% = 210. Total = 2310.
+    expect(row?.subtotal_cents).toBe(2100)
+    expect(row?.tax_cents).toBe(210)
+    expect(row?.total_cents).toBe(2310)
+    expect(row?.status).toBe('received')   // still received, not demoted
+  })
+
+  test('respects discount + service charge in tax base and total', async () => {
+    // $10 subtotal - $2 discount + $1 service charge = $9 taxed base.
+    const orderId = insertOrder({ status: 'received', subtotalCents: 1000, discountCents: 200, totalCents: 1000 })
+    getDatabase().run(`UPDATE orders SET service_charge_cents = 100, tip_cents = 300 WHERE id = ?`, [orderId])
+
+    // Change items to subtotal $20.
+    const res = await patchOrderItems(orderId, {
+      items: [{ itemId: 'X', name: 'Item', priceCents: 2000, quantity: 1 }],
+    })
+    expect(res.status).toBe(200)
+
+    const row = getDatabase()
+      .query<{ subtotal_cents: number; tax_cents: number; total_cents: number }, [string]>(
+        `SELECT subtotal_cents, tax_cents, total_cents FROM orders WHERE id = ?`,
+      )
+      .get(orderId)
+    // taxedBase = 2000 - 200 + 100 = 1900; tax@10% = 190; total = 1900 + 190 + 300(tip) = 2390.
+    expect(row?.subtotal_cents).toBe(2000)
+    expect(row?.tax_cents).toBe(190)
+    expect(row?.total_cents).toBe(2390)
+  })
+})
+
+describe('PATCH /api/merchants/:id/orders/:orderId — refuses finalized orders', () => {
+
+  for (const finalStatus of ['paid', 'completed', 'cancelled', 'refunded', 'picked_up']) {
+    test(`${finalStatus} order returns 409 and does not mutate`, async () => {
+      const orderId = insertOrder({ status: finalStatus, subtotalCents: 2500, taxCents: 260, totalCents: 2760 })
+      // Seed with items the edit would overwrite.
+      getDatabase().run(
+        `UPDATE orders SET items = '[{"dishName":"Prik Khing","quantity":1}]' WHERE id = ?`,
+        [orderId],
+      )
+      const beforeSubtotal = 2500
+      const beforeTax      = 260
+      const beforeTotal    = 2760
+
+      const res = await patchOrderItems(orderId, {
+        items: [{ itemId: 'EVIL', name: 'Pineapple Fried Rice', priceCents: 2500, quantity: 1 }],
+      })
+      expect(res.status).toBe(409)
+      const body = await res.json() as { error: string }
+      expect(body.error).toMatch(new RegExp(finalStatus))
+      expect(body.error).toMatch(/new order/i)
+
+      // DB unchanged — status, items, subtotal, tax, total all intact.
+      const row = getDatabase()
+        .query<{ status: string; subtotal_cents: number; tax_cents: number; total_cents: number; items: string }, [string]>(
+          `SELECT status, subtotal_cents, tax_cents, total_cents, items FROM orders WHERE id = ?`,
+        )
+        .get(orderId)
+      expect(row?.status).toBe(finalStatus)
+      expect(row?.subtotal_cents).toBe(beforeSubtotal)
+      expect(row?.tax_cents).toBe(beforeTax)
+      expect(row?.total_cents).toBe(beforeTotal)
+      expect(row?.items).toContain('Prik Khing')   // never overwritten
+    })
+  }
+
+  test('received order is NOT finalized — edit still allowed', async () => {
+    const orderId = insertOrder({ status: 'received' })
+    const res = await patchOrderItems(orderId, {
+      items: [{ itemId: 'X', name: 'OK', priceCents: 500, quantity: 1 }],
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
+// ── GET /api/merchants/:id/orders ─────────────────────────────────────────────
+
+describe('GET /api/merchants/:id/orders', () => {
+  test('returns { orders, range } with orders array', async () => {
+    insertOrder({ status: 'received' })
+    const res  = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders`,
+      { headers: { Authorization: `Bearer ${ownerToken}` } },
+    ))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { orders: unknown[]; range: { from: string; to: string } }
+    expect(Array.isArray(body.orders)).toBe(true)
+    expect(typeof body.range.from).toBe('string')
+    expect(typeof body.range.to).toBe('string')
+  })
+
+  test('date range filter: orders outside range are excluded', async () => {
+    // Seed an order and then query with a future-only window that excludes it
+    insertOrder({ status: 'received' })
+    const futureFrom = Date.now() + 24 * 60 * 60 * 1000   // 24h in the future
+    const futureTo   = Date.now() + 48 * 60 * 60 * 1000
+
+    const res  = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders?from=${futureFrom}&to=${futureTo}`,
+      { headers: { Authorization: `Bearer ${ownerToken}` } },
+    ))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { orders: unknown[] }
+    expect(body.orders.length).toBe(0)
+  })
+
+  test('limit param caps result count', async () => {
+    // Seed 5 orders
+    for (let i = 0; i < 5; i++) insertOrder({ status: 'received' })
+
+    const from = Date.now() - 24 * 60 * 60 * 1000
+    const to   = Date.now() + 60_000
+    const res  = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders?from=${from}&to=${to}&limit=2`,
+      { headers: { Authorization: `Bearer ${ownerToken}` } },
+    ))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { orders: unknown[] }
+    expect(body.orders.length).toBeLessThanOrEqual(2)
+  })
+
+  test('requires authentication → 401', async () => {
+    const res = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders`,
+    ))
+    expect(res.status).toBe(401)
+  })
+
+  test('staff token is allowed → 200', async () => {
+    const { signJWT } = await import('../src/utils/jwt')
+    const { verifyJWT } = await import('../src/utils/jwt')
+    const userId     = verifyJWT(ownerToken).sub
+    const staffToken = signJWT({ sub: userId, type: 'access', role: 'staff', merchantId }, 86_400)
+    const res = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders`,
+      { headers: { Authorization: `Bearer ${staffToken}` } },
+    ))
+    expect(res.status).toBe(200)
   })
 })

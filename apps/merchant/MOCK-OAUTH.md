@@ -1,64 +1,146 @@
-# Mock OAuth — Development Mode
+﻿# Mock OAuth for Development
 
-Fast-track social login testing without configuring real OAuth providers.
+**Quick way to test social login without configuring Google/Apple/Facebook OAuth!**
 
-## What It Does
+## Enable Mock OAuth
 
-When `MOCK_OAUTH=true` is set in `.env`, all three social login buttons (Google, Apple, Facebook) are enabled and return fake user data instantly — no OAuth app registration required.
-
-Each click on a social login button calls a mock OAuth endpoint that creates (or reuses) a local test account and issues real JWT tokens. The rest of the application behaves identically to production.
-
-## Setup
+Add this to your `.env` file:
 
 ```bash
-# 1. Add to your .env
-echo "MOCK_OAUTH=true" >> .env
+MOCK_OAUTH=true
+```
 
-# 2. Start the server
+Restart the server:
+```bash
 bun run dev
 ```
 
-Visit `http://localhost:3000` — all three social login buttons work.
+That's it! All three social login buttons (Google, Apple, Facebook) now work with fake data.
 
-## Mock Users
+## What You'll See
 
-Each provider returns a fixed fake identity:
+1. **Yellow banner** says "Mock OAuth Mode"
+2. **All social login buttons are enabled**
+3. Click any button (Google, Apple, or Facebook)
+4. You'll see a **mock login page** showing the test user
+5. Click "Continue with Mock [Provider]"
+6. Complete the onboarding flow normally
 
-| Button | Email | Name |
-|---|---|---|
-| Google | `mock-google@example.com` | Mock Google User |
-| Apple | `mock-apple@example.com` | Mock Apple User |
-| Facebook | `mock-facebook@example.com` | Mock Facebook User |
+## Test Users
 
-If a user with that email already exists in the database, the mock endpoint logs them in. Otherwise it registers a new account. This means you can test both first-time signup and returning login flows.
+Each provider has a preset test user:
+
+| Provider | Email | Name |
+|----------|-------|------|
+| Google | `test@gmail.com` | Test User (Google) |
+| Apple | `test@icloud.com` | Test User (Apple) |
+| Facebook | `test@facebook.com` | Test User (Facebook) |
+
+## What Works
+
+✅ **Full onboarding flow** — All steps work normally
+✅ **Business setup** — Enter your restaurant details
+✅ **Clover integration** — Test POS configuration
+✅ **Account creation** — Creates real accounts in your database
+✅ **Login** — Users created via mock OAuth can log in
+
+## What's Different
+
+- No real OAuth providers involved
+- Shows a mock login page instead of redirecting to Google/Apple/Facebook
+- Uses preset test data for user info
+- Clear "DEVELOPMENT MODE" badge on mock login page
+
+## Turn Off Mock OAuth
+
+When you're ready to use real OAuth:
+
+1. Set `MOCK_OAUTH=false` in `.env` (or remove the line)
+2. Configure real OAuth credentials (see [docs/OAUTH-SETUP.md](./docs/OAUTH-SETUP.md))
+3. Restart the server
+
+## Use Cases
+
+**Perfect for:**
+- 🚀 Quick development without OAuth setup
+- 🧪 Testing the complete onboarding flow
+- 👥 Creating multiple test accounts easily
+- 🎨 Frontend UI development
+
+**Not suitable for:**
+- ❌ Production use
+- ❌ Testing real OAuth provider integration
+- ❌ Security testing
+
+## Example Flow
+
+```bash
+# 1. Enable mock OAuth
+echo "MOCK_OAUTH=true" >> .env
+
+# 2. Start server
+bun run dev
+
+# 3. Visit http://localhost:3000
+# 4. Click "Continue with Google"
+# 5. See mock login page
+# 6. Click "Continue with Mock Google"
+# 7. Enter business info
+# 8. Complete setup!
+```
+
+## Screenshots
+
+### Mock Login Page
+Shows:
+- Provider name (Google/Apple/Facebook)
+- "DEVELOPMENT MODE" badge
+- Test user email and name
+- Button to continue
+
+### Banner Message
+Yellow banner at top of onboarding:
+> **Mock OAuth Mode**
+> Social login buttons use fake OAuth for testing. Set `MOCK_OAUTH=false` in .env to disable.
 
 ## How It Works
 
-In mock mode the server registers additional routes:
+1. **Backend** checks `process.env.MOCK_OAUTH === 'true'`
+2. If true, routes `/api/auth/oauth/*` go to mock handlers
+3. Mock handlers return preset test data
+4. Frontend treats it like real OAuth
+5. Database stores accounts normally
 
-```
-GET  /api/auth/oauth/mock/:provider          # Initiates mock OAuth (instant redirect)
-GET  /api/auth/oauth/mock/:provider/callback # Issues tokens for the fake identity
-```
+## Troubleshooting
 
-The real OAuth routes (`/api/auth/oauth/google`, etc.) are still registered alongside the mock routes, so toggling `MOCK_OAUTH` on and off does not break any client-side code.
+### Mock mode not working
+- Check `.env` has `MOCK_OAUTH=true` exactly
+- Restart the server after changing `.env`
+- Clear browser cache
 
-## Security
+### Still seeing disabled buttons
+- Make sure you restarted the server
+- Check browser console for errors
+- Visit `/api/auth/oauth/config` — should show `mockMode: true`
 
-`MOCK_OAUTH=true` is **silently ignored in `NODE_ENV=production`**. The mock endpoints are never registered in production builds. Do not rely on this for access control — just don't set `MOCK_OAUTH=true` in production `.env` files.
+### Want to test email signup instead
+- Email signup always works, regardless of mock OAuth setting
+- Just click "Sign up with Email" instead
 
-## Disabling Mock OAuth
+## Next Steps
 
-Remove or comment out `MOCK_OAUTH` from `.env` and restart:
+Once you've tested with mock OAuth and want to go live:
 
-```bash
-# Remove the line
-sed -i '/^MOCK_OAUTH/d' .env
-bun run dev
-```
+1. **Disable mock OAuth**: Set `MOCK_OAUTH=false`
+2. **Configure real OAuth**: See [docs/OAUTH-SETUP.md](./docs/OAUTH-SETUP.md)
+3. **Test with real providers**: Click buttons → redirects to actual Google/Apple/Facebook
+4. **Deploy**: Mock OAuth is automatically disabled in production (`NODE_ENV=production`)
 
-Social login buttons will show as disabled (greyed out with a tooltip) until real OAuth credentials are configured. Email signup continues to work with no changes.
+## Notes
 
-## Configuring Real OAuth
+- Mock OAuth is only for development
+- Each provider creates a different user (different provider IDs)
+- You can create accounts with all three providers and they'll be separate users
+- Mock data is hardcoded but you can customize it in `src/routes/oauth-mock.ts`
 
-See [docs/OAUTH-SETUP.md](./docs/OAUTH-SETUP.md) for step-by-step instructions for Google, Apple, and Facebook.
+Happy developing! 🎉

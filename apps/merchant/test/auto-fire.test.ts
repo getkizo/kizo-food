@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Auto-fire service tests
  *
  * Covers:

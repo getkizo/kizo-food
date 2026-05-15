@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Kizo Store Service Worker
  *
  * Strategy:
@@ -8,18 +8,18 @@
  *   - notificationclick: opens /store/confirmed?order=ID
  */
 
-const CACHE = 'store-__BUILD__'
+const CACHE = 'store-v41'
 
 const SHELL_URLS = [
   '/',
   '/store/',
   '/store/index.html',
-  '/store/css/store.css?v=24',
-  '/store/js/store.js?v=45',
-  '/store/js/store-menu.js?v=6',
-  '/store/js/store-cart.js?v=12',
-  '/store/js/store-checkout.js?v=15',
-  '/store/js/store-push.js?v=8',
+  '/store/css/store.css?v=31',
+  '/store/js/store.js?v=71',
+  '/store/js/store-menu.js?v=8',
+  '/store/js/store-cart.js?v=14',
+  '/store/js/store-checkout.js?v=24',
+  '/store/js/store-push.js?v=10',
   '/store/js/store-voice.js?v=5',
 ]
 
@@ -54,7 +54,7 @@ self.addEventListener('activate', (event) => {
 // Fetch — cache-first for shell, network-first for API
 //
 // IMPORTANT: Guard all navigation intercepts against non-store paths.
-// This SW may be cached on the root domain (dev.kizo.app) if the user
+// This SW may be cached on the root domain (dev.kizo.example) if the user
 // visited before the merchant-subdomain routing was in place. Without the
 // guards below, it would intercept /dashboard and serve the wrong HTML.
 // ---------------------------------------------------------------------------
@@ -74,6 +74,14 @@ const PASSTHROUGH_PREFIXES = [
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
 
+  // Cross-origin requests (gtag, sift, fonts, etc.): let the browser handle
+  // them natively. Don't call respondWith — that way the document's CSP
+  // script-src/font-src/img-src governs, instead of the SW's fetch() which
+  // is blocked by connect-src. Without this guard, every third-party script
+  // tag triggers a CSP "connect-src violation" because the SW's fetch()
+  // counts as a connect.
+  if (url.origin !== self.location.origin) return
+
   // Always pass through admin, API, and payment paths
   if (PASSTHROUGH_PREFIXES.some((p) => url.pathname.startsWith(p))) {
     return event.respondWith(
@@ -85,6 +93,12 @@ self.addEventListener('fetch', (event) => {
 
   // Ignore favicon — not served, don't cache, don't error
   if (url.pathname === '/favicon.ico') return
+
+  // Cache API only supports GET — forward non-GET requests straight to network
+  if (event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request))
+    return
+  }
 
   // Navigation requests: network-first so updated HTML ships immediately.
   // Falls back to cache only when offline.

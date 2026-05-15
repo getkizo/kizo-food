@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Counter WebSocket & REST routes
  *
  * WebSocket: GET /counter?token=<token>
@@ -20,8 +20,6 @@ import { serverError } from '../utils/server-error'
 import {
   sendPaymentRequest,
   sendCancelPayment,
-  startA920Payment,
-  cancelA920Payment,
   startCloverLegPayment,
   startCloverFullPayment,
   getCounterStatus,
@@ -30,6 +28,7 @@ import {
   getOrCreateCounterToken,
 } from '../services/counter-ws'
 import { getDatabase } from '../db/connection'
+import type { CloverLegPaymentOpts } from '../types/clover'
 import { getAPIKey } from '../crypto/api-keys'
 import { listDevices, checkDeviceConnection } from '../adapters/finix'
 import type { FinixCredentials } from '../adapters/finix'
@@ -72,7 +71,7 @@ counter.get(
   requireOwnMerchant,
   requireRole('owner', 'manager'),
   (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     try {
       const token = getOrCreateCounterToken(merchantId)
       // Build the WS URL relative to the current request host
@@ -105,36 +104,54 @@ counter.post(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const { orderId, amountCents, tipOptions, cloverLeg, cloverFull } = await c.req.json() as {
         orderId: string
         amountCents: number
         tipOptions?: number[]
         cloverFull?: boolean
-        cloverLeg?: {
-          legSubtotalCents:   number
-          legTaxCents:        number
-          serviceChargeCents: number
-          legNumber:          number
-          totalLegs:          number
-          splitMode:          string
-        }
+        cloverLeg?: CloverLegPaymentOpts
       }
 
       if (!orderId || typeof orderId !== 'string') {
         return c.json({ error: 'orderId is required' }, 400)
       }
 
-      // Clover full-order payment — pushes actual items to Clover Flex, customer tips on device
+      // Explicit Clover flags route directly — work regardless of counter_provider.
+      if (cloverLeg) {
+        const err = await startCloverLegPayment(merchantId, orderId, cloverLeg)
+        if (err) return c.json({ error: err }, 503)
+        return c.json({ success: true })
+      }
       if (cloverFull) {
         const err = await startCloverFullPayment(merchantId, orderId)
         if (err) return c.json({ error: err }, 503)
         return c.json({ success: true })
       }
 
-      // Clover split leg — synthetic mini order with subtotal + service charge + tax
-      if (cloverLeg) {
-        const err = await startCloverLegPayment(merchantId, orderId, cloverLeg)
+      // No explicit Clover flags — check the merchant-level toggle.
+      const merchantRow = getDatabase()
+        .query<{ counter_provider: string }, [string]>(
+          `SELECT COALESCE(counter_provider, 'finix') AS counter_provider
+           FROM merchants WHERE id = ?`,
+        )
+        .get(merchantId)
+      const counterProvider = merchantRow?.counter_provider ?? 'finix'
+
+      if (counterProvider === 'clover') {
+        // Caller sent an `amountCents`-style request (legacy D135 split-leg protocol)
+        // while the merchant is on Clover. Refuse rather than silently pushing the
+        // full order — otherwise the first customer of a split pays the whole bill.
+        if (typeof amountCents === 'number') {
+          return c.json(
+            {
+              error:
+                'Counter is set to Clover Flex — send cloverFull:true for the whole order or cloverLeg:{...} for a split leg.',
+            },
+            400,
+          )
+        }
+        const err = await startCloverFullPayment(merchantId, orderId)
         if (err) return c.json({ error: err }, 503)
         return c.json({ success: true })
       }
@@ -155,21 +172,6 @@ counter.post(
             400,
           )
         }
-      }
-
-      // If the merchant has a PAX A920 Pro terminal configured, use the SAM
-      // workflow (direct Finix API) instead of routing through the Counter app.
-      const hasA920 = !!getDatabase()
-        .query<{ id: string }, [string]>(
-          `SELECT id FROM terminals WHERE merchant_id = ? AND model IN ('pax_a920_pro', 'pax_a920_emu')
-           AND finix_device_id IS NOT NULL LIMIT 1`,
-        )
-        .get(merchantId)
-
-      if (hasA920) {
-        const err = await startA920Payment(merchantId, orderId, amountCents)
-        if (err) return c.json({ error: err }, 503)
-        return c.json({ success: true })
       }
 
       const err = sendPaymentRequest(orderId, amountCents, tipOptions)
@@ -198,22 +200,10 @@ counter.post(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
       const { orderId } = await c.req.json() as { orderId: string }
       if (!orderId) return c.json({ error: 'orderId is required' }, 400)
 
-      const hasA920 = !!getDatabase()
-        .query<{ id: string }, [string]>(
-          `SELECT id FROM terminals WHERE merchant_id = ? AND model IN ('pax_a920_pro', 'pax_a920_emu')
-           AND finix_device_id IS NOT NULL LIMIT 1`,
-        )
-        .get(merchantId)
-
-      if (hasA920) {
-        cancelA920Payment(merchantId, orderId)
-      } else {
-        sendCancelPayment(orderId)
-      }
+      sendCancelPayment(orderId)
       return c.json({ success: true })
     } catch (err) {
       return serverError(c, '[counter] cancel-payment', err, 'Failed to cancel counter payment')
@@ -278,7 +268,7 @@ counter.get(
   requireOwnMerchant,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     try {
       const db = getDatabase()
 

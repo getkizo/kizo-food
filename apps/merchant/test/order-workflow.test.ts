@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Order workflow tests
  * Tests SAM order relay FSM
  */
 
 import { test, expect, beforeAll, describe } from 'bun:test'
-import { createOrderWorkflow, type OrderStatus } from '../src/workflows/order-relay'
+import { createOrderWorkflow, getOrderFSMDiagram, type OrderStatus } from '../src/workflows/order-relay'
 import type { POSAdapter, POSOrderData, POSOrderResult } from '../src/adapters/types'
 import { getDatabase, closeDatabase } from '../src/db/connection'
 import { migrate } from '../src/db/migrate'
@@ -396,5 +396,15 @@ describe('Order Workflow - FSM Transitions', () => {
     // the workflow never jumped directly to 'picked_up'.
     expect(row?.status).not.toBe('picked_up')
     expect(['received', 'submitted', 'pos_error'].includes(row?.status ?? '')).toBe(true)
+  })
+})
+
+// ── Diagnostic helpers ────────────────────────────────────────────────────────
+
+describe('Order Workflow - Diagnostics', () => {
+  test('getOrderFSMDiagram returns a non-empty string', () => {
+    const diagram = getOrderFSMDiagram()
+    expect(typeof diagram).toBe('string')
+    expect(diagram.length).toBeGreaterThan(0)
   })
 })

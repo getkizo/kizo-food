@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Audit logging for security events
  * Tracks API key access, creation, deletion, and failures
  */
@@ -109,7 +109,8 @@ export function getAuditLogs(merchantId: string, limit: number = 100): AuditLog[
 export function getRecentSecurityEvents(hours: number = 24): AuditLog[] {
   const db = getDatabase()
   const rows = db
-    .query<AuditLog, [AuditEvent[], number]>(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .query<AuditLog, any[]>(
       `SELECT id, merchant_id, event, key_type, provider, ip_address, user_agent, timestamp
        FROM audit_logs
        WHERE event IN (?, ?, ?)

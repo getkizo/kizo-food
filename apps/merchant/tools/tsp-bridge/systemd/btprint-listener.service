@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=btprint bluetooth listener
+After=btprint-adapter-setup.service btprint-agent.service
+Requires=btprint-adapter-setup.service
+
+[Service]
+Type=simple
+User=root
+Environment=BTPRINT_DUMP_RAW=0
+ExecStart=/opt/btprint/venv/bin/python /opt/btprint/src/bt_listener.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

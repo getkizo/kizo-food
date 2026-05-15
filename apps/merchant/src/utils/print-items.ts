@@ -1,4 +1,4 @@
-/**
+﻿/**
  * print-items.ts
  *
  * Shared helper for enriching raw order items with category-level routing
@@ -46,6 +46,14 @@ export interface OrderItemShape {
 }
 
 /**
+ * Modifier name pattern that indicates a "Gluten Free preparation" option was
+ * selected.  Matches names like "Gluten Free", "Gluten-Free Prep", etc.
+ * When matched, the item is treated as gluten-free for the GF-separation
+ * protocol (printed first, non-GF batch deferred 5 min to clear surfaces).
+ */
+const GF_MODIFIER_RE = /gluten.?free/i
+
+/**
  * Normalise raw order items (which may come from either the store or the
  * dashboard) and join each one against menu_categories to attach course
  * routing fields.
@@ -86,8 +94,9 @@ export function enrichItemsWithCategory(rawItems: OrderItemShape[]): PrintItem[]
     course_order: number | null
     is_last_course: number
     print_destination: string
+    dietary_tags: string | null
   }, string[]>(
-    `SELECT mi.id AS item_id, mc.course_order, mc.is_last_course, mc.print_destination
+    `SELECT mi.id AS item_id, mc.course_order, mc.is_last_course, mc.print_destination, mi.dietary_tags
      FROM menu_items mi
      LEFT JOIN menu_categories mc ON mc.id = mi.category_id
      WHERE mi.id IN (${placeholders})`
@@ -97,11 +106,26 @@ export function enrichItemsWithCategory(rawItems: OrderItemShape[]): PrintItem[]
 
   return normalized.map(({ itemId, ...rest }) => {
     const c = catMap.get(itemId)
+    let dietaryTags: string[] = []
+    try { dietaryTags = JSON.parse(c?.dietary_tags ?? '[]') } catch { /* stay empty */ }
+
+    // GF cross-contamination separation is triggered ONLY when the customer
+    // explicitly selects a "Gluten Free" modifier option — not by the menu
+    // item's inherent dietary_tags.  Inherent tags can mark a dish as
+    // "can be made GF" but the kitchen separation protocol (banner + 5-min
+    // delayed second ticket) must only fire on explicit customer selection.
+    const selectedMods: Array<{ name: string }> = rest.modifiers ?? []
+    const customerSelectedGf = selectedMods.some(m => GF_MODIFIER_RE.test(m.name))
+    // Strip any inherent gluten_free tag, then re-add only if the modifier was selected.
+    dietaryTags = dietaryTags.filter(t => t !== 'gluten_free')
+    if (customerSelectedGf) dietaryTags = [...dietaryTags, 'gluten_free']
+
     return {
       ...rest,
       courseOrder:      c?.course_order ?? null,
       isLastCourse:     Boolean(c?.is_last_course),
       printDestination: (c?.print_destination ?? 'both') as 'both' | 'kitchen' | 'counter',
+      dietaryTags,
     }
   })
 }

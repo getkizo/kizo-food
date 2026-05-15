@@ -1,4 +1,4 @@
-/**
+﻿/**
  * JWT utilities for authentication
  * Uses HS256 (HMAC-SHA256) for signing
  */

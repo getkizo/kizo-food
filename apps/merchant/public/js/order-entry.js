@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Order Entry Tab — iPad-optimized POS for walk-in dine-in and takeout orders.
  *
  * Depends on globals set by dashboard.js before this file loads:
@@ -60,6 +60,15 @@ function _hasCourse1Items() {
  */
 let _occupiedMap = {}
 
+/** Callback invoked once after the next successful fire; cleared immediately after. */
+let _afterFireCallback = null
+/** Pending callbacks for the shared Kizo confirm dialog */
+let _oeConfirmOkCb = null
+let _oeConfirmCancelCb = null
+
+/** Parked in-progress order — set when staff dismisses "Not Now" on a type switch */
+let _stashedOrder = null
+
 /**
  * Build the key used in _occupiedMap from a table label and room label.
  * @param {string} tableLabel
@@ -86,6 +95,14 @@ async function _fetchOccupiedTables() {
       const key = _occupiedKey(order.tableLabel, order.roomLabel)
       // DESC order means first seen = most recent; don't overwrite with an older entry
       if (!_occupiedMap[key]) _occupiedMap[key] = order
+    }
+    // Stale-edit guard: if the order we're editing is no longer active (paid,
+    // cancelled, etc.), the map won't contain it — clear the editor proactively.
+    // Only applies to dine-in orders — _occupiedMap only tracks dine-in, so
+    // takeout orders are always absent from it and must not be reset here.
+    if (orderState.editingOrderId && orderState.orderType === 'dine_in') {
+      const stillActive = Object.values(_occupiedMap).some((o) => o.id === orderState.editingOrderId)
+      if (!stillActive) { _resetOrder(); return } // _resetOrder calls _renderTableGrid
     }
     _renderTableGrid()
   } catch {
@@ -126,10 +143,138 @@ const orderState = {
  * Initialize the Order Entry tab.
  * Safe to call multiple times; guards against double-init.
  */
+// ---------------------------------------------------------------------------
+// Shared Kizo confirm dialog — reuses oe-confirm-overlay for all prompts
+// ---------------------------------------------------------------------------
+
+/**
+ * Show the Kizo confirm dialog with dynamic content.
+ * @param {{ title:string, body?:string, okLabel?:string, okClass?:string, cancelLabel?:string, onOk?:Function, onCancel?:Function }} opts
+ */
+function _showOeConfirm({ title, body, okLabel, okClass, cancelLabel, onOk, onCancel }) {
+  const overlay = document.getElementById('oe-confirm-overlay')
+  const titleEl = document.getElementById('oe-confirm-title')
+  const bodyEl  = document.getElementById('oe-confirm-body')
+  const btnOk   = document.getElementById('oe-confirm-btn-ok')
+  const btnCan  = document.getElementById('oe-confirm-btn-cancel')
+
+  if (titleEl) titleEl.textContent = title
+  if (bodyEl)  bodyEl.textContent  = body ?? ''
+  if (btnOk) {
+    btnOk.textContent = okLabel ?? 'OK'
+    btnOk.className   = `btn ${okClass ?? 'btn-danger'} oe-confirm-btn-ok`
+  }
+  if (btnCan) btnCan.textContent = cancelLabel ?? 'Cancel'
+
+  _oeConfirmOkCb     = onOk ?? null
+  _oeConfirmCancelCb = onCancel ?? null
+
+  if (overlay) overlay.hidden = false
+  if (btnOk) btnOk.focus()
+}
+
+function _dismissOeConfirm() {
+  const overlay = document.getElementById('oe-confirm-overlay')
+  if (overlay) overlay.hidden = true
+  _oeConfirmOkCb     = null
+  _oeConfirmCancelCb = null
+}
+
+/** Wire OK / Cancel / backdrop-click once on init — works for all callers. */
+function _bindOeConfirmDialog() {
+  const overlay = document.getElementById('oe-confirm-overlay')
+  const btnOk   = document.getElementById('oe-confirm-btn-ok')
+  const btnCan  = document.getElementById('oe-confirm-btn-cancel')
+
+  if (btnOk) btnOk.addEventListener('click', () => {
+    const cb = _oeConfirmOkCb
+    _dismissOeConfirm()
+    if (cb) cb()
+  })
+  if (btnCan) btnCan.addEventListener('click', () => {
+    const cb = _oeConfirmCancelCb
+    _dismissOeConfirm()
+    if (cb) cb()
+  })
+  if (overlay) overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) _dismissOeConfirm()
+  })
+}
+
+function _stashCurrentOrder() {
+  _stashedOrder = {
+    orderType:    orderState.orderType,
+    selectedRoom: orderState.selectedRoom ? { ...orderState.selectedRoom } : null,
+    selectedTable: orderState.selectedTable ? { ...orderState.selectedTable } : null,
+    items:        orderState.items.map((i) => ({ ...i, modifiers: [...i.modifiers] })),
+    courseMode:   orderState.courseMode,
+    printLanguage: orderState.printLanguage,
+    editingOrderId: orderState.editingOrderId,
+    customerName:  orderState.customerName,
+    kitchenNote:   orderState.kitchenNote,
+    scheduledFor:  orderState.scheduledFor,
+  }
+  _renderStashBanner()
+}
+
+function _restoreStash() {
+  if (!_stashedOrder) return
+  const s = _stashedOrder
+  _stashedOrder = null
+  orderState.orderType      = s.orderType
+  orderState.selectedRoom   = s.selectedRoom
+  orderState.selectedTable  = s.selectedTable
+  orderState.items          = s.items
+  orderState.courseMode     = s.courseMode
+  orderState.printLanguage  = s.printLanguage
+  orderState.editingOrderId = s.editingOrderId
+  orderState.customerName   = s.customerName
+  orderState.kitchenNote    = s.kitchenNote
+  orderState.scheduledFor   = s.scheduledFor
+
+  const nameInput = document.getElementById('oe-customer-name')
+  if (nameInput) nameInput.value = s.customerName
+  const noteInput = document.getElementById('oe-kitchen-note')
+  if (noteInput) noteInput.value = s.kitchenNote
+
+  _renderStashBanner()
+  _renderTypeBar()
+  _renderTableSection()
+  _renderScheduledRow()
+  _renderCategoryTabs()
+  _renderItemsGrid()
+  _renderOrderSummary()
+  _renderTotals()
+  _renderMoveTableButton()
+}
+
+function _clearStash() {
+  _stashedOrder = null
+  _renderStashBanner()
+}
+
+function _renderStashBanner() {
+  const banner  = document.getElementById('oe-stash-banner')
+  const textEl  = document.getElementById('oe-stash-banner-text')
+  if (!banner) return
+  if (!_stashedOrder) { banner.hidden = true; return }
+  const typeLabel = _stashedOrder.orderType === 'pickup' ? 'Takeout' : 'Dine-in'
+  const n = _stashedOrder.items.length
+  if (textEl) textEl.textContent = `Parked ${typeLabel} (${n} item${n !== 1 ? 's' : ''})`
+  banner.hidden = false
+}
+
+function _bindStashBanner() {
+  const btn = document.getElementById('oe-stash-resume-btn')
+  if (btn) btn.addEventListener('click', _restoreStash)
+}
+
 function initOrderEntry() {
   if (initOrderEntry._done) return
   initOrderEntry._done = true
 
+  _bindOeConfirmDialog()
+  _bindStashBanner()
   _bindTypeBar()
   _bindLangBar()
   _bindEditCancelButton()
@@ -141,6 +286,7 @@ function initOrderEntry() {
   _bindFireButton()
   _bindPayButton()
   _bindClearButton()
+  _bindMoveTableButton()
   _bindModalClose()
 }
 
@@ -156,8 +302,24 @@ function renderOrderEntry() {
   _renderItemsGrid()
   _renderOrderSummary()
   _renderTotals()
+  _renderMoveTableButton()
   // Refresh occupied-table indicators in the background
   _fetchOccupiedTables()
+}
+
+/**
+ * Toggle visibility of the [Move Table] button in the order header.
+ * Only shown when editing an existing dine-in order that already has a table
+ * assigned — moving the table for a brand-new order is just a click in the
+ * table grid.
+ */
+function _renderMoveTableButton() {
+  const btn = document.getElementById('oe-move-table-btn')
+  if (!btn) return
+  const show = !!orderState.editingOrderId
+    && orderState.orderType === 'dine_in'
+    && !!orderState.selectedTable?.label
+  btn.hidden = !show
 }
 
 // ---------------------------------------------------------------------------
@@ -167,14 +329,51 @@ function renderOrderEntry() {
 function _bindTypeBar() {
   document.querySelectorAll('.oe-type-pill').forEach((btn) => {
     btn.addEventListener('click', () => {
-      orderState.orderType = btn.dataset.type
-      orderState.scheduledFor = null
-      _renderTypeBar()
-      _renderTableSection()
-      _renderScheduledRow()
-      _renderCategoryTabs()  // must re-render: table-gate and takeout have different visibility
-      _renderItemsGrid()     // must re-render: switching types changes what's shown
-      _renderOrderSummary()  // customer name label changes
+      const newType   = btn.dataset.type
+      const hasItems  = orderState.items.length > 0
+      const isEditing = !!orderState.editingOrderId
+
+      // Apply the type switch once state is already clean
+      function _doSwitch() {
+        orderState.orderType  = newType
+        orderState.scheduledFor = null
+        _renderTypeBar()
+        _renderTableSection()
+        _renderScheduledRow()
+        _renderCategoryTabs()
+        _renderItemsGrid()
+        _renderOrderSummary()
+        _renderMoveTableButton()
+      }
+
+      if (!hasItems) {
+        // Nothing unsent — abandon any edit silently and switch
+        if (isEditing) _unlockEditingOrder()
+        _doSwitch()
+        return
+      }
+
+      // Items in the builder not yet sent — offer to fire first, or park and switch
+      const n = orderState.items.length
+      _showOeConfirm({
+        title: 'Unsent items',
+        body: `${n} item${n !== 1 ? 's' : ''} haven't been sent to the kitchen yet.`,
+        okLabel: '🔥 Fire to Kitchen',
+        okClass: 'btn-primary',
+        cancelLabel: 'Not Now',
+        onOk: () => {
+          // Fire the current order, then switch type after success
+          _afterFireCallback = _doSwitch
+          document.getElementById('oe-fire-btn')?.click()
+        },
+        onCancel: () => {
+          // Park the current order so staff can step away and come back
+          _stashCurrentOrder()
+          if (isEditing) _unlockEditingOrder()
+          _resetOrder()
+          _doSwitch()
+        },
+      })
     })
   })
 }
@@ -310,8 +509,15 @@ function _renderTableGrid(rooms) {
         ?? _occupiedMap[_occupiedKey(tableKey, null)]
       const isOccupied = !!occupiedOrder && occupiedOrder.id !== orderState.editingOrderId
       if (isOccupied) {
-        // Load the existing order for editing
-        loadOrderIntoEntry(occupiedOrder)
+        const tblName = tbl.label || tbl.id
+        _showOeConfirm({
+          title: `Reopen Table ${tblName}?`,
+          body: 'This table already has an open order. Load it for editing?',
+          okLabel: 'Reopen',
+          okClass: 'btn-primary',
+          cancelLabel: 'Cancel',
+          onOk: () => loadOrderIntoEntry(occupiedOrder),
+        })
         return
       }
       // Toggle: tap same table to deselect
@@ -339,9 +545,26 @@ function _renderTableGrid(rooms) {
       _renderItemsGrid()
       _renderOrderSummary()
       _renderTotals()
+      _renderMoveTableButton()
     })
   })
 }
+
+// ---------------------------------------------------------------------------
+// Category colour palette — pastels cycle across tabs so each section is
+// visually distinct at a glance.  Each entry: [bg, border, activeBackground].
+// ---------------------------------------------------------------------------
+
+const CAT_PALETTE = [
+  ['#ffd6e0', '#ffaabe', '#d4507a'],  // rose
+  ['#ffe8d0', '#ffcb99', '#c96e28'],  // peach
+  ['#fff4cc', '#ffe066', '#a88c00'],  // butter
+  ['#e0f0d8', '#b4dba0', '#559038'],  // sage
+  ['#cceeea', '#88d8cc', '#289080'],  // mint
+  ['#cce4f5', '#88c4e8', '#2878b8'],  // sky
+  ['#ddd4f5', '#b8a8e8', '#5a42c8'],  // lavender
+  ['#f0d4f0', '#d8a0d8', '#8e38a0'],  // mauve
+]
 
 // ---------------------------------------------------------------------------
 // Category tabs
@@ -377,7 +600,7 @@ function _renderCategoryTabs() {
     orderState.activeCategoryId = categories[0]?.id ?? null
   }
 
-  tabs.innerHTML = categories.map((cat) => {
+  tabs.innerHTML = categories.map((cat, idx) => {
     const active = cat.id === orderState.activeCategoryId
     const unavail = !_isCategoryAvailableNow(cat)
     const cls = [
@@ -385,7 +608,9 @@ function _renderCategoryTabs() {
       active ? 'active' : '',
       unavail ? 'unavailable' : '',
     ].filter(Boolean).join(' ')
-    return `<button class="${cls}" data-cat="${_esc(cat.id)}" title="${unavail ? 'Outside available hours' : ''}">${_esc(cat.name)}</button>`
+    const [bg, border, activeColor] = CAT_PALETTE[idx % CAT_PALETTE.length]
+    const paletteStyle = `--cat-bg:${bg};--cat-border:${border};--cat-active:${activeColor}`
+    return `<button class="${cls}" data-cat="${_esc(cat.id)}" style="${paletteStyle}" title="${unavail ? 'Outside available hours' : ''}">${_esc(cat.name)}</button>`
   }).join('')
 
   tabs.querySelectorAll('.oe-cat-tab').forEach((btn) => {
@@ -408,6 +633,42 @@ function _isCategoryAvailableNow(cat) {
   const now = new Date()
   const cur = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   return cur >= cat.hoursStart && cur <= cat.hoursEnd
+}
+
+// ---------------------------------------------------------------------------
+// Drink meta helpers — vessel icon + brand badge for item bubbles
+// ---------------------------------------------------------------------------
+
+const _OE_VESSEL_SVG = {
+  glass:  `<svg class="oe-vessel-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h8l-2.5 8a3.5 3.5 0 01-3 0L8 3z"/><line x1="12" y1="14" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>`,
+  bottle: `<svg class="oe-vessel-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3h4v2.5l2.5 4V19a1 1 0 01-1 1H8.5a1 1 0 01-1-1V9.5L10 5.5V3z"/></svg>`,
+  carafe: `<svg class="oe-vessel-icon" viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3h4v2l1 2c1 2 2 3 2 5v8a1 1 0 01-1 1H7a1 1 0 01-1-1v-8c0-2 1-3 2-5l1-2V3z"/><path d="M15 7h2a1 1 0 011 1v1"/></svg>`,
+}
+
+const _OE_BRANDS = {
+  'space dust': 'space-dust',
+  'singha':     'singha',
+  'sapporo':    'sapporo',
+  'heineken':   'heineken',
+}
+
+/** Returns HTML string of vessel icon + brand badge for a drink item, or '' */
+function _drinkBubbleMeta(name) {
+  const n = name.toLowerCase()
+  let vessel = null
+  if (n.includes('carafe'))       vessel = 'carafe'
+  else if (n.includes('bottle'))  vessel = 'bottle'
+  else if (n.includes('glass'))   vessel = 'glass'
+
+  let brand = null
+  for (const [kw, cls] of Object.entries(_OE_BRANDS)) {
+    if (n.includes(kw)) { brand = cls; break }
+  }
+
+  if (!vessel && !brand) return ''
+  const vesselHtml = vessel ? `<span class="oe-vessel-wrap" title="${vessel}">${_OE_VESSEL_SVG[vessel]}</span>` : ''
+  const brandHtml  = brand  ? `<span class="oe-brand-dot oe-brand-dot--${brand}" aria-label="${brand.replace('-', ' ')}"></span>` : ''
+  return `<span class="oe-drink-meta">${vesselHtml}${brandHtml}</span>`
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +706,7 @@ function _renderItemsGrid() {
     return `
       <button class="${cls}" data-item-id="${_esc(item.id)}" ${oos ? 'aria-disabled="true"' : ''}>
         <span class="oe-item-bubble-name">${_esc(item.name)}</span>
+        ${_drinkBubbleMeta(item.name)}
         <span class="oe-item-bubble-price">${_esc(priceStr)}</span>
         ${oos ? `<span class="oe-item-bubble-oos">${_esc(_stockLabel(item.stockStatus))}</span>` : ''}
       </button>
@@ -613,9 +875,18 @@ function _renderItemModal() {
     if (groups.length === 0) {
       modBody.innerHTML = ''
     } else {
-      modBody.innerHTML = groups.map((group) => `
-        <div class="oe-mod-group" data-group-id="${_esc(group.id)}">
-          <div class="oe-mod-group-name">${_esc(group.name)}${group.isMandatory ? '<span class="oe-mod-required">*</span>' : ''}</div>
+      let reqPaletteIdx = 0
+      modBody.innerHTML = groups.map((group) => {
+        const isRequired = !!group.isMandatory
+        let groupStyle = ''
+        if (isRequired) {
+          const [bg, border, active] = CAT_PALETTE[reqPaletteIdx % CAT_PALETTE.length]
+          groupStyle = ` style="--mod-bg:${bg};--mod-border:${border};--mod-active:${active}"`
+          reqPaletteIdx++
+        }
+        return `
+        <div class="oe-mod-group${isRequired ? ' oe-mod-group--required' : ''}" data-group-id="${_esc(group.id)}"${groupStyle}>
+          <div class="oe-mod-group-name">${_esc(group.name)}${isRequired ? '<span class="oe-mod-required">*</span>' : ''}</div>
           <div class="oe-mod-options">
             ${(group.modifiers ?? []).map((mod) => {
               const oos = mod.stockStatus && mod.stockStatus !== 'in_stock'
@@ -626,7 +897,7 @@ function _renderItemModal() {
             }).join('')}
           </div>
         </div>
-      `).join('')
+      `}).join('')
 
       modBody.querySelectorAll('.oe-mod-option:not(.unavailable)').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -778,7 +1049,29 @@ function _commitModalItem() {
 // Order summary (right column)
 // ---------------------------------------------------------------------------
 
+/**
+ * Update the "Current Order" heading to reflect the active table or order type,
+ * and apply/remove the takeout tint on the order body.
+ * Dine-in: "Current Order [5]" | Takeout: "Current Order [Takeout]"
+ */
+function _renderOrderTitle() {
+  const titleEl = document.getElementById('oe-order-title')
+  if (!titleEl) return
+  const isTakeout = orderState.orderType === 'pickup'
+  if (isTakeout) {
+    titleEl.textContent = 'Current Order [Takeout]'
+  } else if (orderState.selectedTable?.label) {
+    titleEl.textContent = `Current Order [${orderState.selectedTable.label}]`
+  } else {
+    titleEl.textContent = 'Current Order'
+  }
+  // Tint the order body (items + footer) for takeout so staff can't miss the type
+  const panel = titleEl.closest('.oe-order-panel')
+  if (panel) panel.classList.toggle('oe-order-panel--takeout', isTakeout)
+}
+
 function _renderOrderSummary() {
+  _renderOrderTitle()
   const listEl = document.getElementById('oe-order-items')
   const emptyEl = document.getElementById('oe-order-empty')
   if (!listEl) return
@@ -1151,7 +1444,7 @@ function _bindFireButton() {
   if (!btn) return
 
   btn.addEventListener('click', async () => {
-    if (!_validateOrder()) return
+    if (!_validateOrder()) { _afterFireCallback = null; return }
 
     const isEditing = !!orderState.editingOrderId
 
@@ -1205,6 +1498,7 @@ function _bindFireButton() {
         _unlockEditingOrder()
         _resetOrder()
         _fetchOccupiedTables()
+        const _afterFire = _afterFireCallback; _afterFireCallback = null; if (_afterFire) _afterFire()
       } else {
         // ── Create new order ─────────────────────────────────────────────
         const body = {
@@ -1239,6 +1533,7 @@ function _bindFireButton() {
         )
         _resetOrder()
         _fetchOccupiedTables()
+        const _afterFire = _afterFireCallback; _afterFireCallback = null; if (_afterFire) _afterFire()
       }
     } catch (err) {
       window.showToast(`Failed: ${err.message}`, 'error')
@@ -1456,7 +1751,7 @@ async function _openFinixPaymentFromOrderEntry() {
           name:       oi.name,
           priceCents: oi.priceCents,
           quantity:   oi.qty,
-          modifiers:  oi.modifiers,
+          selectedModifiers: oi.modifiers,
         }))
         const res = await window.api(`/api/merchants/${merchantId}/orders`, {
           method:  'POST',
@@ -1558,6 +1853,7 @@ function _resetOrder() {
   _renderItemsGrid()      // re-applies table-first gate
   _renderOrderSummary()
   _renderTotals()
+  _renderMoveTableButton()
 
   const payBtn = document.getElementById('oe-pay-btn')
   if (payBtn) payBtn.disabled = true
@@ -1568,44 +1864,48 @@ function _resetOrder() {
 // ---------------------------------------------------------------------------
 
 function _bindClearButton() {
-  const btn     = document.getElementById('oe-clear-btn')
-  const overlay = document.getElementById('oe-confirm-overlay')
-  const btnOk   = document.getElementById('oe-confirm-btn-ok')
-  const btnKeep = document.getElementById('oe-confirm-btn-cancel')
-
-  let _pendingConfirm = null
-
-  function _showConfirm(onConfirm) {
-    _pendingConfirm = onConfirm
-    if (overlay) overlay.hidden = false
-    if (btnOk) btnOk.focus()
-  }
-
-  function _dismiss() {
-    if (overlay) overlay.hidden = true
-    _pendingConfirm = null
-  }
-
-  if (btnOk) btnOk.addEventListener('click', () => {
-    const cb = _pendingConfirm
-    _dismiss()
-    if (cb) cb()
-  })
-
-  if (btnKeep) btnKeep.addEventListener('click', _dismiss)
-
-  // Tap outside the dialog box to dismiss
-  if (overlay) overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) _dismiss()
-  })
-
+  const btn = document.getElementById('oe-clear-btn')
   if (!btn) return
+
   btn.addEventListener('click', () => {
-    if (orderState.items.length === 0) {
+    const hasItems  = orderState.items.length > 0
+    const isEditing = !!orderState.editingOrderId
+
+    if (!hasItems && !isEditing) {
       _resetOrder()
       return
     }
-    _showConfirm(() => { _unlockEditingOrder(); _resetOrder() })
+
+    _showOeConfirm({
+      title: 'Cancel this order?',
+      body: 'All items will be removed.',
+      okLabel: 'Cancel order',
+      okClass: 'btn-danger',
+      cancelLabel: 'Keep order',
+      onOk: async () => {
+        const orderId    = orderState.editingOrderId
+        const merchantId = window.state?.merchantId
+
+        _unlockEditingOrder()
+        _resetOrder()  // reset local state immediately — don't wait for API
+
+        if (!orderId || !merchantId) return
+
+        try {
+          const res = await window.api(
+            `/api/merchants/${merchantId}/orders/${orderId}`,
+            { method: 'DELETE' },
+          )
+          if (!res.ok) throw new Error()
+          if (typeof ordersState !== 'undefined') {
+            ordersState.allOrders = ordersState.allOrders.filter((o) => o.id !== orderId)
+            if (typeof renderFilteredOrders === 'function') renderFilteredOrders()
+          }
+        } catch {
+          if (typeof loadOrders === 'function') loadOrders()
+        }
+      },
+    })
   })
 }
 
@@ -1711,6 +2011,7 @@ function loadOrderIntoEntry(order) {
   _renderItemsGrid()
   _renderOrderSummary()
   _renderTotals()
+  _renderMoveTableButton()
 }
 
 /**
@@ -1722,6 +2023,55 @@ function _bindEditCancelButton() {
   btn.addEventListener('click', () => {
     _unlockEditingOrder()
     _resetOrder()
+  })
+}
+
+/**
+ * Bind the [Move Table] button in the order header and listen for
+ * `order-table-changed` so local state (selectedTable / selectedRoom) follows
+ * the chosen table. Dashboard.js publishes the event after the PATCH succeeds
+ * and also re-runs loadOrders() so order cards reflect the move.
+ */
+function _bindMoveTableButton() {
+  const btn = document.getElementById('oe-move-table-btn')
+  if (btn) {
+    btn.addEventListener('click', () => {
+      if (!orderState.editingOrderId) return
+      if (typeof window.MoveTable?.open === 'function') {
+        window.MoveTable.open(orderState.editingOrderId, orderState.selectedTable?.label)
+      }
+    })
+  }
+
+  document.addEventListener('order-table-changed', (e) => {
+    const { orderId, tableLabel, roomLabel } = e.detail ?? {}
+    if (!orderId || orderId !== orderState.editingOrderId) return
+
+    const rooms = window.state?.profile?.tableLayout?.rooms ?? []
+    let resolvedRoom = null
+    let resolvedTable = null
+    if (roomLabel) {
+      const r = rooms.find((r) => r.name === roomLabel)
+      resolvedRoom = r ? { id: r.id, name: r.name } : { id: null, name: roomLabel }
+    }
+    if (tableLabel) {
+      const searchIn = resolvedRoom ? rooms.filter((r) => r.id === resolvedRoom.id) : rooms
+      outer: for (const r of searchIn) {
+        for (const t of r.tables ?? []) {
+          if ((t.label || t.id) === tableLabel) {
+            resolvedTable = { id: t.id, label: tableLabel }
+            if (!resolvedRoom) resolvedRoom = { id: r.id, name: r.name }
+            break outer
+          }
+        }
+      }
+      if (!resolvedTable) resolvedTable = { id: null, label: tableLabel }
+    }
+
+    orderState.selectedRoom  = resolvedRoom
+    orderState.selectedTable = resolvedTable
+    _renderTableSection()
+    _renderMoveTableButton()
   })
 }
 
@@ -1748,9 +2098,26 @@ function _unlockEditingOrder() {
 // Expose to dashboard.js
 // ---------------------------------------------------------------------------
 
+/**
+ * Called by dashboard.js when an order reaches a terminal status (paid, cancelled, etc.).
+ * Evicts the order from _occupiedMap and resets edit state if this order was loaded.
+ * @param {string} orderId
+ */
+function onOrderTerminated(orderId) {
+  for (const key of Object.keys(_occupiedMap)) {
+    if (_occupiedMap[key]?.id === orderId) delete _occupiedMap[key]
+  }
+  if (orderState.editingOrderId === orderId) {
+    _resetOrder()
+  } else {
+    _renderTableGrid?.()
+  }
+}
+
 window.initOrderEntry = initOrderEntry
 window.renderOrderEntry = renderOrderEntry
 window.loadOrderIntoEntry = loadOrderIntoEntry
 window.resetOrderEntry = _resetOrder
+window.onOrderTerminated = onOrderTerminated
 window.isEditingOrder    = () => !!orderState.editingOrderId
 window.getEditingOrderId = () => orderState.editingOrderId

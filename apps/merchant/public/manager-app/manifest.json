@@ -1,0 +1,21 @@
+﻿{
+  "name": "Manager",
+  "short_name": "Manager",
+  "id": "/manager-app/",
+  "start_url": "/manager-app/",
+  "display": "standalone",
+  "background_color": "#6c63ff",
+  "theme_color": "#6c63ff",
+  "icons": [
+    {
+      "src": "/store/icon/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/store/icon/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Menu routes
  * Serves menu data and imports from POS providers (Clover, Toast, Square)
  *
@@ -21,9 +21,11 @@ import type { MenuImportAdapter } from '../adapters/types'
 import type { AuthContext } from '../middleware/auth'
 import type { POSMenuData } from '../adapters/types'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { serverError } from '../utils/server-error'
+import { initHtmlRenderer } from '../services/html-receipt'
 
 const menu = new Hono()
 
@@ -32,7 +34,7 @@ const menu = new Hono()
 // Returns the locally-stored menu (categories → items → modifierGroups → modifiers)
 // ---------------------------------------------------------------------------
 menu.get('/api/merchants/:id/menu', authenticate, async (c: AuthContext) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   const db = getDatabase()
 
   // Single JOIN query: 1 round-trip instead of 2+N+M+K queries
@@ -186,7 +188,7 @@ menu.get('/api/merchants/:id/menu', authenticate, async (c: AuthContext) => {
   // All modifier groups — 2 queries instead of 2N
   type GroupModRow = {
     id: string; name: string; min_required: number; max_allowed: number | null
-    pos_group_id: string | null; available_for_takeout: number; is_mandatory: number; input_order: number
+    pos_group_id: string | null; available_for_takeout: number; is_mandatory: number; input_order: number; print_first: number
     mod_id: string | null; mod_name: string | null; mod_price: number | null
     mod_is_available: number | null; mod_stock_status: string | null; mod_sort: number | null
   }
@@ -194,7 +196,7 @@ menu.get('/api/merchants/:id/menu', authenticate, async (c: AuthContext) => {
   const groupModRows = db
     .query<GroupModRow, [string]>(
       `SELECT mg.id, mg.name, mg.min_required, mg.max_allowed, mg.pos_group_id,
-              mg.available_for_takeout, mg.is_mandatory, mg.input_order,
+              mg.available_for_takeout, mg.is_mandatory, mg.input_order, mg.print_first,
               m.id AS mod_id, m.name AS mod_name, m.price_cents AS mod_price,
               m.is_available AS mod_is_available, m.stock_status AS mod_stock_status,
               m.sort_order AS mod_sort
@@ -225,7 +227,7 @@ menu.get('/api/merchants/:id/menu', authenticate, async (c: AuthContext) => {
   const groupMap = new Map<string, {
     id: string; posGroupId: string | null; name: string
     minRequired: number; maxAllowed: number | null
-    availableForTakeout: boolean; isMandatory: boolean; inputOrder: number
+    availableForTakeout: boolean; isMandatory: boolean; inputOrder: number; printFirst: boolean
     modifiers: { id: string; name: string; priceCents: number; isAvailable: boolean; stockStatus: string; sortOrder: number }[]
     assignedItemIds: string[]
   }>()
@@ -237,6 +239,7 @@ menu.get('/api/merchants/:id/menu', authenticate, async (c: AuthContext) => {
         minRequired: row.min_required, maxAllowed: row.max_allowed,
         availableForTakeout: row.available_for_takeout !== 0,
         isMandatory: row.is_mandatory === 1, inputOrder: row.input_order ?? 0,
+        printFirst: row.print_first === 1,
         modifiers: [], assignedItemIds: assignedByGroup.get(row.id) ?? [],
       })
     }
@@ -281,7 +284,7 @@ menu.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const { name } = await c.req.json<{ name: string }>()
 
     if (!name || !name.trim()) {
@@ -317,8 +320,8 @@ menu.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const catId = c.req.param('catId')
+    const merchantId = c.req.param('id')!
+    const catId = c.req.param('catId')!
 
     const db = getDatabase()
 
@@ -352,8 +355,8 @@ menu.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const catId = c.req.param('catId')
+    const merchantId = c.req.param('id')!
+    const catId = c.req.param('catId')!
 
     const { name, availableOnline, availableInStore, hoursStart, hoursEnd, courseOrder, isLastCourse, printDestination } = await c.req.json<{
       name?: string
@@ -473,9 +476,9 @@ menu.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
-    const body = await c.req.json<{ provider?: string }>().catch(() => ({}))
+    const body = await c.req.json<{ provider?: string }>().catch(() => ({} as { provider?: string }))
     const provider = body.provider ?? 'clover'
 
     let adapter: MenuImportAdapter
@@ -591,8 +594,8 @@ menu.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const itemId = c.req.param('itemId')
+    const merchantId = c.req.param('id')!
+    const itemId = c.req.param('itemId')!
 
     const { imageUrl } = await c.req.json<{ imageUrl: string }>()
 
@@ -632,7 +635,7 @@ menu.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     const formData = await c.req.formData().catch(() => null)
     const file = formData?.get('image')
@@ -673,8 +676,8 @@ menu.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const itemId = c.req.param('itemId')
+    const merchantId = c.req.param('id')!
+    const itemId = c.req.param('itemId')!
 
     const body = await c.req.json<{
       name?: string
@@ -760,7 +763,7 @@ menu.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     const body = await c.req.json<{
       categoryId: string
@@ -852,8 +855,8 @@ menu.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const itemId = c.req.param('itemId')
+    const merchantId = c.req.param('id')!
+    const itemId = c.req.param('itemId')!
 
     const db = getDatabase()
 
@@ -881,8 +884,8 @@ menu.patch(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const catId = c.req.param('catId')
+    const merchantId = c.req.param('id')!
+    const catId = c.req.param('catId')!
     const { itemIds } = await c.req.json<{ itemIds: string[] }>()
 
     if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -913,8 +916,8 @@ menu.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const groupId = c.req.param('groupId')
+    const merchantId = c.req.param('id')!
+    const groupId = c.req.param('groupId')!
 
     const body = await c.req.json<{ itemIds: string[] }>()
 
@@ -961,8 +964,8 @@ menu.patch(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const modifierId = c.req.param('modifierId')
+    const merchantId = c.req.param('id')!
+    const modifierId = c.req.param('modifierId')!
 
     const { stockStatus } = await c.req.json<{ stockStatus: 'in_stock' | 'out_today' | 'out_indefinitely' }>()
 
@@ -1002,7 +1005,7 @@ menu.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const { name } = await c.req.json<{ name: string }>()
 
     if (!name?.trim()) {
@@ -1041,16 +1044,18 @@ menu.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const groupId = c.req.param('groupId')
+    const merchantId = c.req.param('id')!
+    const groupId = c.req.param('groupId')!
 
-    const { name: groupNameRaw, availableForTakeout, isMandatory, inputOrder, minRequired, maxAllowed, options } = await c.req.json<{
+    const { name: groupNameRaw, availableForTakeout, isMandatory, inputOrder, printFirst, minRequired, maxAllowed, options } = await c.req.json<{
       name?: string
       availableForTakeout?: boolean
       /** true = must select before adding item to order */
       isMandatory?: boolean
       /** display/fill order when taking an order (lower = first) */
       inputOrder?: number
+      /** true = print this group before all others on kitchen/counter tickets */
+      printFirst?: boolean
       /** minimum number of options the customer must select (0 = optional) */
       minRequired?: number
       /** maximum options allowed (null = unlimited, 1 = single-select) */
@@ -1083,13 +1088,14 @@ menu.put(
     db.transaction(() => {
       // Update group scalar fields if provided
       const groupName = groupNameRaw?.trim()
-      if (groupName || availableForTakeout !== undefined || isMandatory !== undefined || inputOrder !== undefined || minRequired !== undefined || maxAllowed !== undefined) {
+      if (groupName || availableForTakeout !== undefined || isMandatory !== undefined || inputOrder !== undefined || printFirst !== undefined || minRequired !== undefined || maxAllowed !== undefined) {
         const setParts: string[] = []
         const setVals: (string | number | null)[] = []
         if (groupName) { setParts.push('name = ?'); setVals.push(groupName) }
         if (availableForTakeout !== undefined) { setParts.push('available_for_takeout = ?'); setVals.push(availableForTakeout ? 1 : 0) }
         if (isMandatory !== undefined) { setParts.push('is_mandatory = ?'); setVals.push(isMandatory ? 1 : 0) }
         if (inputOrder !== undefined) { setParts.push('input_order = ?'); setVals.push(inputOrder) }
+        if (printFirst !== undefined) { setParts.push('print_first = ?'); setVals.push(printFirst ? 1 : 0) }
         if (minRequired !== undefined) { setParts.push('min_required = ?'); setVals.push(Math.max(0, Math.round(minRequired))) }
         if (maxAllowed !== undefined) { setParts.push('max_allowed = ?'); setVals.push(maxAllowed !== null ? Math.max(1, Math.round(maxAllowed)) : null) }
         setParts.push("updated_at = datetime('now')")
@@ -1144,7 +1150,7 @@ menu.patch(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const { order } = await c.req.json<{ order: string[] }>()
 
     if (!Array.isArray(order)) {
@@ -1212,5 +1218,327 @@ function upsertModifierGroups(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Export helpers
+// ---------------------------------------------------------------------------
+
+function fmtCents(cents: number): string {
+  return '$' + (cents / 100).toFixed(2)
+}
+
+function escHtml(s: string | null | undefined): string {
+  if (!s) return ''
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/**
+ * Read a menu image URL (relative path like /images/merchants/…/item.jpg)
+ * and return a base64 data URI, or null if the file does not exist.
+ * Used for embedding images into the standalone PDF (no live server needed).
+ */
+function imageToDataUri(imageUrl: string | null): string | null {
+  if (!imageUrl) return null
+  if (imageUrl.startsWith('data:')) return imageUrl
+  try {
+    const filePath = join(import.meta.dir, '../../public', imageUrl)
+    if (!existsSync(filePath)) return null
+    const ext = imageUrl.split('.').pop()?.toLowerCase() ?? 'jpg'
+    const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+    return `data:${mime};base64,${readFileSync(filePath).toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
+interface ExportItem  { name: string; description: string | null; priceCents: number; imageUrl: string | null; dietaryTags: string[] }
+interface ExportCat   { name: string; items: ExportItem[] }
+
+/** Lightweight menu query for export — available items only, just the fields we need. */
+function loadExportMenu(merchantId: string): ExportCat[] {
+  const db = getDatabase()
+  type Row = {
+    cat_name: string; cat_sort: number
+    item_name: string | null; item_desc: string | null
+    price_cents: number | null; image_url: string | null; item_sort: number | null
+    dietary_tags: string | null
+  }
+  const rows = db.query<Row, [string]>(
+    `SELECT mc.name AS cat_name, mc.sort_order AS cat_sort,
+            mi.name AS item_name, mi.description AS item_desc,
+            mi.price_cents, mi.image_url, mi.sort_order AS item_sort,
+            mi.dietary_tags
+       FROM menu_categories mc
+       LEFT JOIN menu_items mi
+         ON mi.category_id = mc.id AND mi.merchant_id = mc.merchant_id AND mi.is_available = 1
+      WHERE mc.merchant_id = ?
+      ORDER BY mc.sort_order ASC, mi.sort_order ASC`,
+  ).all(merchantId)
+
+  const catMap = new Map<string, ExportCat & { _itemSet: Set<string> }>()
+
+  for (const r of rows) {
+    let cat = catMap.get(r.cat_name)
+    if (!cat) {
+      cat = { name: r.cat_name, items: [], _itemSet: new Set() }
+      catMap.set(r.cat_name, cat)
+    }
+    if (!r.item_name) continue
+    const itemKey = `${r.item_name}:${r.price_cents}`
+    if (!cat._itemSet.has(itemKey)) {
+      cat._itemSet.add(itemKey)
+      let dietaryTags: string[] = []
+      try { dietaryTags = JSON.parse(r.dietary_tags || '[]') } catch { /* ignore */ }
+      cat.items.push({
+        name: r.item_name,
+        description: r.item_desc,
+        priceCents: r.price_cents!,
+        imageUrl: r.image_url,
+        dietaryTags,
+      })
+    }
+  }
+
+  return Array.from(catMap.values())
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/merchants/:id/menu/export.md
+// Returns the full menu as a Markdown attachment.
+// ---------------------------------------------------------------------------
+menu.get('/api/merchants/:id/menu/export.md', authenticate, async (c: AuthContext) => {
+  const merchantId = c.req.param('id')!
+  try {
+    const db = getDatabase()
+    const biz = db.query<{ business_name: string }, [string]>(
+      `SELECT business_name FROM merchants WHERE id = ?`,
+    ).get(merchantId)
+
+    const categories = loadExportMenu(merchantId)
+    const date = new Date().toISOString().slice(0, 10)
+
+    const lines: string[] = [
+      `# ${biz?.business_name ?? 'Menu'}`,
+      '',
+      `*Generated ${date}*`,
+      '',
+      '---',
+    ]
+
+    for (const cat of categories) {
+      if (cat.items.length === 0) continue
+      lines.push('', `## ${cat.name}`, '')
+
+      for (const item of cat.items) {
+        lines.push(`### ${item.name} — ${fmtCents(item.priceCents)}`)
+        if (item.description) lines.push('', item.description)
+
+        lines.push('')
+      }
+
+      lines.push('---')
+    }
+
+    const md = lines.join('\n')
+    const filename = `menu-${date}.md`
+
+    return new Response(md, {
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'no-store',
+      },
+    })
+  } catch (err) {
+    return serverError(c, "[menu]", err)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/merchants/:id/menu/export.pdf
+// Returns the menu as a PDF attachment.
+//
+// Query params:
+//   format      Letter | Tabloid | Legal | half-letter | 4x6   (default: Letter)
+//   orientation portrait | landscape                            (default: portrait)
+//   images      true | false — embed item thumbnails           (default: false)
+//   cats        comma-separated category names to include      (default: all)
+//               Each name must be URL-encoded, e.g.  cats=Lunch%20Specials,Drinks
+// ---------------------------------------------------------------------------
+
+/** Map format key → CSS sizing tokens used in the HTML template. */
+const PDF_CSS: Record<string, { hPadding: string; vMargin: string; bodySize: string; h1Size: string; catSize: string; itemSize: string; descSize: string; itemGap: string }> = {
+  '4x6':        { hPadding: '18px', vMargin: '16px', bodySize: '9px',  h1Size: '15px', catSize: '10px', itemSize: '10px', descSize: '8px',  itemGap: '8px'  },
+  'half-letter':{ hPadding: '32px', vMargin: '28px', bodySize: '11px', h1Size: '20px', catSize: '12px', itemSize: '12px', descSize: '10px', itemGap: '10px' },
+  'Tabloid':    { hPadding: '72px', vMargin: '56px', bodySize: '14px', h1Size: '32px', catSize: '16px', itemSize: '15px', descSize: '13px', itemGap: '16px' },
+  'Legal':      { hPadding: '56px', vMargin: '48px', bodySize: '13px', h1Size: '28px', catSize: '15px', itemSize: '14px', descSize: '12px', itemGap: '14px' },
+  'Letter':     { hPadding: '56px', vMargin: '48px', bodySize: '13px', h1Size: '28px', catSize: '15px', itemSize: '14px', descSize: '12px', itemGap: '14px' },
+}
+
+/** Map format key → Puppeteer pdf() size options. */
+function puppeteerPageSize(format: string): { format: string } | { width: string; height: string } {
+  if (format === 'half-letter') return { width: '5.5in', height: '8.5in' }
+  if (format === '4x6')        return { width: '4in',   height: '6in' }
+  return { format: format || 'Letter' }
+}
+
+menu.get('/api/merchants/:id/menu/export.pdf', authenticate, async (c: AuthContext) => {
+  const merchantId  = c.req.param('id')!
+  const format      = (['Letter','Tabloid','Legal','half-letter','4x6'].includes(c.req.query('format') ?? ''))
+    ? (c.req.query('format') as string)
+    : 'Letter'
+  const landscape   = c.req.query('orientation') === 'landscape'
+  const withImages  = c.req.query('images') === 'true'
+  const catsParam   = c.req.query('cats')
+  const selectedCats: Set<string> | null = catsParam
+    ? new Set(catsParam.split(',').map(s => decodeURIComponent(s).trim()).filter(Boolean))
+    : null
+
+  try {
+    const db = getDatabase()
+    const biz = db.query<{ business_name: string; address: string | null; phone_number: string | null; website: string | null }, [string]>(
+      `SELECT business_name, address, phone_number, website FROM merchants WHERE id = ?`,
+    ).get(merchantId)
+
+    let categories = loadExportMenu(merchantId)
+    if (selectedCats && selectedCats.size > 0) {
+      categories = categories.filter(cat => selectedCats.has(cat.name))
+    }
+    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+
+    // ── Build HTML ─────────────────────────────────────────────────────────────
+    const contactParts: string[] = []
+    if (biz?.address) contactParts.push(escHtml(biz.address))
+    if (biz?.phone_number) contactParts.push(escHtml(biz.phone_number))
+    if (biz?.website) contactParts.push(escHtml(biz.website.replace(/^https?:\/\//, '')))
+
+    const css = PDF_CSS[format] ?? PDF_CSS['Letter']
+    const imgSize = format === '4x6' ? '48px' : format === 'half-letter' ? '56px' : '72px'
+
+    const colCount = landscape ? 4 : 2
+
+    const categoryHtml = categories.filter(cat => cat.items.length > 0).map(cat => {
+      const itemsHtml = cat.items.map(item => {
+        const imgUri  = withImages ? imageToDataUri(item.imageUrl) : null
+        const imgHtml = imgUri
+          ? `<img class="item-img" src="${imgUri}" alt="${escHtml(item.name)}">`
+          : ''
+
+        const badges: string[] = []
+        if (item.dietaryTags.includes('vegan'))       badges.push('<span class="badge badge-v" title="Can be prepared vegan">V</span>')
+        if (item.dietaryTags.includes('vegetarian'))  badges.push('<span class="badge badge-vg" title="Can be prepared vegetarian">VG</span>')
+        if (item.dietaryTags.includes('gluten_free')) badges.push('<span class="badge badge-g" title="Gluten free">GF</span>')
+        const badgeHtml = badges.length ? `<span class="badges">${badges.join('')}</span>` : ''
+
+        return `
+          <div class="item">
+            ${imgHtml}
+            <div class="item-body">
+              <div class="item-row">
+                <span class="item-name">${escHtml(item.name)}${badgeHtml}</span>
+                <span class="item-price">${fmtCents(item.priceCents)}</span>
+              </div>
+              ${item.description ? `<div class="item-desc">${escHtml(item.description)}</div>` : ''}
+            </div>
+          </div>`
+      }).join('')
+
+      return `
+        <div class="category">
+          <h2 class="cat-name">${escHtml(cat.name)}</h2>
+          <div class="items">${itemsHtml}</div>
+        </div>`
+    }).join('')
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${escHtml(biz?.business_name ?? 'Menu')}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Helvetica, Arial, sans-serif; color: #111; background: #fff;
+         padding: 0 ${css.hPadding}; font-size: ${css.bodySize}; }
+  .header { text-align: center; margin-bottom: 1.8em; padding-bottom: 1.2em;
+            border-bottom: 2px solid #111; column-span: all; }
+  .header h1 { font-size: ${css.h1Size}; font-weight: 700; letter-spacing: 0.04em;
+               text-transform: uppercase; margin-bottom: 0.25em; }
+  .header .subtitle { font-size: 0.9em; color: #666; margin-bottom: 0.25em; }
+  .header .contact  { font-size: 0.85em; color: #999; margin-top: 0.4em; }
+  .columns { column-count: ${colCount}; column-gap: 2em; }
+  .category { break-inside: avoid; margin-bottom: 1.6em; }
+  .cat-name { font-size: ${css.catSize}; font-weight: 700; text-transform: uppercase;
+              letter-spacing: 0.08em; padding-bottom: 0.4em;
+              border-bottom: 1px solid #ddd; margin-bottom: 0.7em; color: #333; }
+  .items { display: flex; flex-direction: column; gap: ${css.itemGap}; }
+  .item  { display: flex; gap: 0.7em; align-items: flex-start; break-inside: avoid; }
+  .item-img { width: ${imgSize}; height: ${imgSize}; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+  .item-body { flex: 1; }
+  .item-row { display: flex; justify-content: space-between; align-items: baseline;
+              gap: 0.4em; margin-bottom: 0.15em; }
+  .item-name  { font-size: ${css.itemSize}; font-weight: 600; color: #111; }
+  .item-price { font-size: ${css.itemSize}; font-weight: 600; color: #111; white-space: nowrap; }
+  .item-desc  { font-size: ${css.descSize}; color: #666; line-height: 1.4; }
+  .badges { display: inline-flex; gap: 2px; margin-left: 4px; vertical-align: middle; }
+  .badge  { display: inline-block; font-size: 8px; font-weight: 700; line-height: 1;
+            padding: 1px 3px; border-radius: 2px; letter-spacing: 0.03em; }
+  .badge-v  { background: #d1fae5; color: #065f46; }
+  .badge-vg { background: #dcfce7; color: #166534; }
+  .badge-g  { background: #fef9c3; color: #713f12; }
+  .legend { column-span: all; margin-top: 1.8em; padding-top: 0.8em;
+            border-top: 1px solid #eee; font-size: 0.8em; color: #888;
+            display: flex; gap: 1.2em; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>${escHtml(biz?.business_name ?? 'Menu')}</h1>
+    <div class="subtitle">Menu · ${date}</div>
+    ${contactParts.length ? `<div class="contact">${contactParts.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+  </div>
+  <div class="columns">
+    ${categoryHtml}
+  </div>
+  <div class="legend">
+    <span class="legend-item"><span class="badge badge-v">V</span> Can be prepared vegan</span>
+    <span class="legend-item"><span class="badge badge-vg">VG</span> Can be prepared vegetarian</span>
+    <span class="legend-item"><span class="badge badge-g">GF</span> Gluten free</span>
+  </div>
+</body>
+</html>`
+
+    // ── Render PDF via Puppeteer ──────────────────────────────────────────────
+    const browser = await initHtmlRenderer()
+    const page = await browser.newPage()
+    try {
+      await page.setContent(html, { waitUntil: 'domcontentloaded' })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pdfBuffer = await page.pdf({
+        ...puppeteerPageSize(format),
+        landscape,
+        printBackground: true,
+        margin: { top: css.vMargin, right: '0', bottom: css.vMargin, left: '0' },
+      } as any)
+
+      const filename = `menu-${new Date().toISOString().slice(0, 10)}.pdf`
+      return new Response(Buffer.from(pdfBuffer), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
+        },
+      })
+    } finally {
+      await page.close()
+    }
+  } catch (err) {
+    return serverError(c, "[menu]", err)
+  }
+})
 
 export { menu }

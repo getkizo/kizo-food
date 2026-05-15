@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Code integrity verification using Ed25519 signatures
  * Verifies manifest.json signature and file hashes on startup
  *
@@ -9,7 +9,7 @@
  * - Auto-shutdown on verification failure
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import * as ed25519 from '@noble/ed25519'

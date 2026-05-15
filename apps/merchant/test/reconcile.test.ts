@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Payment reconciliation tests
  *
  * Tests:
@@ -15,7 +15,8 @@ import { getDatabase, closeDatabase } from '../src/db/connection'
 import { migrate } from '../src/db/migrate'
 import { initializeMasterKey } from '../src/crypto/master-key'
 import { invalidateApplianceMerchantCache } from '../src/routes/store'
-import { scheduleReconciliation, runReconciliation } from '../src/services/reconcile'
+import { scheduleReconciliation, runReconciliation, sweepOrphanedTerminalSales, scheduleOrderReconciliation } from '../src/services/reconcile'
+import { storeAPIKey } from '../src/crypto/api-keys'
 
 // ── fixtures ───────────────────────────────────────────────────────────────────
 
@@ -333,6 +334,183 @@ describe('runReconciliation — idempotency', () => {
   })
 })
 
+// ── sweepOrphanedTerminalSales — verification-pending recovery ────────────────
+
+describe('sweepOrphanedTerminalSales — verification-pending rows', () => {
+  /** Seed Finix API credentials for a merchant so loadFinixCreds succeeds. */
+  async function seedFinixCreds(mId: string): Promise<void> {
+    const db = getDatabase()
+    await storeAPIKey(
+      mId, 'payment', 'finix', 'test-api-password',
+      undefined,  // ipAddress — unused in tests
+      // pos_merchant_id format: "apiUsername:applicationId:finixMerchantId"
+      'USfake000000000000000000:APfake000000000000000000:MUfake000000000000000000',
+    )
+    // Ensure sandbox flag is set so adapter uses sandbox base URL
+    db.run(`UPDATE merchants SET finix_sandbox = 1 WHERE id = ?`, [mId])
+  }
+
+  /** Seed a terminal (for the device_id FK hint) and a received order. */
+  function seedTerminalOrder(opts: {
+    merchantId: string
+    orderId: string
+    amountCents: number
+  }): void {
+    const db  = getDatabase()
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
+    db.run(
+      `INSERT INTO orders
+         (id, merchant_id, customer_name, items, subtotal_cents, tax_cents, total_cents,
+          status, order_type, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,'received','dine_in',?,?)`,
+      [opts.orderId, opts.merchantId, 'Test',
+       '[]', opts.amountCents, 0, opts.amountCents, now, now],
+    )
+  }
+
+  function insertPendingVerification(opts: {
+    merchantId: string; orderId: string; deviceId: string;
+    amountCents: number; idempotencyKey: string;
+    createdAt?: string
+  }): string {
+    const db = getDatabase()
+    const id = `pts_${Math.random().toString(36).slice(2, 10)}`
+    const createdAt = opts.createdAt ?? "datetime('now', '-60 seconds')"
+    db.run(
+      `INSERT INTO pending_terminal_sales
+         (id, merchant_id, order_id, transfer_id, idempotency_key, device_id, amount_cents, status, created_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ${opts.createdAt ? '?' : createdAt})`,
+      opts.createdAt
+        ? [id, opts.merchantId, opts.orderId, opts.idempotencyKey, opts.deviceId, opts.amountCents, opts.createdAt]
+        : [id, opts.merchantId, opts.orderId, opts.idempotencyKey, opts.deviceId, opts.amountCents],
+    )
+    return id
+  }
+
+  const originalFetch = global.fetch
+
+  test('verification-pending row + Finix has SUCCEEDED transfer → payment + order.paid, row deleted', async () => {
+    await seedFinixCreds(merchantId)
+    const orderId = `ord_verif_${Math.random().toString(36).slice(2, 10)}`
+    const idem    = `idem-${Math.random().toString(36).slice(2, 10)}`
+    seedTerminalOrder({ merchantId, orderId, amountCents: 2318 })
+    const pendingId = insertPendingVerification({
+      merchantId, orderId, deviceId: 'DVtest123',
+      amountCents: 2318, idempotencyKey: idem,
+    })
+
+    global.fetch = (async (url: string) => {
+      // findTransferByIdempotencyId calls GET /transfers?idempotency_id=...
+      if (url.includes('/transfers?') && url.includes('idempotency_id=')) {
+        return new Response(JSON.stringify({
+          _embedded: {
+            transfers: [{
+              id:       'TRF_VER_OK',
+              state:    'SUCCEEDED',
+              amount:   2665,
+              amount_breakdown: { tip_amount: 347 },
+              card_present_details: {
+                brand: 'VISA',
+                masked_account_number: '0000000000001234',
+                approval_code: 'AUTH9',
+                entry_mode: 'CONTACTLESS',
+              },
+            }],
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    try {
+      await sweepOrphanedTerminalSales()
+    } finally {
+      global.fetch = originalFetch
+    }
+
+    const db = getDatabase()
+
+    // Pending row removed
+    const stillPending = db
+      .query<{ id: string }, [string]>(`SELECT id FROM pending_terminal_sales WHERE id = ?`)
+      .get(pendingId)
+    expect(stillPending).toBeNull()
+
+    // payments row created with the recovered transfer
+    const pay = db
+      .query<{ id: string; amount_cents: number; finix_transfer_id: string; card_last_four: string | null }, [string]>(
+        `SELECT id, amount_cents, finix_transfer_id, card_last_four FROM payments WHERE order_id = ?`,
+      )
+      .get(orderId)
+    expect(pay).toBeTruthy()
+    expect(pay!.amount_cents).toBe(2665)
+    expect(pay!.finix_transfer_id).toBe('TRF_VER_OK')
+    expect(pay!.card_last_four).toBe('1234')
+
+    // Order flipped to paid
+    const order = db
+      .query<{ status: string; paid_amount_cents: number }, [string]>(
+        `SELECT status, paid_amount_cents FROM orders WHERE id = ?`,
+      )
+      .get(orderId)
+    expect(order!.status).toBe('paid')
+    expect(order!.paid_amount_cents).toBe(2665)
+
+    // Run reconciliation immediately so the downstream "summary counts" test
+    // doesn't see this payment as pending (sweep schedules a 60 s timer; calling
+    // directly short-circuits via Strategy 1 since finix_transfer_id is set).
+    await runReconciliation(merchantId, pay!.id)
+  })
+
+  test('verification-pending row + Finix has no matching transfer → pending row deleted, order stays received', async () => {
+    await seedFinixCreds(merchantId)
+    const orderId = `ord_verif_nf_${Math.random().toString(36).slice(2, 10)}`
+    const idem    = `idem-nf-${Math.random().toString(36).slice(2, 10)}`
+    seedTerminalOrder({ merchantId, orderId, amountCents: 1500 })
+    const pendingId = insertPendingVerification({
+      merchantId, orderId, deviceId: 'DVtest123',
+      amountCents: 1500, idempotencyKey: idem,
+    })
+
+    global.fetch = (async (url: string) => {
+      if (url.includes('/transfers?') && url.includes('idempotency_id=')) {
+        return new Response(JSON.stringify({ _embedded: { transfers: [] } }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    try {
+      await sweepOrphanedTerminalSales()
+    } finally {
+      global.fetch = originalFetch
+    }
+
+    const db = getDatabase()
+
+    // Pending row removed — verification declined (no transfer at Finix)
+    const stillPending = db
+      .query<{ id: string }, [string]>(`SELECT id FROM pending_terminal_sales WHERE id = ?`)
+      .get(pendingId)
+    expect(stillPending).toBeNull()
+
+    // No payments row — safe to retry
+    const pay = db
+      .query<{ id: string }, [string]>(`SELECT id FROM payments WHERE order_id = ?`)
+      .get(orderId)
+    expect(pay).toBeNull()
+
+    // Order remains received (unpaid)
+    const order = db
+      .query<{ status: string; paid_amount_cents: number }, [string]>(
+        `SELECT status, paid_amount_cents FROM orders WHERE id = ?`,
+      )
+      .get(orderId)
+    expect(order!.status).toBe('received')
+    expect(order!.paid_amount_cents).toBe(0)
+  })
+})
+
 // ── GET /payments/reconciliation — summary counts ─────────────────────────────
 
 describe('GET /payments/reconciliation — summary status counts', () => {
@@ -359,5 +537,92 @@ describe('GET /payments/reconciliation — summary status counts', () => {
     expect(body.summary.pending).toBe(0)
     expect(body.summary.total).toBeGreaterThanOrEqual(2)
     expect(body.summary.totalCents).toBeGreaterThanOrEqual(700)
+  })
+})
+
+// ── runReconciliation — Clover processor fast-path ────────────────────────────
+
+describe('runReconciliation — Clover processor → instant match', () => {
+  test('payment with processor=clover writes matched without Finix API call', async () => {
+    const { paymentId } = seedPayment({ merchantId, paymentType: 'card', amountCents: 1800 })
+
+    // Mark payment as clover-processed
+    const db = getDatabase()
+    db.run(`UPDATE payments SET processor = 'clover' WHERE id = ?`, [paymentId])
+
+    await runReconciliation(merchantId, paymentId)
+
+    const row = await waitForReconciliation(paymentId, 2000)
+    expect(row).not.toBeNull()
+    expect(row!.status).toBe('matched')
+  })
+})
+
+// ── runReconciliation — unmatched → security event ────────────────────────────
+
+describe('runReconciliation — unmatched card → logs security event', () => {
+  const savedFetch = global.fetch
+
+  test('unmatched card payment logs payment_unmatched security event', async () => {
+    // Seed Finix creds so runReconciliation proceeds to Finix search
+    const db = getDatabase()
+    const { storeAPIKey: storeKey } = await import('../src/crypto/api-keys')
+    await storeKey(
+      merchantId, 'payment', 'finix', 'test-api-password-unmatch',
+      undefined,
+      'USfake000000000001:APfake000000000001:MUfake000000000001',
+    )
+    db.run(`UPDATE merchants SET finix_sandbox = 1, payment_provider = 'finix' WHERE id = ?`, [merchantId])
+
+    const { paymentId } = seedPayment({ merchantId, paymentType: 'card', amountCents: 4242 })
+    // Set processor = 'finix' so the no-processor early-exit is bypassed
+    db.run(`UPDATE payments SET processor = 'finix' WHERE id = ?`, [paymentId])
+
+    // Mock Finix to return empty transfers
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ _embedded: { transfers: [] } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })
+    ) as typeof fetch
+
+    try {
+      await runReconciliation(merchantId, paymentId)
+    } finally {
+      global.fetch = savedFetch
+    }
+
+    const row = await waitForReconciliation(paymentId, 2000)
+    expect(row).not.toBeNull()
+    expect(row!.status).toBe('unmatched')
+
+    // Security event should be logged
+    const secRow = db.query<{ event_type: string }, []>(
+      `SELECT event_type FROM security_events WHERE event_type = 'payment_unmatched' LIMIT 1`,
+    ).get()
+    expect(secRow?.event_type).toBe('payment_unmatched')
+  })
+})
+
+// ── scheduleOrderReconciliation — no Finix creds ──────────────────────────────
+
+describe('scheduleOrderReconciliation — no Finix creds', () => {
+  test('no crash when merchant has no Finix credentials (timer fires, no-op)', async () => {
+    const db = getDatabase()
+    const orderId = `ord_orec_${Math.random().toString(36).slice(2, 10)}`
+    db.run(
+      `INSERT INTO orders
+         (id, merchant_id, customer_name, items, subtotal_cents, tax_cents, total_cents,
+          status, order_type, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,'paid','pickup',datetime('now'),datetime('now'))`,
+      [orderId, otherMerchantId, 'Online Customer', '[]', 1000, 80, 1080],
+    )
+
+    // Should not throw — fires timer, runOrderReconciliation exits early (no creds)
+    expect(() =>
+      scheduleOrderReconciliation(otherMerchantId, orderId, 1080),
+    ).not.toThrow()
+
+    // Give the timer a chance to fire (RECONCILE_DELAY_MS defaults to 60s, but
+    // in tests it is overridden if set; otherwise this just verifies no throw)
+    await Bun.sleep(50)
   })
 })

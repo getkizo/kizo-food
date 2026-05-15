@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Migration 002: Add pos_merchant_id to api_keys table
  *
  * The pos_merchant_id stores the POS provider's merchant ID (e.g., Clover merchant ID)

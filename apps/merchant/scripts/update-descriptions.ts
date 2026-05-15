@@ -1,4 +1,4 @@
-/**
+﻿/**
  * update-descriptions.ts
  * Matches kiosk menu-data.js descriptions to DB menu_items and applies updates.
  * Run with: bun v2/scripts/update-descriptions.ts [--dry-run]
@@ -9,7 +9,7 @@ import { join } from "path";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
-// ── All descriptions extracted from hanuman-thai-cafe/js/menu-data.js ──────
+// ── All descriptions extracted from demo-restaurant/js/menu-data.js ──────
 const kioskDishes: { name: string; desc: string }[] = [
   { name: "Fresh Rolls", desc: "Rice wrapper, tofu or prawns, fresh vegetables and basil. Served w/homemade plumb sauce or peanut Sauce" },
   { name: "Spring Rolls", desc: "Deep-fried spring roll stuffed w/carrots, bean thread noodle and cabbage. Includes a side of plum sauce." },
@@ -40,14 +40,14 @@ const kioskDishes: { name: string; desc: string }[] = [
   { name: "Garlic Fish", desc: "Deep-fried whole trout marinated lightly in garlic sauce and black pepper." },
   { name: "Thai BBQ Beef", desc: "Grilled Flat Iron steak served with Jaew dipping sauce and sticky rice." },
   { name: "Duck Basil", desc: "Stir-fried duck with basil, green beans, onion, garlic, bell peppers served on a sizzling plate." },
-  { name: "Hanuman's Prawns", desc: "Stir-fried chili sauce with prawns, broccoli, carrots, zucchini, bell peppers." },
+  { name: "Demo's Prawns", desc: "Stir-fried chili sauce with prawns, broccoli, carrots, zucchini, bell peppers." },
   { name: "Thai Style Fried Chicken (Gai Tod)", desc: "A popular street food, deep fried chicken topped with fried shallots served with sticky rice and sweet chili sauce." },
-  { name: "Hanuman's Typhoon", desc: "A combination of mussels, clams, prawns, squids, sauteed with chili paste, bell peppers, zucchini, basil and mushrooms." },
-  { name: "Hanuman's Ginger Salmon", desc: "Salmon dipped in light batter and deep-fried, topped with ginger shiitake mushroom sauce, onions, bell peppers." },
-  { name: "Panang Neua Yang", desc: "Grilled Flat Iron steak in hanuman curry sauce with basil, bell peppers and kaffir lime." },
+  { name: "Demo's Typhoon", desc: "A combination of mussels, clams, prawns, squids, sauteed with chili paste, bell peppers, zucchini, basil and mushrooms." },
+  { name: "Demo's Ginger Salmon", desc: "Salmon dipped in light batter and deep-fried, topped with ginger shiitake mushroom sauce, onions, bell peppers." },
+  { name: "Panang Neua Yang", desc: "Grilled Flat Iron steak in demo curry sauce with basil, bell peppers and kaffir lime." },
   { name: "Cha-Cha-Cha", desc: "Pan-fried seafood, green beans, bell peppers, broccoli, zucchini, topped with crispy basil, served on a sizzling plate." },
   { name: "Pla Chu Chi", desc: "Deep fried trout topped with panang curry sauce, bell pepper and Thai basil." },
-  { name: "Sweet And Sour Fish", desc: "Deep fried trout topped with bell tomato, onions, cucumber, pineapple, stir fried in hanuman sauce." },
+  { name: "Sweet And Sour Fish", desc: "Deep fried trout topped with bell tomato, onions, cucumber, pineapple, stir fried in demo sauce." },
   { name: "Cashew Nut Lovers", desc: "Sauteed meat or tofu in our own smoked chili sauce, zucchini, celery, onion, bell pepper, carrot, mushroom and roasted cashew nut." },
   { name: "Crispy Garlic Chicken", desc: "Stir-fried crispy chicken with roasted garlic in our special sauce, onion, bell peppers topped with crispy basil." },
   { name: "Orange Chicken", desc: "Strips of chicken breast dipped in batter and deep-fried to a crispy golden brown then sauteed with onion, carrot, orange, ginger." },
@@ -74,7 +74,7 @@ const kioskDishes: { name: string; desc: string }[] = [
   { name: "Kow Soi", desc: "Northern Thai style stewed chicken drumsticks served with steamed egg noodle in creamy curry topped with crispy noodle." },
   { name: "Bah Mee", desc: "Steamed egg noodle, bean sprouts, baby bok choy, garlic sauce, ground peanuts, green onions and cilantro." },
   { name: "Duck Noodle Soup", desc: "Slices of roasted duck in duck broth with rice noodle and baby bok choy." },
-  { name: "Beef Noodle Soup", desc: "A warming and favorite Thai soup: Rice noodles, bok choy, roasted garlic, green onion, cilantro in Hanuman broth." },
+  { name: "Beef Noodle Soup", desc: "A warming and favorite Thai soup: Rice noodles, bok choy, roasted garlic, green onion, cilantro in Demo broth." },
   { name: "Tom Yum Noodle Soup", desc: "Rice noodle with chicken in hot and sour soup with broccoli, carrots, bean sprouts, snow peas, cilantro, green onions, baby bok choy." },
   { name: "Panang Curry", desc: "A very popular curry, cooked with your choice of meat or tofu with coconut milk chili paste, Thai herb, bell peppers and Thai sweet basil." },
   { name: "Red Curry", desc: "Red curry in coconut milk, bamboo shoots, green beans, zucchini, bell peppers, Thai sweet basil." },
@@ -166,7 +166,7 @@ const aliases = new Map<string, string>([
   ["tofu saty",                                   "tofu satay"],         // typo in DB
   ["veggy deluxe",                                "vegetable deluxe"],
   ["sweet and sour stir-fry",                     "sweetn sour stir-fry"],
-  ["hanumanss prawns",                            "hanumanss prawns"],
+  ["demoss prawns",                            "demoss prawns"],
   ["evergreen stir fry",                          "evergreen stir-fry"],
   ["combo 3 - ginger stir-fry",                   "combo 3"],
   ["combo 4 - basil stir-fry",                    "combo 4"],

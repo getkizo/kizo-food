@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Terminal management routes
  * CRUD for PAX payment terminals registered at this location.
  *
@@ -18,7 +18,6 @@ import type { FinixCredentials } from '../adapters/finix'
 import type { AuthContext } from '../middleware/auth'
 
 const VALID_MODELS = ['pax_a800', 'pax_a920_pro', 'pax_a920_emu', 'pax_d135'] as const
-type TerminalModel = typeof VALID_MODELS[number]
 
 /** The fixed Finix device ID used by the A920 emulator (`bun run emulator:a920`). */
 const EMU_FINIX_DEVICE_ID = 'DEemulatora920001'
@@ -107,7 +106,7 @@ const terminals = new Hono()
  * List all terminals for the merchant, ordered by creation time.
  */
 terminals.get('/api/merchants/:id/terminals', authenticate, requireOwnMerchant, async (c: AuthContext) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   try {
     const db = getDatabase()
     const rows = db.query<TerminalRow, [string]>(
@@ -129,7 +128,7 @@ terminals.get('/api/merchants/:id/terminals', authenticate, requireOwnMerchant, 
  * An explicit finixDeviceId overrides the auto-lookup result.
  */
 terminals.post('/api/merchants/:id/terminals', authenticate, requireOwnMerchant, async (c: AuthContext) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   try {
     const body = await c.req.json() as {
       model?: string
@@ -194,8 +193,8 @@ terminals.post('/api/merchants/:id/terminals', authenticate, requireOwnMerchant,
  * the Finix device ID automatically.
  */
 terminals.put('/api/merchants/:id/terminals/:terminalId', authenticate, requireOwnMerchant, async (c: AuthContext) => {
-  const merchantId  = c.req.param('id')
-  const terminalId  = c.req.param('terminalId')
+  const merchantId  = c.req.param('id')!
+  const terminalId  = c.req.param('terminalId')!
   try {
     const db = getDatabase()
     const existing = db.query<TerminalRow, [string, string]>(
@@ -256,8 +255,8 @@ terminals.put('/api/merchants/:id/terminals/:terminalId', authenticate, requireO
  * Remove a terminal.
  */
 terminals.delete('/api/merchants/:id/terminals/:terminalId', authenticate, requireOwnMerchant, async (c: AuthContext) => {
-  const merchantId = c.req.param('id')
-  const terminalId = c.req.param('terminalId')
+  const merchantId = c.req.param('id')!
+  const terminalId = c.req.param('terminalId')!
   try {
     const db = getDatabase()
     const existing = db.query<{ id: string }, [string, string]>(

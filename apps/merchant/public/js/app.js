@@ -1,5 +1,5 @@
-/**
- * Kizo Register Onboarding Application
+﻿/**
+ * Kizo Merchant Onboarding Application
  * Handles multi-step registration with social login and Clover integration
  */
 
@@ -716,7 +716,7 @@ async function registerMerchant() {
     state.userData.password = null
 
     // Show success screen
-    document.getElementById('merchant-url').textContent = `${state.businessData.slug}.kizo.app`
+    document.getElementById('merchant-url').textContent = `${state.businessData.slug}.kizo.example`
     showStep('success')
   } catch (error) {
     console.error('Registration error:', error)
