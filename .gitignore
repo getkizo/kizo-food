@@ -1,0 +1,16 @@
+# Android / Gradle build artifacts
+.gradle/
+build/
+.idea/
+*.iml
+local.properties
+captures/
+.cxx/
+
+# Node
+node_modules/
+
+# Env files
+.env
+.env.local
+.env.*.local
