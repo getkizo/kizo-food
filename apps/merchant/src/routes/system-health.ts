@@ -1,4 +1,4 @@
-/**
+﻿/**
  * system-health.ts — POS appliance health & diagnostics routes.
  *
  * GET  /api/merchants/:id/system/health        — full health snapshot

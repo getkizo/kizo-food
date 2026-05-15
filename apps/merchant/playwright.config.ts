@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test'
+﻿import { defineConfig, devices } from '@playwright/test'
 
 /**
  * Playwright e2e test configuration for the Kizo customer store PWA.
@@ -15,6 +15,7 @@ import { defineConfig, devices } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './e2e',
+  testMatch: '**/*.e2e.ts',
   timeout: 30_000,
   retries: 0,
   workers: 1,           // serial — shared DB state

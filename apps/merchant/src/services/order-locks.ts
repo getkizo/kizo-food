@@ -1,4 +1,4 @@
-/**
+﻿/**
  * In-memory order edit locks.
  *
  * Prevents two devices from editing the same order simultaneously.

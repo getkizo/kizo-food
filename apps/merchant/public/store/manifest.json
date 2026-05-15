@@ -1,6 +1,8 @@
-{
+﻿{
   "name": "Order Online",
   "short_name": "Order",
+  "id": "/",
+  "scope": "/",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8f9fa",

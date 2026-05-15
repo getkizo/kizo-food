@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Employee management routes
  *
  * GET    /api/merchants/:id/employees                       — list active + inactive employees
@@ -19,91 +19,28 @@
  */
 
 import { Hono } from 'hono'
-import { createHash } from 'node:crypto'
 import { getDatabase } from '../db/connection'
 import { generateId } from '../utils/id'
 import { authenticate, requireRole } from '../middleware/auth'
 import type { AuthContext } from '../middleware/auth'
+import {
+  hashCode,
+  recordFailedPin,
+  recordFailedPinHash,
+  isPinHashLocked,
+  isIpLocked,
+  clearIpAttempts,
+  clearPinHashFailures,
+  getRequestIp,
+} from '../services/pin-auth'
+
+// Re-export for callers that previously imported from this route module.
+export { hashCode } from '../services/pin-auth'
 
 const employees = new Hono()
 
-// ---------------------------------------------------------------------------
-// PIN rate limiter — in-memory, per-IP (max 3 attempts per 10 minutes)
-// M-02: Reduced from 5 to 3 attempts. A 4-digit PIN has only 10,000
-// combinations; without server-side limiting the client-side lockout
-// (bypassable by reload) is the only defence.
-// ---------------------------------------------------------------------------
-interface PinAttemptRecord { count: number; resetAt: number }
-const pinAttempts = new Map<string, PinAttemptRecord>()
-const PIN_MAX_ATTEMPTS = 3
-const PIN_WINDOW_MS    = 10 * 60 * 1000  // 10 minutes
-
-function recordFailedPin(ip: string): void {
-  const now = Date.now()
-  const existing = pinAttempts.get(ip)
-  if (existing && existing.resetAt > now) {
-    existing.count++
-  } else {
-    pinAttempts.set(ip, { count: 1, resetAt: now + PIN_WINDOW_MS })
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Per-employee-PIN lockout — keyed by "merchantId:codeHash"
-// M-02: After 3 failures for the same specific PIN (regardless of source IP),
-// lock that PIN hash for 30 minutes. This prevents distributed brute-force
-// against a known employee's PIN. A manager can bypass by entering their own
-// valid PIN to confirm identity (the lockout doesn't block the endpoint, just
-// the specific failing hash).
-// ---------------------------------------------------------------------------
-const pinHashLockouts = new Map<string, number>() // key → unlocksAt
-const PIN_HASH_MAX_FAILURES = 3
-const PIN_HASH_LOCKOUT_MS = 30 * 60 * 1000  // 30 minutes
-
-interface PinHashFailRecord { count: number; resetAt: number }
-const pinHashFailures = new Map<string, PinHashFailRecord>()
-
-function recordFailedPinHash(merchantId: string, codeHash: string): void {
-  const key = `${merchantId}:${codeHash}`
-  const now = Date.now()
-  const existing = pinHashFailures.get(key)
-  let count = 1
-  if (existing && existing.resetAt > now) {
-    count = existing.count + 1
-    existing.count = count
-  } else {
-    pinHashFailures.set(key, { count: 1, resetAt: now + PIN_WINDOW_MS })
-  }
-  if (count >= PIN_HASH_MAX_FAILURES) {
-    pinHashLockouts.set(key, now + PIN_HASH_LOCKOUT_MS)
-  }
-}
-
-function isPinHashLocked(merchantId: string, codeHash: string): boolean {
-  const key = `${merchantId}:${codeHash}`
-  const unlocksAt = pinHashLockouts.get(key)
-  if (!unlocksAt) return false
-  if (unlocksAt < Date.now()) {
-    pinHashLockouts.delete(key)
-    pinHashFailures.delete(key)
-    return false
-  }
-  return true
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Deterministic hash for a 4-digit PIN, scoped to this merchant.
- * SHA-256(merchantId + "::" + code) — prevents cross-merchant code reuse.
- */
-function hashCode(merchantId: string, code: string): string {
-  return createHash('sha256').update(`${merchantId}::${code}`).digest('hex')
-}
-
-const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
+// PIN rate-limit state and helpers live in src/services/pin-auth.ts so the
+// payment-modal pause + writeoff endpoints can apply the same protection.
 
 /**
  * GET /api/merchants/:id/employees
@@ -117,7 +54,7 @@ employees.get(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const rows = db
@@ -125,11 +62,12 @@ employees.get(
         id: string
         nickname: string
         role: string
+        language: string
         schedule: string | null
         active: number
         created_at: string
       }, [string]>(
-        `SELECT id, nickname, role, schedule, active, created_at
+        `SELECT id, nickname, role, language, schedule, active, created_at
          FROM employees WHERE merchant_id = ? ORDER BY nickname ASC`
       )
       .all(merchantId)
@@ -139,6 +77,7 @@ employees.get(
         id: e.id,
         nickname: e.nickname,
         role: e.role,
+        language: e.language ?? 'en',
         schedule: e.schedule ? JSON.parse(e.schedule) : null,
         active: e.active === 1,
         createdAt: e.created_at,
@@ -164,11 +103,12 @@ employees.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const body = await c.req.json<{
       nickname: string
       accessCode: string
       role: string
+      language?: string
       schedule?: Record<string, { start: string; end: string } | null>
     }>()
 
@@ -184,6 +124,7 @@ employees.post(
     if (!['server', 'chef', 'manager'].includes(body.role)) {
       return c.json({ error: 'role must be server, chef, or manager' }, 400)
     }
+    const language = body.language === 'es' ? 'es' : 'en'
 
     const db = getDatabase()
     const codeHash = hashCode(merchantId, body.accessCode)
@@ -202,19 +143,20 @@ employees.post(
     const empId = generateId('emp')
 
     db.run(
-      `INSERT INTO employees (id, merchant_id, nickname, access_code_hash, role, schedule, active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))`,
+      `INSERT INTO employees (id, merchant_id, nickname, access_code_hash, role, language, schedule, active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))`,
       [
         empId,
         merchantId,
         body.nickname.trim(),
         codeHash,
         body.role,
+        language,
         body.schedule ? JSON.stringify(body.schedule) : null,
       ]
     )
 
-    return c.json({ id: empId, nickname: body.nickname.trim(), role: body.role }, 201)
+    return c.json({ id: empId, nickname: body.nickname.trim(), role: body.role, language }, 201)
   }
 )
 
@@ -236,8 +178,8 @@ employees.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const empId = c.req.param('empId')
+    const merchantId = c.req.param('id')!
+    const empId = c.req.param('empId')!
     const db = getDatabase()
 
     const emp = db
@@ -252,12 +194,13 @@ employees.put(
       nickname?: string
       accessCode?: string
       role?: string
+      language?: string
       schedule?: Record<string, { start: string; end: string } | null>
       active?: boolean
     }>()
 
     const updates: string[] = []
-    const values: unknown[] = []
+    const values: (string | number | null)[] = []
 
     if (body.nickname !== undefined) {
       if (body.nickname.trim().length === 0) {
@@ -292,6 +235,10 @@ employees.put(
       }
       updates.push('role = ?')
       values.push(body.role)
+    }
+    if (body.language !== undefined) {
+      updates.push('language = ?')
+      values.push(body.language === 'es' ? 'es' : 'en')
     }
     if (body.schedule !== undefined) {
       updates.push('schedule = ?')
@@ -330,8 +277,8 @@ employees.delete(
   authenticate,
   requireRole('owner'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const empId = c.req.param('empId')
+    const merchantId = c.req.param('id')!
+    const empId = c.req.param('empId')!
     const db = getDatabase()
 
     const emp = db
@@ -368,15 +315,16 @@ employees.post(
   '/api/merchants/:id/employees/authenticate',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
-    // Rate-limit PIN attempts per source IP
-    const ip = c.req.header('cf-connecting-ip')
-      ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim()
-      ?? 'unknown'
-    const now = Date.now()
-    const attempt = pinAttempts.get(ip)
-    if (attempt && attempt.resetAt > now && attempt.count >= PIN_MAX_ATTEMPTS) {
+    // Rate-limit PIN attempts per source IP. The IP can be null on local LAN
+    // (no cf-connecting-ip / x-forwarded-for); the per-PIN-hash lockout below
+    // is the safety net in that case.
+    const ip = getRequestIp({
+      cfConnectingIp: c.req.header('cf-connecting-ip') ?? null,
+      xForwardedFor:  c.req.header('x-forwarded-for') ?? null,
+    })
+    if (ip !== null && isIpLocked(ip)) {
       return c.json({ error: 'Too many PIN attempts. Try again in 10 minutes.' }, 429)
     }
 
@@ -399,9 +347,10 @@ employees.post(
         id: string
         nickname: string
         role: string
+        language: string
         schedule: string | null
       }, [string, string]>(
-        `SELECT id, nickname, role, schedule
+        `SELECT id, nickname, role, language, schedule
          FROM employees WHERE merchant_id = ? AND access_code_hash = ? AND active = 1`
       )
       .get(merchantId, codeHash)
@@ -413,25 +362,24 @@ employees.post(
     }
 
     // Successful — clear failed attempt counters
-    pinAttempts.delete(ip)
-    pinHashLockouts.delete(`${merchantId}:${codeHash}`)
-    pinHashFailures.delete(`${merchantId}:${codeHash}`)
+    clearIpAttempts(ip)
+    clearPinHashFailures(merchantId, codeHash)
 
-    // Check if employee is already clocked in today (no open clock-out)
-    const today = new Date().toISOString().slice(0, 10)
+    // Check if employee has any open shift (no clock-out), regardless of date
     const openShift = db
-      .query<{ id: string; clock_in: string }, [string, string]>(
+      .query<{ id: string; clock_in: string }, [string]>(
         `SELECT id, clock_in FROM timesheets
-         WHERE employee_id = ? AND date = ? AND clock_out IS NULL
+         WHERE employee_id = ? AND clock_out IS NULL
          ORDER BY clock_in DESC LIMIT 1`
       )
-      .get(emp.id, today)
+      .get(emp.id)
 
     return c.json({
       employee: {
         id: emp.id,
         nickname: emp.nickname,
         role: emp.role,
+        language: emp.language ?? 'en',
         schedule: emp.schedule ? JSON.parse(emp.schedule) : null,
       },
       clockedIn: openShift !== null,
@@ -452,8 +400,8 @@ employees.post(
   '/api/merchants/:id/employees/:empId/clock-in',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const empId = c.req.param('empId')
+    const merchantId = c.req.param('id')!
+    const empId = c.req.param('empId')!
     const db = getDatabase()
 
     const emp = db
@@ -464,20 +412,61 @@ employees.post(
 
     if (!emp) return c.json({ error: 'Employee not found' }, 404)
 
-    // Prevent double clock-in on same day
-    const today = new Date().toISOString().slice(0, 10)
+    // Local date in the process timezone (appliance runs in PDT)
+    const nowDate = new Date()
+    const today = `${nowDate.getFullYear()}-${String(nowDate.getMonth() + 1).padStart(2, '0')}-${String(nowDate.getDate()).padStart(2, '0')}`
+
+    // Check for any open shift (no clock-out), regardless of date
     const existing = db
-      .query<{ id: string }, [string, string]>(
-        `SELECT id FROM timesheets WHERE employee_id = ? AND date = ? AND clock_out IS NULL`
+      .query<{ id: string; date: string; schedule: string | null }, [string]>(
+        `SELECT ts.id, ts.date, e.schedule
+         FROM timesheets ts
+         JOIN employees e ON e.id = ts.employee_id
+         WHERE ts.employee_id = ? AND ts.clock_out IS NULL
+         ORDER BY ts.clock_in DESC LIMIT 1`
       )
-      .get(empId, today)
+      .get(empId)
 
     if (existing) {
-      return c.json({ error: 'Already clocked in', shiftId: existing.id }, 409)
+      if (existing.date >= today) {
+        // Genuinely clocked in today — block the request
+        return c.json({ error: 'Already clocked in', shiftId: existing.id }, 409)
+      }
+
+      // Stale open shift from a previous day — auto-close it at its scheduled end
+      // before opening today's shift. This handles the case where an employee forgot
+      // to clock out and the auto-clockout service hasn't run yet.
+      let scheduledEnd: string | null = null
+      if (existing.schedule) {
+        try {
+          const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
+          const weekly = JSON.parse(existing.schedule) as Record<string, { start: string; end: string } | null>
+          const [y, mo, d] = existing.date.split('-').map(Number)
+          const dowKey = DOW[new Date(y, mo - 1, d).getDay()]
+          const daySchedule = weekly[dowKey]
+          if (daySchedule?.end) {
+            scheduledEnd = daySchedule.end
+            const endDate = new Date(y, mo - 1, d, ...daySchedule.end.split(':').map(Number) as [number, number])
+            db.run(
+              `UPDATE timesheets SET clock_out = ?, auto_clocked_out = 1, scheduled_end = ? WHERE id = ?`,
+              [endDate.toISOString(), scheduledEnd, existing.id]
+            )
+          }
+        } catch { /* leave stale shift open if schedule unparseable */ }
+      }
+      if (!scheduledEnd) {
+        // No schedule — close at midnight of the shift date as a fallback
+        const [y, mo, d] = existing.date.split('-').map(Number)
+        const midnight = new Date(y, mo - 1, d + 1)
+        db.run(
+          `UPDATE timesheets SET clock_out = ?, auto_clocked_out = 1 WHERE id = ?`,
+          [midnight.toISOString(), existing.id]
+        )
+      }
     }
 
     const shiftId = generateId('ts')
-    const now = new Date().toISOString()
+    const now = nowDate.toISOString()
 
     db.run(
       `INSERT INTO timesheets (id, employee_id, merchant_id, clock_in, date, created_at)
@@ -502,8 +491,8 @@ employees.post(
   '/api/merchants/:id/employees/:empId/clock-out',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const empId = c.req.param('empId')
+    const merchantId = c.req.param('id')!
+    const empId = c.req.param('empId')!
     const db = getDatabase()
 
     const emp = db
@@ -514,17 +503,16 @@ employees.post(
 
     if (!emp) return c.json({ error: 'Employee not found' }, 404)
 
-    const body = await c.req.json<{ shiftId?: string }>().catch(() => ({}))
+    const body = await c.req.json<{ shiftId?: string }>().catch(() => ({} as { shiftId?: string }))
 
     let shiftId = body.shiftId ?? null
     if (!shiftId) {
-      const today = new Date().toISOString().slice(0, 10)
       const open = db
-        .query<{ id: string }, [string, string]>(
-          `SELECT id FROM timesheets WHERE employee_id = ? AND date = ? AND clock_out IS NULL
+        .query<{ id: string }, [string]>(
+          `SELECT id FROM timesheets WHERE employee_id = ? AND clock_out IS NULL
            ORDER BY clock_in DESC LIMIT 1`
         )
-        .get(empId, today)
+        .get(empId)
       shiftId = open?.id ?? null
     }
 
@@ -558,7 +546,7 @@ employees.get(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const today = new Date().toISOString().slice(0, 10)
@@ -573,7 +561,7 @@ employees.get(
       JOIN employees e ON e.id = t.employee_id
       WHERE t.merchant_id = ? AND t.date >= ? AND t.date <= ?`
 
-    const params: unknown[] = [merchantId, from, to]
+    const params: string[] = [merchantId, from, to]
 
     if (empFilter) {
       query += ` AND t.employee_id = ?`
@@ -590,7 +578,7 @@ employees.get(
       clock_in: string
       clock_out: string | null
       date: string
-    }>(query).all(...params)
+    }, string[]>(query).all(...params)
 
     return c.json({
       timesheets: rows.map((r) => ({
@@ -621,8 +609,8 @@ employees.get(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const empId      = c.req.param('empId')
+    const merchantId = c.req.param('id')!
+    const empId      = c.req.param('empId')!
     const db = getDatabase()
 
     // Check the merchant's setting — return 403 if sharing is disabled

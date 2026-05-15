@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Server-Sent Events (SSE) route
  *
  * Authentication flow (C-01 — JWT never in URL):
@@ -75,7 +75,7 @@ export function stopSseTicketCleanup(): void {
  */
 events.post('/api/merchants/:id/sse-ticket', authenticate, requireOwnMerchant, async (c: AuthContext) => {
   const user       = c.get('user')
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   const ticket     = generateSseTicket(merchantId, user.sub, user.role)
   return c.json({ ticket })
 })
@@ -99,7 +99,7 @@ events.post('/api/merchants/:id/sse-ticket', authenticate, requireOwnMerchant, a
 const MAX_CONNECTION_MS = 24 * 60 * 60_000
 
 events.get('/api/merchants/:id/events', async (c) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
   const ticket     = c.req.query('ticket')
 
   // ── Auth ──────────────────────────────────────────────────────────────────

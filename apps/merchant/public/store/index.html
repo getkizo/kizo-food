@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -11,9 +11,11 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/store/icon/180">
+  <link rel="apple-touch-icon" sizes="152x152" href="/store/icon/152">
+  <link rel="apple-touch-icon" sizes="120x120" href="/store/icon/120">
 
-  <link rel="stylesheet" href="/store/css/store.css?v=24">
+  <link rel="stylesheet" href="/store/css/store.css?v=31">
 </head>
 <body>
 
@@ -106,6 +108,14 @@
     </div>
   </header>
 
+  <!-- Paused banner — shown when merchant has temporarily paused online ordering -->
+  <div id="store-paused-banner" class="store-paused-banner" hidden>
+    <div class="store-closed-inner">
+      <p class="store-paused-title">Online orders are temporarily paused</p>
+      <p id="store-paused-until" class="store-closed-next"></p>
+    </div>
+  </div>
+
   <!-- Closed banner — shown when restaurant is outside business hours -->
   <div id="store-closed-banner" class="store-closed-banner" hidden>
     <div class="store-closed-inner">
@@ -116,6 +126,9 @@
       </button>
     </div>
   </div>
+
+  <!-- Offer banner — populated dynamically by renderOfferBanner() -->
+  <div id="offer-banner" class="offer-banner-container" hidden></div>
 
   <!-- View toggle: Menu / My Orders -->
   <nav class="store-view-nav">
@@ -147,7 +160,7 @@
 
   <!-- Footer -->
   <footer class="store-footer">
-    <small>Powered by <a href="https://kizo.app" target="_blank" rel="noopener" aria-label="Kizo (opens in new tab)">Kizo</a></small>
+    <small>Powered by <a href="https://kizo.example" target="_blank" rel="noopener" aria-label="Kizo (opens in new tab)">Kizo</a></small>
   </footer>
 
 </div>
@@ -217,11 +230,58 @@
     </div>
     <div class="form-group">
       <label for="item-note-kitchen-input">Kitchen note <span class="item-note-optional">(optional)</span></label>
-      <input id="item-note-kitchen-input" type="text" placeholder="e.g. no onions, extra spicy…" maxlength="120" autocomplete="off">
+      <textarea id="item-note-kitchen-input" class="sheet-note-textarea" placeholder="e.g. no onions, extra spicy, add shrimp…" maxlength="256" rows="3" autocomplete="off"></textarea>
+      <div id="item-note-counter" class="kitchen-note-counter">0/256</div>
     </div>
     <div class="item-note-actions">
       <button id="item-note-modifier-btn" class="btn btn-ghost btn-full">Change modifiers</button>
       <button id="item-note-done-btn" class="btn btn-primary btn-full">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     INSTRUCTION REVIEW SHEET — shown when a priced special request is parsed
+     ========================================================= -->
+<div id="instruction-review-backdrop" class="sheet-backdrop" hidden aria-hidden="true"></div>
+<div id="instruction-review-sheet" class="modifier-sheet" style="z-index:320" role="dialog" aria-modal="true" aria-label="Special request" aria-hidden="true" hidden>
+  <div class="sheet-handle" role="presentation"></div>
+  <div class="sheet-content">
+    <h3 class="sheet-title">Special Request</h3>
+    <ul id="instruction-review-messages" class="instruction-messages"></ul>
+    <div id="instruction-review-total" class="instruction-review-total" hidden>
+      <span>Additional charge</span>
+      <strong id="instruction-review-amount"></strong>
+    </div>
+    <div class="sheet-actions">
+      <button id="instruction-accept-btn" class="btn btn-primary btn-full">Accept &amp; Continue</button>
+      <button id="instruction-decline-btn" class="btn btn-ghost btn-full">Remove special request</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     OFFER PREVIEW SHEET — shown when customer arrives via QR code with a coupon
+     ========================================================= -->
+<div id="offer-preview-backdrop" class="sheet-backdrop" hidden aria-hidden="true"></div>
+<div id="offer-preview-sheet" class="modifier-sheet" style="z-index:340" role="dialog" aria-modal="true" aria-labelledby="offer-preview-title" aria-hidden="true" hidden>
+  <div class="sheet-handle" role="presentation"></div>
+  <div class="sheet-content">
+    <h3 class="sheet-title" id="offer-preview-title">Special Offer</h3>
+    <p id="offer-preview-pending-badge" class="offer-preview-pending" hidden>Not yet active</p>
+    <p id="offer-preview-used-badge" class="offer-preview-used" hidden>Already redeemed</p>
+    <p id="offer-preview-description" class="offer-preview-description"></p>
+    <div class="offer-preview-meta">
+      <div id="offer-preview-dates" class="offer-preview-dates"></div>
+      <div id="offer-preview-schedule" class="offer-preview-schedule" hidden></div>
+      <div id="offer-preview-code" class="offer-preview-code" hidden>
+        <span class="offer-code-label">Code</span>
+        <span id="offer-preview-code-value" class="offer-code-value"></span>
+      </div>
+    </div>
+    <div class="sheet-actions">
+      <button id="offer-accept-btn" class="btn btn-primary btn-full">Accept Offer</button>
+      <button id="offer-decline-btn" class="btn btn-ghost btn-full">No thanks</button>
     </div>
   </div>
 </div>
@@ -236,6 +296,9 @@
     <span id="cart-bar-total" class="cart-bar-total"></span>
   </button>
 </div>
+
+<!-- General-purpose toast notification (above the cart bar) -->
+<div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
 
 <!-- =========================================================
      CHECKOUT state (full screen)
@@ -263,6 +326,11 @@
       <div class="section-body">
         <ul id="checkout-items-list" class="checkout-items-list"></ul>
         <div class="checkout-totals">
+          <div class="totals-row" id="checkout-campaign-row" hidden>
+            <span id="checkout-campaign-label">Promo</span>
+            <span id="checkout-discount" class="checkout-discount-amount"></span>
+          </div>
+          <p id="checkout-offer-hint" class="checkout-offer-hint" hidden></p>
           <div class="totals-row">
             <span>Subtotal</span>
             <span id="checkout-subtotal"></span>
@@ -399,11 +467,23 @@
 </div>
 
 <!-- =========================================================
-     PAYING state — interim while submitting
+     PAYING state — processing spinner or declined error
      ========================================================= -->
-<div id="state-paying" class="state-panel state-loading" hidden>
-  <div class="loading-spinner"></div>
-  <p class="loading-text">Redirecting to payment…</p>
+<div id="state-paying" class="state-panel" hidden>
+  <!-- Sub-panel A: spinner shown while redirecting / verifying -->
+  <div id="paying-processing" class="state-loading">
+    <div class="loading-spinner"></div>
+    <p class="loading-text">Redirecting to payment…</p>
+  </div>
+  <!-- Sub-panel B: shown when payment provider returns a decline -->
+  <div id="paying-declined" class="state-loading" hidden>
+    <p class="error-icon">✕</p>
+    <p id="paying-declined-msg" class="loading-text"></p>
+    <div style="display:flex;gap:.75rem;margin-top:1rem;width:100%;max-width:320px">
+      <button id="paying-retry-btn"   class="btn btn-primary  btn-lg" style="flex:1">Retry Payment</button>
+      <button id="paying-back-btn"    class="btn btn-secondary btn-lg" style="flex:1">Edit Order</button>
+    </div>
+  </div>
 </div>
 
 <!-- =========================================================
@@ -543,7 +623,8 @@
         <button class="feedback-star" data-star="4" aria-label="4 stars">★</button>
         <button class="feedback-star" data-star="5" aria-label="5 stars">★</button>
       </div>
-      <textarea id="feedback-order-comment" class="feedback-textarea" placeholder="Any comments? (optional)" maxlength="2000" rows="3"></textarea>
+      <textarea id="feedback-order-comment" class="feedback-textarea" placeholder="Tell us what you loved… (optional)" maxlength="500" rows="3"></textarea>
+      <textarea id="feedback-order-manager-note" class="feedback-textarea" placeholder="Private note to the kitchen or manager (optional)" maxlength="1000" rows="2"></textarea>
       <input id="feedback-order-contact" class="feedback-input" type="text" placeholder="Email or phone (optional)" maxlength="200">
     </div>
     <div class="feedback-footer">
@@ -567,11 +648,11 @@
   after the merchant profile is fetched to initialise the tracking session.
 -->
 <script type="text/javascript" src="https://js.finix.com/v/1/finix.js" async></script>
-<script src="/store/js/store.js?v=45"></script>
-<script src="/store/js/store-menu.js?v=6"></script>
-<script src="/store/js/store-cart.js?v=12"></script>
-<script src="/store/js/store-checkout.js?v=15"></script>
-<script src="/store/js/store-push.js?v=8"></script>
+<script src="/store/js/store.js?v=71"></script>
+<script src="/store/js/store-menu.js?v=8"></script>
+<script src="/store/js/store-cart.js?v=14"></script>
+<script src="/store/js/store-checkout.js?v=24"></script>
+<script src="/store/js/store-push.js?v=10"></script>
 <script src="/store/js/store-voice.js?v=5"></script>
 <!-- Voice ordering disabled — code kept for future use -->
 <!-- <script>window.StoreVoice?.init()</script> -->

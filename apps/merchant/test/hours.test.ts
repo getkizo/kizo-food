@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Business hours and scheduled closures tests
  * Tests all 7 endpoints: GET/PUT/DELETE hours, GET/POST/PUT/DELETE closures
  */

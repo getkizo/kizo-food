@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Camera capture module — getUserMedia → snap → existing crop pipeline.
  *
  * Architecture:

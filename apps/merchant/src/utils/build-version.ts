@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Build version — computed once at process startup.
  *
  * Uses the short git commit hash so every deployment automatically produces

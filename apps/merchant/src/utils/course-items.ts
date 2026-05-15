@@ -1,4 +1,4 @@
-/**
+﻿/**
  * course-items.ts
  *
  * Shared helpers for sorting and filtering order items by course/kitchen routing.
@@ -15,6 +15,7 @@ export interface CourseRoutable {
   courseOrder?: number | null
   isLastCourse?: boolean
   printDestination?: 'both' | 'kitchen' | 'counter'
+  dietaryTags?: string[]
 }
 
 /** Sort items into print order: numbered courses → mains → last */
@@ -60,4 +61,24 @@ export function course1Items<T extends CourseRoutable>(items: T[]): T[] {
  */
 export function course2Items<T extends CourseRoutable>(items: T[]): T[] {
   return kitchenItems(items).filter(i => i.courseOrder == null && !i.isLastCourse)
+}
+
+/**
+ * Items tagged as gluten-free (`dietaryTags` includes `'gluten_free'`).
+ *
+ * Used by the GF-separation feature to split a kitchen ticket into a
+ * GF-first batch (printed immediately) and a non-GF batch (printed 5 min
+ * later) to minimise cross-contamination risk.
+ */
+export function gfItems<T extends CourseRoutable>(items: T[]): T[] {
+  return items.filter(i => (i.dietaryTags ?? []).includes('gluten_free'))
+}
+
+/**
+ * Items NOT tagged as gluten-free.
+ * The complement of {@link gfItems} — printed 5 minutes after the GF ticket
+ * when GF separation is active.
+ */
+export function nonGfItems<T extends CourseRoutable>(items: T[]): T[] {
+  return items.filter(i => !(i.dietaryTags ?? []).includes('gluten_free'))
 }

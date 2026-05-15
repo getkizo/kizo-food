@@ -1,4 +1,4 @@
-/**
+﻿/**
  * fix-terminal-tips.ts
  *
  * One-time script to backfill tip_cents (and correct amount_cents) for two

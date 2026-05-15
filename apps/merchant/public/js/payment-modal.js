@@ -1,4 +1,4 @@
-/**
+﻿/**
  * payment-modal.js — Review & Pay full-screen overlay
  *
  * Exposes: window.PaymentModal.open(order, profile)
@@ -25,7 +25,7 @@
 ;(function () {
   'use strict'
 
-  console.log('[PaymentModal] v12 loaded')
+  console.log('[PaymentModal] v20 loaded')
 
   // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -82,8 +82,12 @@
 
   // ── State ─────────────────────────────────────────────────────────────────
 
-  /** @type {'BILL_REVIEW'|'GIFT_CARD_LOOKUP'|'SPLIT_SELECT'|'SPLIT_ITEMS_SELECT'|'CASH_CONFIRM'|'CARD_CONFIRM'|'COUNTER_WAITING'|'PHONE_TOKENIZE'|'SIGNATURE'|'RECEIPT_OPTIONS'|'LEG_COMPLETE'|'PIN_EXIT'} */
+  /** @type {'BILL_REVIEW'|'GIFT_CARD_LOOKUP'|'SPLIT_SELECT'|'SPLIT_ITEMS_SELECT'|'CASH_CONFIRM'|'CARD_CONFIRM'|'COUNTER_WAITING'|'PHONE_TOKENIZE'|'SIGNATURE'|'RECEIPT_OPTIONS'|'LEG_COMPLETE'|'EXIT_CONFIRM_SPLIT'|'PIN_EXIT'} */
   let _screen = 'BILL_REVIEW'
+
+  // Phase 4: previous screen the staff was on before tapping close mid-split.
+  // Used by EXIT_CONFIRM_SPLIT's Cancel button so they return to where they were.
+  let _prevScreen = null
 
   /** Order passed to open() */
   let _order = null
@@ -114,33 +118,37 @@
   let _assignedItemIndices = new Set() // indices already used by completed legs
   let _customLegBase = null      // cents: staff-entered amount for custom leg 1
 
+  // Phase 3: true when the modal hydrated from an existing server-side
+  // split session (in_progress or paused). Used to show a "Resuming" banner
+  // on the LEG_COMPLETE landing screen. Cleared after the staff acknowledges.
+  let _isResuming = false
+  let _resumedFromStatus = null  // 'in_progress' | 'paused' — for banner copy
+
   // Computed per-leg base; set by _computeLegBase() at start of each leg
   let _legSubtotalCents = null
   let _legTaxCents = 0
 
-  // Terminal sale state
-  let _terminalTransferId = null
+  // Terminal sale state — async-polling model (Phase 3 / 2026-04-17):
+  //   POST /terminal-sale returns { ttxId } immediately; the Finix POST /transfers
+  //   call happens in the server-side SAM workflow. Client polls /by-ttx/:ttxId
+  //   for state; the real transferId appears in the poll response once Finix
+  //   responds, and we capture it into _transactionId for record-payment.
+  let _terminalTxId = null         // workflow's terminal_transactions row ID (ttx_*)
+  let _terminalTransferId = null   // Finix transferId — populated from poll response on SUCCEEDED
   let _terminalDeviceId = null
   let _terminalPollTimer = null
   let _terminalPollCount = 0
   let _terminalError = null
   let _terminalInitiating = false  // guard against re-entry during async POST
   let _terminalAutoRetries = 0     // auto-retry count for recoverable failures
-  let _terminalAlreadySucceeded = false  // true when server returned an already-SUCCEEDED transfer (PAX may have shown red)
+  let _terminalAlreadySucceeded = false  // (legacy field — kept false in async-polling flow; workflow handles silent-success via 422 recovery)
   let _terminalTipOnDevice = false  // true when merchant enabled tip-on-terminal and server confirmed it
   let _selectedTerminal = null     // { id, nickname, model, finixDeviceId }
   let _availableTerminals = []     // fetched on modal open
-
-  // Failure codes that should NOT be auto-retried (intentional cancels, hard declines).
-  // Everything else (bad read, technical error, timeout) is recoverable.
-  const _NON_RETRYABLE_CODES = new Set([
-    'CANCELLATION_VIA_DEVICE', 'CANCELLATION_VIA_API',
-    'INSUFFICIENT_FUNDS', 'DO_NOT_HONOR', 'DECLINED',
-    'CARD_NOT_SUPPORTED', 'LOST_CARD', 'STOLEN_CARD',
-    'RESTRICTED_CARD', 'INVALID_CARD', 'EXPIRED_CARD',
-    'SECURITY_VIOLATION', 'EXCEEDS_WITHDRAWAL_LIMIT',
-    'INVALID_PIN', 'PIN_TRIES_EXCEEDED',
-  ])
+  let _terminalStartedAt = 0       // Date.now() when the current Finix sale was created — drives "Take cash instead" button delay
+  let _switchingToCash = false     // true after staff clicked "Take cash instead"; poll outcome handlers use this
+  // Retry classification is a server decision (see TerminalOutcome.retryable);
+  // the client no longer branches on Finix decline codes.
 
   // Counter (Android tablet + D135) payment state
   let _counterInitiating = false  // guard against re-entry during POST
@@ -183,6 +191,7 @@
   // PIN action context: what happens when PIN is accepted
   // 'done'         → post-payment complete (cleanup + hide + reload orders)
   // 'close_modal'  → staff-initiated close without payment (cleanup + hide)
+  // 'pause_split'  → mid-split pause via PATCH /split-session/pause (Phase 4)
   let _pinAction = 'done'
 
   // Gift card state (preserved across legs; cleared in _cleanup)
@@ -228,6 +237,7 @@
       case 'SIGNATURE':          return renderSignature(screen)
       case 'RECEIPT_OPTIONS':    return renderReceiptOptions(screen)
       case 'LEG_COMPLETE':       return renderLegComplete(screen)
+      case 'EXIT_CONFIRM_SPLIT': return renderExitConfirmSplit(screen)
       case 'PIN_EXIT':           return renderPinExit(screen)
     }
   }
@@ -237,12 +247,6 @@
   /** Returns totals for the current leg (split-aware, gift-card-tax-offset-aware). */
   function computeTotals() {
     if (_splitMode && _legSubtotalCents !== null) {
-      // Clover split leg: service charge (from first preset, default 20%) replaces tip; no Amex surcharge
-      if (_isCloverSplit()) {
-        const svc   = Math.round(_legSubtotalCents * _cloverServiceChargeRate())
-        const total = _legSubtotalCents + _legTaxCents + svc
-        return { subtotal: _legSubtotalCents, discount: 0, serviceCharge: svc, taxCents: _legTaxCents, taxed: _legSubtotalCents, total }
-      }
       // For the gift_card split leg, tax offset is already baked into _legTaxCents
       const total = _legSubtotalCents + _legTaxCents + _tipCents + _amexSurchargeCents
       return { subtotal: _legSubtotalCents, discount: 0, serviceCharge: 0, taxCents: _legTaxCents, taxed: _legSubtotalCents, total }
@@ -284,10 +288,9 @@
       _legSubtotalCents = isLast ? Math.max(0, fb - paid) : Math.ceil(fb / _splitTotalLegs)
       _legTaxCents = 0 // tax is embedded in the split amount
     } else if (_splitMode === 'by_items') {
-      const items    = _order.items ?? []
-      const legItems = _currentLegItems.map(i => items[i]).filter(Boolean)
-      const sub      = legItems.reduce((s, item) =>
-        s + (item.lineTotalCents ?? item.priceCents * item.quantity), 0)
+      const allUnits = _enumerateUnits(_order?.items)
+      const legUnits = _currentLegItems.map(i => allUnits[i]).filter(Boolean)
+      const sub      = legUnits.reduce((s, u) => s + u.unitPrice, 0)
       _legSubtotalCents = sub
       _legTaxCents      = Math.round(sub * taxRate)
     } else if (_splitMode === 'custom') {
@@ -295,6 +298,94 @@
       _legSubtotalCents = isLast ? Math.max(0, fb - paid) : (_customLegBase ?? 0)
       _legTaxCents      = 0
     }
+  }
+
+  /**
+   * Flattens an order's items into one entry per unit, so that `2× Peanut
+   * Sauce` becomes two separately selectable units in the by_items split UI.
+   *
+   * Returns an array indexed by the same unit-index used by the server's
+   * splitItemsJson validation. Per-unit price is `lineTotal / quantity`,
+   * rounded down with the remainder absorbed by the last unit so that
+   * `sum(units of a line) === line.lineTotalCents` exactly.
+   */
+  function _enumerateUnits(items) {
+    const units = []
+    ;(items || []).forEach((item, lineIdx) => {
+      const qty = Math.max(1, item.quantity || 1)
+      const lineTotal = item.lineTotalCents ?? ((item.priceCents ?? 0) * qty)
+      const baseUnit  = Math.floor(lineTotal / qty)
+      const remainder = lineTotal - baseUnit * qty
+      for (let u = 0; u < qty; u++) {
+        units.push({
+          unitIdx:     units.length,   // global index = position in flattened list
+          lineIdx,
+          unitInLine:  u,              // 0..qty-1 within the line
+          unitOfTotal: qty,
+          item,
+          unitPrice:   (u === qty - 1) ? baseUnit + remainder : baseUnit,
+        })
+      }
+    })
+    return units
+  }
+
+  /** Total selectable units in the order (for completion checks). */
+  function _totalUnits() {
+    return (_order?.items ?? []).reduce(
+      (s, it) => s + Math.max(1, it.quantity || 1), 0
+    )
+  }
+
+  /**
+   * Phase 3: fetch the server-side split session for an order, if any.
+   * Returns the session payload on 200, null on 404 / network error.
+   * Server endpoint hides completed sessions, so a 200 always means the
+   * order has an in_progress or paused split that should be resumed.
+   */
+  async function _fetchSplitSession(orderId) {
+    try {
+      const res = await window.api(
+        `/api/merchants/${window.merchantId}/orders/${orderId}/split-session`
+      )
+      if (!res.ok) return null
+      return await res.json()
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Phase 3: rehydrate client split state from a server session payload.
+   * Sets _splitMode, _splitTotalLegs, _splitLegBases, _assignedItemIndices,
+   * _splitCurrentLeg (= number of legs already paid), and _isResuming.
+   */
+  function _hydrateFromSession(s) {
+    _splitMode           = s.splitMode
+    _splitTotalLegs      = s.expectedTotalLegs ?? null
+    _splitLegBases       = Array.isArray(s.paidLegBases) ? s.paidLegBases.slice() : []
+    _assignedItemIndices = new Set(Array.isArray(s.paidIndices) ? s.paidIndices : [])
+    _splitCurrentLeg     = _splitLegBases.length        // last paid leg number
+    _isResuming          = true
+    _resumedFromStatus   = s.status ?? null
+  }
+
+  /**
+   * Local fallback for "is this the last split leg?" used only when the server
+   * hasn't already returned isLastLeg (e.g. 409 retry, terminal pre-recorded
+   * paths). Authoritative answer always comes from the server.
+   *
+   * Safe to call from BILL_REVIEW (after _computeLegBase ran) and the
+   * RECEIPT_OPTIONS / LEG_COMPLETE screens. NOT safe from SPLIT_ITEMS_SELECT
+   * before the staff hits "Person N's Items →": _currentLegItems is being
+   * mutated and the inferred answer would flap as items are ticked.
+   */
+  function _inferLastLegLocally() {
+    if (!_splitMode) return true
+    if (_splitMode === 'by_items') {
+      return _assignedItemIndices.size + _currentLegItems.length >= _totalUnits()
+    }
+    return _splitCurrentLeg >= _splitTotalLegs
   }
 
   /** Auto-set tip at pct% on current leg base. */
@@ -320,6 +411,7 @@
     _paymentId        = null
     _lastLegFromServer = true
     _amexSurchargeCents = 0
+    _terminalTxId             = null
     _terminalTransferId       = null
     _terminalDeviceId         = null
     _terminalError            = null
@@ -328,6 +420,8 @@
     _terminalAlreadySucceeded = false
     _terminalTipOnDevice      = false
     _selectedTerminal         = null
+    _terminalStartedAt        = 0
+    _switchingToCash          = false
     if (_terminalPollTimer) { clearInterval(_terminalPollTimer); _terminalPollTimer = null }
     _counterInitiating  = false
     _counterStatus      = null
@@ -379,8 +473,7 @@
     const tipOpts  = _profile?.tipOptions ?? [18, 20, 22, 25]
     const isInSplit = !!_splitMode
     // Service charges replace tips — hide tip buttons whenever a service charge exists.
-    // Clover split legs use a 20% service charge (replaces tip) — also treated as hasSvcCharge.
-    const hasSvcCharge = (_order.serviceChargeCents ?? 0) > 0 || _isCloverSplit()
+    const hasSvcCharge = (_order.serviceChargeCents ?? 0) > 0
     if (hasSvcCharge) { _tipCents = 0; _gratuityPercent = null }
 
     // Items to display: all items normally, only this leg's items for by_items
@@ -426,9 +519,12 @@
       const paid  = _splitLegBases.reduce((a, b) => a + b, 0)
       const modeLabel = _splitMode === 'equal' ? `Equal (${_splitTotalLegs}-way)` :
                         _splitMode === 'by_items' ? 'By Items' : 'Custom'
+      const personLabel = _splitMode === 'by_items'
+        ? `Person ${_splitCurrentLeg}`
+        : `Person ${_splitCurrentLeg} of ${_splitTotalLegs}`
       splitBanner = `
         <div class="pm-split-banner">
-          <span class="pm-split-badge">${modeLabel} · Person ${_splitCurrentLeg} of ${_splitTotalLegs}</span>
+          <span class="pm-split-badge">${modeLabel} · ${personLabel}</span>
           ${paid > 0 ? `<span>${fmt(paid)} paid · ${fmt(Math.max(0, fb - paid))} remaining</span>` : ''}
         </div>`
     }
@@ -457,9 +553,7 @@
       const discountRow = discount > 0
         ? `<div class="pm-totals-row pm-discount"><span>${esc(_order.discountLabel ?? 'Discount')}</span><span>-${fmt(discount)}</span></div>`
         : ''
-      const svcLabel = _isCloverSplit()
-        ? `Service Charge (${Math.round(_cloverServiceChargeRate() * 100)}%)`
-        : (_order.serviceChargeLabel ?? 'Service Charge')
+      const svcLabel = _order.serviceChargeLabel ?? 'Service Charge'
       const serviceChargeRow = serviceCharge > 0
         ? `<div class="pm-totals-row pm-service-charge"><span>${esc(svcLabel)}</span><span>+${fmt(serviceCharge)}</span></div>`
         : ''
@@ -550,6 +644,7 @@
                 : '<button class="pm-pay-btn card" id="pm-btn-card">💳 Charge card</button>'
             })()
         }
+        ${(!gcCovered && !gcPartial) ? '<button class="pm-pay-btn cash" id="pm-btn-cash">💵 Pay Cash</button>' : ''}
         ${!isInSplit && !_giftCard ? '<button class="pm-split-btn" id="pm-btn-split">⚡ Split</button>' : ''}
         ${!_giftCard ? `<button class="pm-gc-add-btn" id="pm-btn-add-gc">🎁 Gift Card</button>` : ''}
       </div>`
@@ -562,7 +657,6 @@
         if (isNaN(_customLegBase) || _customLegBase < 0) _customLegBase = 0
         _legSubtotalCents = _customLegBase
         _legTaxCents = 0
-        _autoSetTip(20)
         // Update total and tip button active states without losing input focus
         const liveEl = el.querySelector('#pm-live-total')
         if (liveEl) liveEl.textContent = fmt(computeTotals().total)
@@ -640,6 +734,17 @@
         _onCardBtnClick(dineInTerminals[0] ?? null)
       )
     }
+
+    // Pay Cash — available for both single-payment and split-leg flows
+    el.querySelector('#pm-btn-cash')?.addEventListener('click', () => {
+      if (isCustomLeg1 && !_customLegBase) {
+        const si = el.querySelector('#pm-custom-share')
+        if (si) { si.focus(); si.style.borderColor = '#c0392b'; return }
+      }
+      _paymentType = 'cash'
+      _screen = 'CASH_CONFIRM'
+      render()
+    })
 
     // Clover Flex button — full-order push for non-split, leg push for split
     el.querySelector('#pm-btn-clover')?.addEventListener('click', () => {
@@ -935,10 +1040,21 @@
           quantity:          it.quantity ?? 1,
           selectedModifiers: it.modifiers ?? [],
         }))
-        await window.api(
+        const res = await window.api(
           `/api/merchants/${window.merchantId}/orders/${_order.id}`,
           { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: patchItems }) }
         )
+        // Backend refuses edits to finalized orders (paid/completed/cancelled/refunded)
+        // with 409. Surface this to staff rather than silently diverging from the
+        // server — staff rule is: create a new order for late add-ons.
+        if (res && !res.ok && res.status === 409) {
+          const errBody = await res.json().catch(() => ({}))
+          if (window.showToast) {
+            window.showToast(errBody.error || 'Cannot edit a finalized order — create a new order instead.', 'error')
+          } else {
+            alert(errBody.error || 'Cannot edit a finalized order — create a new order instead.')
+          }
+        }
       } catch (err) {
         console.warn('[PaymentModal] order PATCH failed — totals updated locally only:', err)
       }
@@ -1002,7 +1118,6 @@
         _splitLegBases      = []
         _assignedItemIndices = new Set()
         _computeLegBase()
-        _autoSetTip(20)
         _screen = 'BILL_REVIEW'
         render()
       })
@@ -1010,7 +1125,7 @@
 
     el.querySelector('#pm-split-items').addEventListener('click', () => {
       _splitMode          = 'by_items'
-      _splitTotalLegs     = 2
+      _splitTotalLegs     = null   // by_items: completion is derived from item coverage, not a fixed count
       _splitCurrentLeg    = 1
       _splitLegBases      = []
       _assignedItemIndices = new Set()
@@ -1045,23 +1160,44 @@
   // ── SPLIT ITEMS SELECT ────────────────────────────────────────────────────
 
   function renderSplitItemsSelect(el) {
-    const allItems = _order.items ?? []
-    const available = allItems
-      .map((item, idx) => ({ item, idx }))
-      .filter(({ idx }) => !_assignedItemIndices.has(idx))
-
+    // Index space is unit-level: a line with quantity 2 (e.g. "2× Peanut
+    // Sauce") becomes two distinct units so each can be assigned to a
+    // different person paying.
+    const allUnits = _enumerateUnits(_order.items)
+    const available = allUnits.filter(u => !_assignedItemIndices.has(u.unitIdx))
     const selectedSet = new Set(_currentLegItems)
 
+    function unitLabel(u) {
+      const name = esc(u.item.dishName)
+      return u.unitOfTotal > 1
+        ? `${name} <span style="color:#999;font-weight:normal">(${u.unitInLine + 1} of ${u.unitOfTotal})</span>`
+        : name
+    }
+
     let itemCheckboxes = ''
-    for (const { item, idx } of available) {
-      const lineTotal = item.lineTotalCents ?? (item.priceCents * item.quantity)
-      const checked = selectedSet.has(idx) ? 'checked' : ''
+    for (const unit of available) {
+      const checked = selectedSet.has(unit.unitIdx) ? 'checked' : ''
       itemCheckboxes += `
-        <label class="pm-split-item-row${checked ? ' selected' : ''}" data-idx="${idx}">
-          <input type="checkbox" ${checked} data-idx="${idx}" style="margin-right:0.5rem">
-          <span style="flex:1">${esc(item.quantity)}× ${esc(item.dishName)}</span>
-          <span class="pm-split-item-price">${fmt(lineTotal)}</span>
+        <label class="pm-split-item-row${checked ? ' selected' : ''}" data-idx="${unit.unitIdx}">
+          <input type="checkbox" ${checked} data-idx="${unit.unitIdx}" style="margin-right:0.5rem">
+          <span class="pm-split-item-name" style="flex:1">${unitLabel(unit)}</span>
+          <span class="pm-split-item-price">${fmt(unit.unitPrice)}</span>
         </label>`
+    }
+
+    // Already-paid units from previous legs
+    const paidUnits = allUnits.filter(u => _assignedItemIndices.has(u.unitIdx))
+    let paidHtml = ''
+    if (paidUnits.length > 0) {
+      paidHtml += '<div class="pm-split-paid-divider">Already paid</div>'
+      for (const unit of paidUnits) {
+        paidHtml += `
+          <div class="pm-split-item-row pm-split-item-row--paid" aria-disabled="true">
+            <span style="width:1.25rem;flex-shrink:0"></span>
+            <span class="pm-split-item-name" style="flex:1">${unitLabel(unit)}</span>
+            <span class="pm-split-item-price">${fmt(unit.unitPrice)}</span>
+          </div>`
+      }
     }
 
     const { legSub, legTax, legBase } = _calcLegItemsSubtotal()
@@ -1069,10 +1205,11 @@
     el.innerHTML = `
       <div class="pm-split-items-screen">
         <div class="pm-split-banner">
-          <span class="pm-split-badge">By Items · Person ${_splitCurrentLeg} of ${_splitTotalLegs}</span>
+          <span class="pm-split-badge">By Items · Person ${_splitCurrentLeg}</span>
         </div>
         <div class="pm-split-items-list" id="pm-items-list">
           ${itemCheckboxes || '<div style="padding:1rem;color:#999;text-align:center">No items available</div>'}
+          ${paidHtml}
         </div>
         <div class="pm-split-item-subtotal" id="pm-items-subtotal">
           ${_currentLegItems.length > 0
@@ -1113,18 +1250,16 @@
     el.querySelector('#pm-btn-assign').addEventListener('click', () => {
       if (_currentLegItems.length === 0) return
       _computeLegBase()
-      _autoSetTip(20)
       _screen = 'BILL_REVIEW'
       render()
     })
   }
 
   function _calcLegItemsSubtotal() {
-    const allItems = _order.items ?? []
     const taxRate  = _profile?.taxRate ?? 0
-    const items    = _currentLegItems.map(i => allItems[i]).filter(Boolean)
-    const legSub   = items.reduce((s, item) =>
-      s + (item.lineTotalCents ?? item.priceCents * item.quantity), 0)
+    const allUnits = _enumerateUnits(_order?.items)
+    const legUnits = _currentLegItems.map(i => allUnits[i]).filter(Boolean)
+    const legSub   = legUnits.reduce((s, u) => s + u.unitPrice, 0)
     const legTax   = Math.round(legSub * taxRate)
     return { legSub, legTax, legBase: legSub + legTax }
   }
@@ -1225,39 +1360,65 @@
     _terminalInitiating = true
     const { total } = computeTotals()
     _terminalError = null
+    _terminalTxId = null
     _terminalTransferId = null
 
     try {
-      // 45s timeout: server may do 3-4 sequential Finix API calls (device check +
-      // stale transfer check/cancel + new transfer create) which can take 20-30s.
+      // Server now returns in <100 ms: the Finix POST fires in a background
+      // workflow. A tight timeout catches genuine network hangs without fighting
+      // the terminal's natural card-present cadence.
       const res = await window.api(`/api/merchants/${window.merchantId}/orders/${_order.id}/terminal-sale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ totalCents: total, terminalId: _selectedTerminal?.id ?? null }),
-        timeout: 45_000,
+        body: JSON.stringify({
+          totalCents:      total,
+          terminalId:      _selectedTerminal?.id ?? null,
+          splitMode:       _splitMode,
+          splitLegNumber:  _splitMode ? _splitCurrentLeg : null,
+          splitTotalLegs:  _splitMode ? _splitTotalLegs  : null,
+          splitItemsJson:  _splitMode === 'by_items'
+                             ? JSON.stringify(_currentLegItems) : null,
+        }),
+        timeout: 10_000,
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
+        if (res.status === 409 && err.activeTtxId) {
+          // Terminal is already processing a payment — re-attach to the active TTX
+          // instead of showing an error. Covers the case where staff closed and
+          // reopened the modal while createTerminalSale was still in flight.
+          _terminalTxId       = err.activeTtxId
+          _terminalDeviceId   = _selectedTerminal?.finixDeviceId ?? null
+          _terminalInitiating = false
+          _terminalStartedAt  = _terminalStartedAt || Date.now()
+          _switchingToCash    = false
+          _startTerminalPoll()
+          render()
+          return
+        }
+        if (res.status === 409) {
+          _terminalInitiating = false
+          _terminalError = err.error || 'Payment already processed for this order.'
+          render()
+          return
+        }
         throw new Error(err.error || `HTTP ${res.status}`)
       }
       const data = await res.json()
 
-      _terminalTransferId       = data.transferId
+      _terminalTxId             = data.ttxId
       _terminalDeviceId         = data.deviceId
-      _terminalAlreadySucceeded = data.alreadySucceeded === true
+      _terminalTransferId       = null  // Finix transferId arrives on first SUCCEEDED poll
+      _terminalAlreadySucceeded = false // legacy field; async-polling workflow handles this internally
       _terminalTipOnDevice      = data.tipOnTerminal === true
       _terminalInitiating       = false
+      _terminalStartedAt        = Date.now()
+      _switchingToCash          = false
       _startTerminalPoll()
       render()
     } catch (err) {
       _terminalInitiating = false
-      // AbortError means the request timed out on our side — the server may have already
-      // created the transfer and the customer may have tapped. Retry will find it via
-      // idempotency and recover cleanly. Never show the raw 'signal aborted' message.
-      const isTimeout = err.name === 'AbortError' || (err.message || '').includes('aborted')
-      _terminalError = isTimeout
-        ? 'Connection timed out. If the customer already tapped, press Retry — it will recover the payment automatically.'
-        : (err.message || 'Failed to send to terminal')
+      _terminalError = err.message || 'Failed to send to terminal'
       render()
     }
   }
@@ -1268,7 +1429,7 @@
     _stopTerminalPoll()
     _terminalPollCount = 0
     _terminalPollTimer = setInterval(async () => {
-      if (!_terminalTransferId) return
+      if (!_terminalTxId) return
       if (++_terminalPollCount >= MAX_TERMINAL_POLLS) {
         _stopTerminalPoll()
         _terminalError = 'Terminal timeout — no response after 5 minutes. Please try again.'
@@ -1276,53 +1437,81 @@
         return
       }
       try {
-        const res = await window.api(`/api/merchants/${window.merchantId}/terminal-sale/${_terminalTransferId}`)
+        const res = await window.api(`/api/merchants/${window.merchantId}/terminal-sale/by-ttx/${_terminalTxId}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
 
-        if (data.state === 'SUCCEEDED') {
+        // Capture the real Finix transferId once the workflow has it — needed
+        // by /record-payment later as the payment's transaction_id.
+        if (data.transferId && !_terminalTransferId) {
+          _terminalTransferId = data.transferId
+        }
+
+        if (data.status === 'approved') {
           _stopTerminalPoll()
-          // Auto-fill card details from terminal response
+          // Tap-beat-cancel race: customer tapped before our switch-to-cash cancel reached
+          // the device. The card WAS charged — honour it and drop the cash switch.
+          if (_switchingToCash) {
+            console.log('[PaymentModal] switch-to-cash lost the race — card already charged, proceeding to signature')
+            _switchingToCash = false
+          }
           _cardType       = (data.cardBrand || 'visa').toLowerCase()
           _cardLastFour   = data.cardLastFour || null
           _authCode       = data.approvalCode || null
-          _transactionId  = _terminalTransferId
+          _transactionId  = data.transferId || _terminalTransferId
           _cardholderName = null
-          // Finix is source of truth: always capture tip_amount from the terminal response.
-          // This covers the case where the device had tipping configured but the merchant
-          // setting wasn't reflected in _terminalTipOnDevice (e.g. config saved mid-session).
+          // Processor is source of truth: always capture tip_amount from the outcome.
           if (data.tipAmountCents > 0) {
             _tipCents = data.tipAmountCents
-          } else if (_terminalTipOnDevice && data.amount > 0) {
-            // Fallback: if Finix didn't return amount_breakdown.tip_amount (returns 0),
-            // infer the tip from the difference between what Finix charged and what we sent.
-            // At this point _tipCents is still 0, so computeTotals().total = subtotal + tax
-            // (exactly the amount we originally sent to Finix). If Finix charged more, it
-            // collected a tip. Difference must be positive to avoid rounding edge cases.
+          } else if (_terminalTipOnDevice && data.amountCents > 0) {
+            // Fallback: if the processor didn't break out tip_amount (returns 0),
+            // infer the tip from the difference between what was charged and what we sent.
             const sentTotal = computeTotals().total
-            const inferred  = data.amount - sentTotal
+            const inferred  = data.amountCents - sentTotal
             if (inferred > 0) _tipCents = inferred
           }
-          // Counter (screenless) devices skip signature
-          _screen = _isCounterDevice() ? 'RECEIPT_OPTIONS' : 'SIGNATURE'
+          // Server already recorded the payment — pre-set _paymentId so
+          // ensurePaymentRecorded() is a no-op (mirrors _startCloverLegPoll).
+          if (data.paymentId) {
+            _paymentId         = data.paymentId
+            _lastLegFromServer = typeof data.isLastLeg === 'boolean'
+              ? data.isLastLeg
+              : _inferLastLegLocally()
+          }
+          _screen = _shouldCaptureSignatureOnTablet() ? 'SIGNATURE' : 'RECEIPT_OPTIONS'
           render()
-        } else if (data.state === 'FAILED') {
+        } else if (data.status === 'declined' || data.status === 'cancelled' || data.status === 'error') {
           _stopTerminalPoll()
-          const code = data.failureCode || ''
-          const retryable = !_NON_RETRYABLE_CODES.has(code)
-          if (retryable && _terminalAutoRetries < 2) {
-            // Recoverable failure (bad read, technical error) — retry silently
-            _terminalAutoRetries++
+          // Switch-to-cash: staff clicked "Take cash instead" and the cancel landed.
+          // Skip auto-retry; transition to CASH_CONFIRM with tip/amount preserved.
+          if (_switchingToCash && data.reason === 'cancelled_by_staff') {
+            _switchingToCash = false
+            _terminalTxId = null
             _terminalTransferId = null
             _terminalError = null
-            console.log(`[PaymentModal] auto-retry ${_terminalAutoRetries} after ${code || 'FAILED'}`)
-            render()  // re-triggers _initiateTerminalSale (server handles fresh key)
+            _terminalAutoRetries = 0
+            _screen = 'CASH_CONFIRM'
+            render()
+            return
+          }
+          if (data.retryable && _terminalAutoRetries < 2) {
+            _terminalAutoRetries++
+            _terminalTxId = null
+            _terminalTransferId = null
+            _terminalError = null
+            console.log(`[PaymentModal] auto-retry ${_terminalAutoRetries} after ${data.status}/${data.reason || '?'}`)
+            const retryDelay = data.retryDelayMs || 0
+            if (retryDelay) {
+              setTimeout(() => render(), retryDelay)
+            } else {
+              render()  // re-triggers _initiateTerminalSale
+            }
           } else {
-            _terminalError = data.failureMessage || code || 'Payment failed on terminal'
+            _terminalError = data.message || 'Payment failed on terminal'
             render()
           }
         }
-        // PENDING — keep polling
+        // waiting — keep polling
       } catch (err) {
         // Network error — keep polling, terminal might still be processing
         console.warn('[PaymentModal] poll error:', err.message)
@@ -1332,17 +1521,21 @@
 
   async function _cancelTerminalSale() {
     _stopTerminalPoll()
-    if (_terminalDeviceId) {
+    // Prefer workflow-routed cancel (by orderId) so the FSM's cancel-beat-tap
+    // race handling fires; server falls back to raw device cancel if no
+    // workflow is routed for this order.
+    if (_order?.id || _terminalDeviceId) {
       try {
         await window.api(`/api/merchants/${window.merchantId}/terminal-sale/cancel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId: _terminalDeviceId }),
+          body: JSON.stringify({ orderId: _order?.id, deviceId: _terminalDeviceId }),
         })
       } catch (err) {
         console.warn('[PaymentModal] cancel error:', err.message)
       }
     }
+    _terminalTxId       = null
     _terminalTransferId = null
     _terminalDeviceId   = null
     _terminalError      = null
@@ -1356,12 +1549,23 @@
     return m !== 'pax_a920_pro' && m !== 'pax_a920_emu'
   }
 
+  /**
+   * Returns true when the Kizo tablet should display the signature pad
+   * after a successful card payment. False when (a) merchant has disabled
+   * tablet-side signature capture (signature is collected on the terminal
+   * instead), or (b) the device is screenless. Default: true.
+   */
+  function _shouldCaptureSignatureOnTablet() {
+    if (_isCounterDevice()) return false
+    return _profile?.signatureCapture !== false
+  }
+
   function renderCardConfirm(el) {
     const { total } = computeTotals()
     const deviceLabel = _selectedTerminal?.nickname ?? 'terminal'
 
     // Initiating — sending sale request to terminal (no cancel allowed)
-    if (!_terminalTransferId && !_terminalError && !_terminalInitiating) {
+    if (!_terminalTxId && !_terminalError && !_terminalInitiating) {
       el.innerHTML = `
         <div class="pm-card-screen">
           <div class="pm-terminal-status">
@@ -1396,18 +1600,26 @@
       })
       el.querySelector('#pm-btn-retry').addEventListener('click', () => {
         _terminalError = null
+        _terminalTxId = null
         _terminalTransferId = null
         render() // will re-trigger _initiateTerminalSale
       })
       return
     }
 
-    // Waiting — customer tapping / inserting card (no cancel allowed)
+    // Waiting — customer tapping / inserting card.
+    // The "Take cash instead" button is gated on 5s of elapsed wait time so it
+    // doesn't appear during the initial device hand-off.
     const waitMsg = _isCounterDevice()
       ? `Customer should tap or insert card at the counter.`
       : `Customer should tap, insert, or swipe on the terminal.`
     const alreadyNote = _terminalAlreadySucceeded
       ? `<div class="pm-terminal-note">Terminal may show an error — verifying with card network…</div>`
+      : ''
+    const elapsedMs = _terminalStartedAt ? Date.now() - _terminalStartedAt : 0
+    const showSwitchBtn = !_switchingToCash && elapsedMs >= 5000
+    const switchingNote = _switchingToCash
+      ? `<div class="pm-terminal-note">Cancelling card sale — switching to cash…</div>`
       : ''
     el.innerHTML = `
       <div class="pm-card-screen">
@@ -1418,9 +1630,53 @@
             ${waitMsg}
           </div>
           ${alreadyNote}
+          ${switchingNote}
         </div>
         <div style="flex:1"></div>
-      </div>`
+      </div>
+      ${showSwitchBtn ? `
+        <div class="pm-action-bar">
+          <button class="pm-btn pm-btn-secondary" id="pm-btn-switch-cash">Customer changed mind — take cash</button>
+        </div>` : ''}`
+    if (showSwitchBtn) {
+      el.querySelector('#pm-btn-switch-cash').addEventListener('click', _switchToCashFromTerminal)
+    }
+    // If the button isn't shown yet (<5s elapsed), re-render once the threshold lands
+    // so staff sees it without having to poke the screen.
+    if (!showSwitchBtn && !_switchingToCash && _terminalStartedAt && elapsedMs < 5000) {
+      setTimeout(() => {
+        if (_screen === 'CARD_CONFIRM' && _terminalTxId && !_terminalError) render()
+      }, 5000 - elapsedMs + 50)
+    }
+  }
+
+  /**
+   * Staff clicked "Customer changed mind — take cash". Call the server cancel
+   * endpoint with a distinguishing reason, keep polling — the FAILED /
+   * CANCELLATION_VIA_API outcome transitions to CASH_CONFIRM; SUCCEEDED honours the
+   * charge (customer tapped before the cancel reached the device).
+   */
+  async function _switchToCashFromTerminal() {
+    if (_switchingToCash) return
+    _switchingToCash = true
+    render()
+    try {
+      await window.api(`/api/merchants/${window.merchantId}/terminal-sale/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: _order?.id,
+          deviceId: _terminalDeviceId,
+          reason: 'switch_to_cash',
+        }),
+      })
+    } catch (err) {
+      console.warn('[PaymentModal] switch-to-cash cancel failed:', err.message)
+      _switchingToCash = false
+      _terminalError = 'Failed to cancel card sale. Please wait or try again.'
+      render()
+    }
+    // Keep the existing poll running; it will pick up the state change.
   }
 
   // ── COUNTER WAITING ───────────────────────────────────────────────────────
@@ -1602,7 +1858,7 @@
         if (data.status === 'approved') {
           // Server already recorded the payment — skip ensurePaymentRecorded() by pre-setting _paymentId
           _paymentId         = data.paymentId
-          _lastLegFromServer = _splitCurrentLeg >= _splitTotalLegs
+          _lastLegFromServer = _inferLastLegLocally()
           _screen            = 'RECEIPT_OPTIONS'
           render()
         } else if (data.status === 'cancelled') {
@@ -1674,7 +1930,7 @@
       return
     }
 
-    // Waiting — customer completing payment (no cancel allowed)
+    // Waiting — customer completing payment
     const waitTitle = (_cloverFullMode || _cloverLegMode)
       ? `🍀 Waiting for customer on Clover Flex — ${fmt(total)}`
       : `Waiting for customer — ${fmt(total)}`
@@ -1692,7 +1948,16 @@
           </div>
         </div>
         <div style="flex:1"></div>
+      </div>
+      <div class="pm-action-bar">
+        <button class="pm-btn pm-btn-danger" id="pm-btn-cancel-counter">Cancel</button>
       </div>`
+    el.querySelector('#pm-btn-cancel-counter').addEventListener('click', () => {
+      _pinAction = 'close_modal'
+      _pinBuffer = ''
+      _screen = 'PIN_EXIT'
+      render()
+    })
   }
 
   // ── PHONE TOKENIZE (Finix.js hosted fields) ───────────────────────────────
@@ -1855,7 +2120,7 @@
             _cardLastFour   = data.cardLastFour ?? null
             _authCode       = data.approvalCode ?? null
             _cardholderName = null
-            _screen = 'SIGNATURE'
+            _screen = _shouldCaptureSignatureOnTablet() ? 'SIGNATURE' : 'RECEIPT_OPTIONS'
             render()
           } catch (err2) {
             _phoneCharging = false
@@ -1957,14 +2222,21 @@
       ? `<div class="pm-totals-row"><span>Amex surcharge</span><span>${fmt(_amexSurchargeCents)}</span></div>`
       : ''
     const svcChargeRow = serviceCharge > 0
-      ? `<div class="pm-totals-row pm-service-charge"><span>Service Charge (${Math.round(_cloverServiceChargeRate() * 100)}%)</span><span>+${fmt(serviceCharge)}</span></div>`
+      ? `<div class="pm-totals-row pm-service-charge"><span>Service Charge</span><span>+${fmt(serviceCharge)}</span></div>`
       : ''
+    const splitLabel = _splitMode === 'by_items'
+      ? `Person ${_splitCurrentLeg}`
+      : `Person ${_splitCurrentLeg} of ${_splitTotalLegs}`
     const splitInfo = _splitMode
       ? `<div class="pm-totals-row" style="color:#666;font-size:0.85rem">
-           <span>Split</span><span>Person ${_splitCurrentLeg} of ${_splitTotalLegs}</span>
+           <span>Split</span><span>${splitLabel}</span>
          </div>`
       : ''
-    const isLastLegUI = !_splitMode || _splitCurrentLeg >= _splitTotalLegs
+    const totalItemCount = _totalUnits()
+    const isLastLegUI = !_splitMode
+      || (_splitMode === 'by_items'
+            ? _assignedItemIndices.size + _currentLegItems.length >= totalItemCount
+            : _splitCurrentLeg >= _splitTotalLegs)
     const customerEmail = _order.customerEmail ?? ''
 
     el.innerHTML = `
@@ -2046,11 +2318,16 @@
       )
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        // 409 with a paymentId means the orphan sweep already recorded this payment
-        // (e.g. terminal showed red but charge succeeded — treat as success).
+        // 409 with a paymentId means the order is already paid for this leg
+        // (e.g. orphan sweep, recovery path, or duplicate click). Trust the
+        // server's isLastLeg when present; otherwise infer from local split state
+        // so a stale paid-state on a split-payment order doesn't bounce the
+        // staff to PIN_EXIT after an intermediate leg.
         if (res.status === 409 && body.paymentId) {
           _paymentId         = body.paymentId
-          _lastLegFromServer = true
+          _lastLegFromServer = typeof body.isLastLeg === 'boolean'
+            ? body.isLastLeg
+            : _inferLastLegLocally()
           return
         }
         throw new Error(body.error ?? `Server error ${res.status}`)
@@ -2149,10 +2426,30 @@
     const remaining = Math.max(0, fb - paid)
     const nextLeg   = _splitCurrentLeg + 1
 
+    // Phase 3: when hydrated from a server session, show a resume banner
+    // instead of the "Person N paid!" success header (which implies the
+    // current staff just finished a leg — misleading on resume).
+    const paidCount = _splitCurrentLeg
+    const peopleWord = paidCount === 1 ? 'person has' : 'people have'
+    const paidSummary = _splitMode === 'by_items'
+      ? `${paidCount} ${peopleWord} paid so far.`
+      : `${paidCount} of ${_splitTotalLegs ?? '?'} ${paidCount === 1 ? 'leg has' : 'legs have'} been paid.`
+    const heading = _isResuming
+      ? `<div class="pm-success-icon">↻</div>
+         <h3>Resuming split payment</h3>
+         <p style="text-align:center;color:#666;margin:0.25rem 1rem 0.5rem;font-size:0.9rem">
+           ${_resumedFromStatus === 'paused' ? 'This split was paused.' : 'This split is in progress.'}
+           ${paidSummary}
+         </p>`
+      : `<div class="pm-success-icon">✅</div>
+         <h3>Person ${_splitCurrentLeg} paid!</h3>`
+    const buttonLabel = _isResuming
+      ? `Continue with Person ${nextLeg} →`
+      : `Person ${nextLeg} →`
+
     el.innerHTML = `
       <div class="pm-leg-complete-screen">
-        <div class="pm-success-icon">✅</div>
-        <h3>Person ${_splitCurrentLeg} paid!</h3>
+        ${heading}
         <div class="pm-receipt-summary" style="margin:0.75rem 0">
           <div class="pm-totals-row">
             <span>Collected so far (pre-tip)</span>
@@ -2171,22 +2468,138 @@
       </div>
       <div class="pm-action-bar">
         <button class="pm-btn pm-btn-primary" id="pm-btn-next-person">
-          Person ${nextLeg} →
+          ${buttonLabel}
         </button>
       </div>`
 
     el.querySelector('#pm-btn-next-person').addEventListener('click', () => {
+      _isResuming = false
+      _resumedFromStatus = null
       _splitCurrentLeg++
       _resetLegState()
       if (_splitMode === 'by_items') {
         _screen = 'SPLIT_ITEMS_SELECT'
       } else {
-        // For equal / custom: compute leg base and auto-set 20% tip
+        // For equal / custom: compute leg base
         _computeLegBase()
-        _autoSetTip(20)
         _screen = 'BILL_REVIEW'
       }
       render()
+    })
+  }
+
+  // ── EXIT CONFIRM SPLIT (Phase 4) ──────────────────────────────────────────
+  // Confirmation step shown when staff taps the close button while a split
+  // payment is in progress (≥1 leg paid). Staff must explicitly choose
+  // "Pause & Exit" to proceed to PIN_EXIT — preventing accidental abandonment
+  // and surfacing exactly how much is left unpaid.
+
+  function renderExitConfirmSplit(el) {
+    const fb        = _fullBase()
+    const paid      = _splitLegBases.reduce((a, b) => a + b, 0)
+    const remaining = Math.max(0, fb - paid)
+    const legCount  = _splitLegBases.length
+
+    const totalItems = _totalUnits()
+    // Include items the staff has ticked in the current SPLIT_ITEMS_SELECT
+    // (not yet paid) so the "unassigned" count reflects what's left after
+    // the current leg would commit. Otherwise it overstates the remaining work.
+    const inFlight = _splitMode === 'by_items'
+      ? new Set([..._assignedItemIndices, ..._currentLegItems])
+      : new Set()
+    const itemsLeft  = _splitMode === 'by_items'
+      ? totalItems - inFlight.size
+      : null
+
+    // Preview discount that would be applied if the staff chooses
+    // "Customer left — discount remaining". Mirrors the server math:
+    //   newTaxedBase = round(paidPreTip / (1 + taxRate))
+    //   discount = (subtotal - existingDiscount + serviceCharge) - newTaxedBase
+    // The server is authoritative; this preview is just for the dialog text.
+    const taxRate = _profile?.taxRate ?? 0
+    const existingTaxedBase = (_order?.subtotalCents ?? 0)
+                            - (_order?.discountCents ?? 0)
+                            + (_order?.serviceChargeCents ?? 0)
+    const newTaxedBase = Math.round(paid / (1 + taxRate))
+    const previewDiscount = Math.max(0, existingTaxedBase - newTaxedBase)
+
+    el.innerHTML = `
+      <div class="pm-leg-complete-screen">
+        <div class="pm-success-icon">⏸</div>
+        <h3>Split payment in progress</h3>
+        <div class="pm-receipt-summary" style="margin:0.75rem 0">
+          <div class="pm-totals-row">
+            <span>${legCount} ${legCount === 1 ? 'leg' : 'legs'} paid</span>
+            <span>${fmt(paid)}</span>
+          </div>
+          <div class="pm-totals-row pm-total-final">
+            <span>Remaining base</span>
+            <span>${fmt(remaining)}</span>
+          </div>
+          ${itemsLeft !== null && itemsLeft > 0 ? `
+            <div class="pm-totals-row" style="color:#666;font-size:0.85rem">
+              <span>Items unassigned</span><span>${itemsLeft} of ${totalItems}</span>
+            </div>` : ''}
+        </div>
+        <p style="text-align:center;color:#555;margin:0.5rem 1rem;font-size:0.9rem">
+          <strong>Pause &amp; Exit</strong>: keep the order open, resume on any device.<br>
+          <strong>Customer Left</strong>: customer is gone — discount the unpaid ${fmt(previewDiscount)} and close the order.
+        </p>
+      </div>
+      <div class="pm-action-bar" style="flex-wrap:wrap">
+        <button class="pm-btn pm-btn-secondary" id="pm-exit-cancel">Cancel</button>
+        <button class="pm-btn pm-btn-warning"   id="pm-exit-finalize">Customer Left</button>
+        <button class="pm-btn pm-btn-danger"    id="pm-exit-pause">Pause &amp; Exit</button>
+      </div>`
+
+    el.querySelector('#pm-exit-cancel').addEventListener('click', () => {
+      _screen = _prevScreen ?? 'LEG_COMPLETE'
+      _prevScreen = null
+      render()
+    })
+
+    el.querySelector('#pm-exit-pause').addEventListener('click', () => {
+      _pinAction = 'pause_split'
+      _pinBuffer = ''
+      _screen    = 'PIN_EXIT'
+      render()
+    })
+
+    el.querySelector('#pm-exit-finalize').addEventListener('click', async () => {
+      const ok = window.confirm(
+        `Customer left — apply ${fmt(previewDiscount)} discount and close the order?\n\n` +
+        `The order will be marked paid for ${fmt(paid)}.\n` +
+        `The table will be free for the next customer.\n\n` +
+        `This is permanent.`
+      )
+      if (!ok) return
+
+      const finalizeBtn = el.querySelector('#pm-exit-finalize')
+      finalizeBtn.disabled = true
+      finalizeBtn.textContent = 'Closing…'
+      try {
+        const res = await window.api(
+          `/api/merchants/${window.merchantId}/orders/${_order.id}/finalize-partial`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+        )
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error || `Server error ${res.status}`)
+        }
+        // Cancel any in-flight terminal/counter sessions on the way out.
+        _cancelInflightSessions()
+        _cleanup()
+        hide()
+        if (typeof window.loadOrders === 'function') window.loadOrders()
+      } catch (err) {
+        finalizeBtn.disabled = false
+        finalizeBtn.textContent = 'Customer Left'
+        if (typeof window.showToast === 'function') {
+          window.showToast(`Failed to close: ${err.message}`, 'error')
+        } else {
+          window.alert(`Failed to close: ${err.message}`)
+        }
+      }
     })
   }
 
@@ -2197,9 +2610,12 @@
     const isLocked = lockoutRemaining > 0
     const dots = '● '.repeat(_pinBuffer.length).trim() || '‒ ‒ ‒ ‒'
 
+    const pinTitle = _pinAction === 'pause_split'
+      ? 'Enter your PIN to pause'
+      : 'Enter your PIN to close'
     el.innerHTML = `
       <div class="pm-pin-screen">
-        <h3>Enter your PIN to close</h3>
+        <h3>${pinTitle}</h3>
         <div class="pm-pin-display">${dots}</div>
         <div class="pm-pin-error" id="pm-pin-error"></div>
         <div class="pm-keypad" id="pm-keypad">
@@ -2246,10 +2662,74 @@
     if (disp) disp.textContent = dots
   }
 
+  /** Cancel any in-flight terminal/counter session on staff exit. Best-effort. */
+  function _cancelInflightSessions() {
+    if (_counterPollTimer && _order?.id) {
+      window.api(`/api/merchants/${window.merchantId}/counter/cancel-payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: _order.id }),
+      }).catch(() => {})
+    }
+    if ((_terminalTxId || _terminalDeviceId) && _order?.id) {
+      window.api(`/api/merchants/${window.merchantId}/terminal-sale/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: _order.id, deviceId: _terminalDeviceId }),
+      }).catch(() => {})
+    }
+  }
+
   async function _submitPin(el) {
     if (_pinBuffer.length === 0) return
     _disableKeypad(el)
     try {
+      // Phase 4: pause_split sends the PIN directly to the pause endpoint
+      // (server validates it). One roundtrip; on success we cleanly close.
+      if (_pinAction === 'pause_split' && _order?.id) {
+        const res = await window.api(
+          `/api/merchants/${window.merchantId}/orders/${_order.id}/split-session/pause`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: _pinBuffer }),
+          }
+        )
+        if (res.ok) {
+          _cancelInflightSessions()
+          _cleanup()
+          hide()
+          if (typeof window.loadOrders === 'function') window.loadOrders()
+          return
+        }
+        if (res.status === 409) {
+          // Order completed by another device while we were on EXIT_CONFIRM_SPLIT.
+          // Nothing left to pause — just close.
+          _cleanup()
+          hide()
+          if (typeof window.loadOrders === 'function') window.loadOrders()
+          return
+        }
+        // 401 (bad PIN) and other errors fall through to the same retry / lockout
+        // logic the close_modal path uses.
+        _pinBuffer = ''
+        _refreshPinDisplay(el)
+        _pinAttempts++
+        if (_pinAttempts >= 3) {
+          _pinLockoutUntil = Date.now() + 30_000
+          _pinAttempts = 0
+          _disableKeypad(el)
+          el.querySelector('#pm-pin-lockout').style.display = ''
+          _startLockoutCountdown(el)
+        } else {
+          const errEl = el.querySelector('#pm-pin-error')
+          if (errEl) errEl.textContent =
+            `Incorrect PIN (${3 - _pinAttempts} attempt${3 - _pinAttempts === 1 ? '' : 's'} left)`
+          _enableKeypad(el)
+        }
+        return
+      }
+
       const res = await window.api(
         `/api/merchants/${window.merchantId}/employees/authenticate`,
         {
@@ -2260,18 +2740,25 @@
       )
       if (res.ok) {
         if (_pinAction === 'close_modal') {
-          _cleanup()
-          hide()
-        } else {
-          _cleanup()
-          hide()
-          if (typeof window.loadOrders === 'function') window.loadOrders()
+          _cancelInflightSessions()
         }
+        _cleanup()
+        hide()
+        if (typeof window.loadOrders === 'function') window.loadOrders()
         return
       }
       _pinBuffer = ''
-      _pinAttempts++
       _refreshPinDisplay(el)
+
+      // 429 = server-side lockout (rate limiter); show a clear wait message
+      if (res.status === 429) {
+        _disableKeypad(el)
+        const lockoutEl = el.querySelector('#pm-pin-lockout')
+        if (lockoutEl) { lockoutEl.textContent = 'Too many attempts — wait a few minutes'; lockoutEl.style.display = '' }
+        return
+      }
+
+      _pinAttempts++
       if (_pinAttempts >= 3) {
         _pinLockoutUntil = Date.now() + 30_000
         _pinAttempts = 0
@@ -2339,6 +2826,9 @@
     _customLegBase       = null
     _legSubtotalCents    = null
     _legTaxCents         = 0
+    _isResuming          = false
+    _resumedFromStatus   = null
+    _prevScreen          = null
     _pinBuffer           = ''
     _pinAttempts         = 0
     _openMode            = 'card'
@@ -2348,6 +2838,7 @@
     _editingItemIdx         = null
     _editModalSelections    = {}
     _stopTerminalPoll()
+    _terminalTxId             = null
     _terminalTransferId       = null
     _terminalDeviceId         = null
     _terminalError            = null
@@ -2396,7 +2887,7 @@
    *   mode 'card'    — default; bill review shows card terminal buttons
    *   mode 'phone'   — skip bill review; open Finix tokenise screen with pre-set tipCents
    */
-  function open(order, profile, opts) {
+  async function open(order, profile, opts) {
     _ensureOverlay()
     if (!_overlay) return
     _cleanup()
@@ -2406,6 +2897,18 @@
     _pinAction      = 'done'
     _finixConfig    = opts?.finix ?? null
     _cloverEnabled  = opts?.clover?.enabled === true
+
+    // Phase 3: if the order has an active split session, resume it.
+    // Overrides opts.mode — once a split is in progress, the customer must
+    // continue from where the previous staff left off.
+    const session = await _fetchSplitSession(order.id)
+    if (session) {
+      _hydrateFromSession(session)
+      _screen = 'LEG_COMPLETE'
+      show()
+      render()
+      return
+    }
 
     if (_openMode === 'cash') {
       // Skip BILL_REVIEW — go straight to cash denomination picker
@@ -2455,8 +2958,18 @@
     const closeBtn = _overlay?.querySelector('.pm-close-btn')
     if (closeBtn) {
       closeBtn.addEventListener('click', () => {
-        // PIN_EXIT is already showing the PIN screen — do nothing to avoid re-entrancy.
-        if (_screen === 'PIN_EXIT') return
+        // Already showing exit-related screens — do nothing to avoid re-entrancy.
+        if (_screen === 'PIN_EXIT' || _screen === 'EXIT_CONFIRM_SPLIT') return
+
+        // Phase 4: if a split is in progress (≥1 leg already paid),
+        // route through EXIT_CONFIRM_SPLIT so staff explicitly chooses to pause.
+        if (_splitMode && _splitLegBases.length > 0) {
+          _prevScreen = _screen
+          _screen     = 'EXIT_CONFIRM_SPLIT'
+          render()
+          return
+        }
+
         // All other screens: require staff PIN before closing.
         // This ensures staff can always escape a stuck or locked payment modal.
         _pinAction = 'close_modal'

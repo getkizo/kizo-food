@@ -1,0 +1,13 @@
+﻿[Unit]
+Description=btprint status endpoint
+After=network.target
+
+[Service]
+Type=simple
+User=btprint
+ExecStart=/opt/btprint/venv/bin/python /opt/btprint/src/status_server.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

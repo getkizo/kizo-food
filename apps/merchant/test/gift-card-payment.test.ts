@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Gift card payment tests
  *
  * Tests:
@@ -132,6 +132,17 @@ beforeAll(async () => {
 
   await migrate()
   await initializeMasterKey()
+
+  // Backfill columns added via columnMigrations (which run before the table
+  // tableMigration creates gift_card_purchases, so they silently no-op on :memory:).
+  const db = getDatabase()
+  const gcpCols: Array<[string, string]> = [
+    ['recipient_name', 'TEXT DEFAULT NULL'],
+    ['line_items_json', "TEXT NOT NULL DEFAULT '[]'"],
+  ]
+  for (const [col, def] of gcpCols) {
+    try { db.exec(`ALTER TABLE gift_card_purchases ADD COLUMN ${col} ${def}`) } catch { /* already exists */ }
+  }
 
   const regRes = await app.fetch(new Request('http://localhost:3000/api/auth/register', {
     method:  'POST',
@@ -429,5 +440,78 @@ describe('record-payment: gift_card — validation', () => {
       giftCardTaxOffsetCents: 999,
     })
     expect(res.status).toBe(400)
+  })
+})
+
+// ── POST /api/store/gift-cards/purchase ───────────────────────────────────────
+
+describe('POST /api/store/gift-cards/purchase', () => {
+  test('valid purchase → 201 with { purchaseId, totalCents }', async () => {
+    const res  = await app.fetch(new Request('http://localhost:3000/api/store/gift-cards/purchase', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerName:  'Test Buyer',
+        customerEmail: 'buyer@example.com',
+        lineItems:     [{ denominationCents: 2500, qty: 1 }],
+      }),
+    }))
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(typeof body.purchaseId).toBe('string')
+    expect(body.totalCents).toBe(2500)
+  })
+
+  test('missing customerEmail → 400', async () => {
+    const res = await app.fetch(new Request('http://localhost:3000/api/store/gift-cards/purchase', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerName: 'Test Buyer',
+        lineItems:    [{ denominationCents: 5000, qty: 1 }],
+      }),
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  test('missing customerName → 400', async () => {
+    const res = await app.fetch(new Request('http://localhost:3000/api/store/gift-cards/purchase', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerEmail: 'buyer@example.com',
+        lineItems:     [{ denominationCents: 5000, qty: 1 }],
+      }),
+    }))
+    expect(res.status).toBe(400)
+  })
+})
+
+// ── GET /api/merchants/:id/gift-card-purchases ────────────────────────────────
+
+describe('GET /api/merchants/:id/gift-card-purchases', () => {
+  test('returns { purchases } array → 200', async () => {
+    const res  = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/gift-card-purchases`,
+      { headers: { Authorization: `Bearer ${ownerToken}` } },
+    ))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(Array.isArray(body.purchases)).toBe(true)
+  })
+
+  test('invalid from/to range → 400', async () => {
+    const res = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/gift-card-purchases?from=9999999999999&to=1`,
+      { headers: { Authorization: `Bearer ${ownerToken}` } },
+    ))
+    expect(res.status).toBe(400)
+  })
+
+  test('requires authentication → 401', async () => {
+    const res = await app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/gift-card-purchases`,
+    ))
+    expect(res.status).toBe(401)
   })
 })

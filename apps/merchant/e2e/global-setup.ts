@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Playwright globalSetup — seeds the test DB with a merchant + menu.
  *
  * Runs once after webServer is ready, before any test file executes.

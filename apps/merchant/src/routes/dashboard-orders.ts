@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dashboard order routes — staff-facing order management.
  *
  *   GET    /api/merchants/:id/orders                      — list orders (date range)
@@ -28,9 +28,10 @@ import { serverError } from '../utils/server-error'
 import { getDatabase } from '../db/connection'
 import { authenticate, requireRole } from '../middleware/auth'
 import { getAPIKey, getPOSMerchantId } from '../crypto/api-keys'
+import { randomBytes } from 'node:crypto'
 import { CloverPOSAdapter } from '../adapters/clover'
 import { generateId } from '../utils/id'
-import { printKitchenTicket, printCounterTicket, printCustomerReceipt, printCustomerBill, kitchenItems, course1Items, course2Items } from '../services/printer'
+import { printKitchenTicket, printCounterTicket, printCustomerReceipt, printCustomerBill, printCouponTicket, kitchenItems, course1Items, course2Items, gfItems, nonGfItems } from '../services/printer'
 import { enrichItemsWithCategory } from '../utils/print-items'
 import type { OrderItemShape } from '../utils/print-items'
 import { notifyCustomer } from './push'
@@ -55,6 +56,8 @@ interface ParsedOrderItem {
   dishId?: string
   itemId?: string
   dishName?: string
+  lineTotalCents?: number
+  line_total_cents?: number
   name?: string
   quantity: number
   priceCents?: number
@@ -98,7 +101,7 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     const body = await c.req.json<{
       orderType?: string
@@ -158,10 +161,31 @@ dashboardOrders.post(
 
     const db = getDatabase()
 
+    // Build print_first lookup so modifiers from print_first groups sort to the
+    // top of each item's modifier list on kitchen/counter tickets.
+    const allModIds = [...new Set(
+      body.items.flatMap(item => (item.selectedModifiers ?? []).map(m => m.modifierId))
+    )]
+    const printFirstMap = new Map<string, number>()
+    if (allModIds.length > 0) {
+      const ph = allModIds.map(() => '?').join(',')
+      const pfRows = db
+        .query<{ id: string; print_first: number }, string[]>(
+          `SELECT m.id, mg.print_first FROM modifiers m
+           JOIN modifier_groups mg ON mg.id = m.group_id
+           WHERE m.id IN (${ph})`
+        )
+        .all(...allModIds)
+      for (const r of pfRows) printFirstMap.set(r.id, r.print_first)
+    }
+
     // Calculate totals
     let subtotalCents = 0
     const enrichedItems = body.items.map((item) => {
-      const modifierTotal = (item.selectedModifiers ?? []).reduce((s, m) => s + m.priceCents, 0)
+      const sortedMods = [...(item.selectedModifiers ?? [])].sort(
+        (a, b) => (printFirstMap.get(b.modifierId) ?? 0) - (printFirstMap.get(a.modifierId) ?? 0)
+      )
+      const modifierTotal = sortedMods.reduce((s, m) => s + m.priceCents, 0)
       const lineCents = (item.priceCents + modifierTotal) * item.quantity
       subtotalCents += lineCents
       return {
@@ -169,13 +193,29 @@ dashboardOrders.post(
         dishName: item.name,
         quantity: item.quantity,
         priceCents: item.priceCents,
-        modifiers: item.selectedModifiers ?? [],
+        modifiers: sortedMods,
         lineTotalCents: lineCents,
         serverNotes: item.serverNotes ?? undefined,
       }
     })
 
-    const totalCents = subtotalCents // tax handled by POS
+    // Compute tax from the merchant's configured tax_rate so sales-tax reports
+    // read the correct amount on every dashboard-entered order. Historical
+    // note: this used to be hardcoded to 0 under the assumption that the POS
+    // (Clover) would push tax as a line item and compute its own total. That
+    // worked for Clover but silently under-reported tax on Finix/cash flows,
+    // leaving a trail of tax_cents=0 orders that the orphan-recovery and
+    // counter-ws code paths had to work around (see counter-ws.ts cloverTaxCents
+    // comment). Clover merchants are unaffected — their push still uses
+    // subtotal_cents as the taxable base.
+    const merchantRow = db
+      .query<{ tax_rate: number }, [string]>(
+        `SELECT tax_rate FROM merchants WHERE id = ?`,
+      )
+      .get(merchantId)
+    const taxRate   = merchantRow?.tax_rate ?? 0
+    const taxCents  = Math.round(subtotalCents * taxRate)
+    const totalCents = subtotalCents + taxCents
 
     const orderId = generateId('ord')
     const orderType = body.orderType ?? 'pickup'
@@ -191,6 +231,8 @@ dashboardOrders.post(
       }
     }
 
+    const feedbackToken = randomBytes(16).toString('hex')
+
     db.run(
       `INSERT INTO orders (
          id, merchant_id, customer_name, customer_phone, customer_email,
@@ -199,12 +241,12 @@ dashboardOrders.post(
          table_label, room_label, course_mode,
          employee_id, employee_nickname,
          tip_cents, paid_amount_cents, payment_method, payment_checkout_form_id, payment_transfer_id,
-         pickup_time, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'dashboard', ?, ?,
+         pickup_time, feedback_token, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dashboard', ?, ?,
                  ?, ?, ?,
                  ?, ?,
                  ?, ?, ?, ?, ?,
-                 ?, datetime('now'), datetime('now'))`,
+                 ?, ?, datetime('now'), datetime('now'))`,
       [
         orderId,
         merchantId,
@@ -213,6 +255,7 @@ dashboardOrders.post(
         body.customerEmail?.trim() ?? null,
         JSON.stringify(enrichedItems),
         subtotalCents,
+        taxCents,
         totalCents,
         initialStatus,
         orderType,
@@ -229,6 +272,7 @@ dashboardOrders.post(
         body.checkoutFormId ?? null,
         body.transferId ?? null,
         scheduledFor,
+        feedbackToken,
       ]
     )
 
@@ -258,7 +302,6 @@ dashboardOrders.post(
         if (!kitchenIp) return
 
         const counterIp = merchant?.counter_printer_ip || kitchenIp
-        const receiptIp = merchant?.receipt_printer_ip || kitchenIp
 
         const kitchenProtocol = (merchant?.kitchen_printer_protocol ?? 'star-line') as 'star-line' | 'star-line-tsp100' | 'webprnt'
         const counterProtocol = (merchant?.counter_printer_protocol ?? 'star-line') as 'star-line' | 'star-line-tsp100' | 'webprnt'
@@ -279,6 +322,7 @@ dashboardOrders.post(
           utensilsNeeded: body.utensilsNeeded ?? false,
           items: printItems,
           createdAt: new Date().toISOString(),
+          scheduledFor: scheduledFor ?? null,
           receiptStyle,
         }
 
@@ -293,16 +337,44 @@ dashboardOrders.post(
         const hasCourse2 = course2Items(printItems).length > 0
         const isCoursingOrder = body.courseMode && courseDelayMinutes > 0 && hasCourse2
 
+        const allKitchenItems  = kitchenItems(printItems)
+        const gfKitchenItems   = gfItems(allKitchenItems)
+        const nonGfKitchenItems = nonGfItems(allKitchenItems)
+
+        // GF separation takes absolute priority over all other rules (coursing, course order, etc.).
+        // When an order contains both GF and non-GF kitchen items, GF items fire immediately and
+        // non-GF items are scheduled 5 minutes later so kitchen staff can clear surfaces first.
+        const needsGfSeparation = gfKitchenItems.length > 0 && nonGfKitchenItems.length > 0
+
         let webprntFallbackUsed = false
         const fallbackIps = new Set<string>()
 
-        if (isCoursingOrder && hasCourse1) {
-          // Print course-1 (numbered categories) immediately
+        if (needsGfSeparation) {
+          // GF first — items within the batch are sorted by course via sortItemsByCourse inside printKitchenTicket
+          const kitchenResult = await printKitchenTicket({
+            ...baseOpts,
+            items: gfKitchenItems,
+            printerIp: kitchenIp,
+            printerProtocol: kitchenProtocol,
+            showGlutenFreeBanner: true,
+          })
+          if (kitchenResult.webprntFallbackUsed) { webprntFallbackUsed = true; fallbackIps.add(kitchenIp) }
+          console.log(`[dashboard-orders] 🌾  GF kitchen ticket printed for order ${orderId} (${gfKitchenItems.length} items)`)
+
+          const fireAt = new Date(Date.now() + 5 * 60_000).toISOString()
+          db.run(
+            `INSERT INTO pending_course_fires (merchant_id, order_id, course, fire_at, printer_ip, printer_protocol, print_language, ticket_type)
+             VALUES (?, ?, 2, ?, ?, ?, ?, 'non_gf')`,
+            [merchantId, orderId, fireAt, kitchenIp, kitchenProtocol, body.printLanguage ?? 'en']
+          )
+          console.log(`[dashboard-orders] ⏰  Non-GF kitchen print for ${orderId} scheduled at ${fireAt} (${nonGfKitchenItems.length} items)`)
+        } else if (isCoursingOrder && hasCourse1) {
+          // No GF split — apply coursing: course-1 (appetizers, soup, salad, etc.) fires immediately,
+          // course-2 (mains) fires after the configured delay.
           const kitchenResult = await printKitchenTicket({ ...baseOpts, items: course1Items(printItems), printerIp: kitchenIp, printerProtocol: kitchenProtocol })
           if (kitchenResult.webprntFallbackUsed) { webprntFallbackUsed = true; fallbackIps.add(kitchenIp) }
           console.log(`[dashboard-orders] 🖨️  Kitchen ticket (course 1) printed for order ${orderId}`)
 
-          // Schedule course-2 (mains) for later
           const fireAt = new Date(Date.now() + courseDelayMinutes * 60_000).toISOString()
           db.run(
             `INSERT INTO pending_course_fires (merchant_id, order_id, course, fire_at, printer_ip, printer_protocol, print_language)
@@ -310,9 +382,15 @@ dashboardOrders.post(
             [merchantId, orderId, fireAt, kitchenIp, kitchenProtocol, body.printLanguage ?? 'en']
           )
           console.log(`[dashboard-orders] ⏰  Course-2 kitchen print for ${orderId} scheduled at ${fireAt}`)
-        } else if (kitchenItems(printItems).length > 0) {
-          // No coursing — print all kitchen-destined items now
-          const kitchenResult = await printKitchenTicket({ ...baseOpts, printerIp: kitchenIp, printerProtocol: kitchenProtocol })
+        } else if (allKitchenItems.length > 0) {
+          // No GF split, no coursing — single sorted ticket (sortItemsByCourse puts appetizers/soup/salad first).
+          const allAreGf = nonGfKitchenItems.length === 0 && gfKitchenItems.length > 0
+          const kitchenResult = await printKitchenTicket({
+            ...baseOpts,
+            printerIp: kitchenIp,
+            printerProtocol: kitchenProtocol,
+            showGlutenFreeBanner: allAreGf,
+          })
           if (kitchenResult.webprntFallbackUsed) { webprntFallbackUsed = true; fallbackIps.add(kitchenIp) }
           console.log(`[dashboard-orders] 🖨️  Kitchen ticket printed for order ${orderId}`)
         }
@@ -349,29 +427,11 @@ dashboardOrders.post(
       }
     })()
 
-    // Push order to Clover Flex terminal (fire-and-forget — never blocks response)
-    if (cloverClient.isEnabled()) {
-      notifyCloverPaymentInitiated()
-      const cloverMerchant = db.query<{ tax_rate: number }, [string]>(
-        `SELECT tax_rate FROM merchants WHERE id = ?`
-      ).get(merchantId)
-      cloverClient.pushOrder(
-        {
-          id: orderId,
-          merchant_id: merchantId,
-          customer_name: body.customerName.trim(),
-          order_type: orderType,
-          table_label: body.tableLabel?.trim() ?? null,
-          notes: body.notes ?? null,
-          clover_order_id: null,
-          items: enrichedItems,
-          tax_rate: cloverMerchant?.tax_rate ?? null,
-        },
-        db
-      ).catch((err: unknown) => {
-        console.error('[clover] pushOrder failed:', err instanceof Error ? err.message : err)
-      })
-    }
+    // NOTE: Clover Flex is NOT provisioned at order creation.
+    // The order is pushed to the device only when the cashier explicitly selects
+    // "Pay Clover" in the payment modal (via startCloverFullPayment → pushOrder).
+    // Eager provisioning caused a race: customers could pay on the Flex before the
+    // cashier selected a payment method, producing duplicate payment records.
 
     return c.json({ orderId, totalCents, status: initialStatus }, 201)
   }
@@ -396,8 +456,8 @@ dashboardOrders.patch(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     const body = await c.req.json<{
@@ -417,57 +477,134 @@ dashboardOrders.patch(
       reprintTicket?: boolean
     }>()
 
-    if (!Array.isArray(body.items) || body.items.length === 0) {
-      return c.json({ error: 'items array is required' }, 400)
+    // Items are optional — the Move-Table modal updates only table_label /
+    // room_label. If items are absent we skip the full item-diff / reprint
+    // path entirely and just write the metadata fields the client supplied.
+    const hasItems = Array.isArray(body.items) && body.items.length > 0
+    const hasMetadata =
+      body.customerName !== undefined ||
+      body.notes !== undefined ||
+      body.tableLabel !== undefined ||
+      body.roomLabel !== undefined
+    if (!hasItems && !hasMetadata) {
+      return c.json({ error: 'items or a metadata field (tableLabel, roomLabel, customerName, notes) is required' }, 400)
     }
 
     const order = db
-      .query<{ id: string; status: string; order_type: string; pickup_code: string | null; notes: string | null; utensils_needed: number; items: string }, [string, string]>(
-        `SELECT id, status, order_type, pickup_code, notes, utensils_needed, items FROM orders WHERE id = ? AND merchant_id = ?`
+      .query<{
+        id: string
+        status: string
+        order_type: string
+        pickup_code: string | null
+        pickup_time: string | null
+        notes: string | null
+        utensils_needed: number
+        items: string
+        discount_cents: number
+        service_charge_cents: number
+        tip_cents: number
+      }, [string, string]>(
+        `SELECT id, status, order_type, pickup_code, pickup_time, notes, utensils_needed, items,
+                COALESCE(discount_cents, 0) AS discount_cents,
+                COALESCE(service_charge_cents, 0) AS service_charge_cents,
+                COALESCE(tip_cents, 0) AS tip_cents
+         FROM orders WHERE id = ? AND merchant_id = ?`
       )
       .get(orderId, merchantId)
 
     if (!order) return c.json({ error: 'Order not found' }, 404)
 
+    // Refuse edits to finalized orders. Staff rule (confirmed 2026-04-19):
+    // paid / completed / cancelled / refunded orders are strictly read-only;
+    // late add-ons become NEW orders. Previously this endpoint silently demoted
+    // `status` back to 'received' and dropped tax from `total_cents`, tangling
+    // the ledger (incident on 268eee39).
+    const FINALIZED = new Set(['paid', 'cancelled', 'refunded', 'completed', 'picked_up'])
+    if (FINALIZED.has(order.status)) {
+      return c.json({
+        error: `Order is ${order.status} — create a new order for late add-ons instead of editing this one.`,
+      }, 409)
+    }
+
     if (isPaymentLocked(orderId)) {
       return c.json({ error: 'This order has a payment in progress and cannot be modified' }, 409)
     }
 
-    // Build old-item quantity map for diff (new items only reprint)
-    let oldItemQty: Map<string, number>
-    try {
-      const oldItems: OrderItemShape[] = JSON.parse(order.items || '[]')
-      oldItemQty = new Map(oldItems.map((i) => [i.itemId ?? i.dishId ?? '', i.quantity ?? 1]))
-    } catch {
-      oldItemQty = new Map()
+    // Fingerprint = itemId + sorted modifier names. Items with same dish but
+    // different modifiers (e.g. "Pad Kee mao" vs "Pad Kee mao + To Go") must
+    // be treated as distinct entries in the diff so modifiers are not dropped.
+    const fingerprintItem = (itemId: string, mods: Array<{ name?: string }>) =>
+      itemId + '|' + mods.map(m => m.name ?? '').sort().join(',')
+
+    // Build old-item quantity map for diff (new items only reprint).
+    // Empty map when not editing items — the reprint branch below is gated on hasItems.
+    let oldItemQty: Map<string, number> = new Map()
+    let enrichedItems: Array<{
+      itemId: string
+      dishName: string
+      quantity: number
+      priceCents: number
+      modifiers: Array<{ modifierId: string; name: string; priceCents: number }>
+      lineTotalCents: number
+      serverNotes?: string
+    }> = []
+    let subtotalCents = 0
+    let newTaxCents   = 0
+    let newTotalCents = 0
+
+    if (hasItems) {
+      try {
+        const oldItems: OrderItemShape[] = JSON.parse(order.items || '[]')
+        oldItemQty = new Map()
+        for (const i of oldItems) {
+          const key = fingerprintItem(i.itemId ?? i.dishId ?? '', i.modifiers ?? [])
+          oldItemQty.set(key, (oldItemQty.get(key) ?? 0) + (i.quantity ?? 1))
+        }
+      } catch {
+        oldItemQty = new Map()
+      }
+
+      enrichedItems = body.items!.map((item) => {
+        const mods = item.selectedModifiers ?? []
+        const modCents = mods.reduce((s, m) => s + m.priceCents, 0)
+        const lineCents = (item.priceCents + modCents) * item.quantity
+        return {
+          itemId: item.itemId,
+          dishName: item.name,
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          modifiers: mods,
+          lineTotalCents: lineCents,
+          serverNotes: item.serverNotes ?? undefined,
+        }
+      })
+
+      subtotalCents = enrichedItems.reduce((s, i) => s + i.lineTotalCents, 0)
+
+      // Recompute tax and total from the NEW subtotal + existing discount / service
+      // charge / tip. Previously the route stored `total_cents = subtotalCents`
+      // (dropping tax) and never touched `tax_cents` (leaving it stale against the
+      // new subtotal). Matches how `dashboard.js` renders the total at line 8150.
+      const merchantRow = db
+        .query<{ tax_rate: number }, [string]>(
+          `SELECT tax_rate FROM merchants WHERE id = ?`,
+        )
+        .get(merchantId)
+      const taxRate   = merchantRow?.tax_rate ?? 0
+      const taxedBase = Math.max(0, subtotalCents - order.discount_cents + order.service_charge_cents)
+      newTaxCents   = Math.round(taxedBase * taxRate)
+      newTotalCents = taxedBase + newTaxCents + order.tip_cents
     }
 
-    const enrichedItems = body.items.map((item) => {
-      const mods = item.selectedModifiers ?? []
-      const modCents = mods.reduce((s, m) => s + m.priceCents, 0)
-      const lineCents = (item.priceCents + modCents) * item.quantity
-      return {
-        itemId: item.itemId,
-        dishName: item.name,
-        quantity: item.quantity,
-        priceCents: item.priceCents,
-        modifiers: mods,
-        lineTotalCents: lineCents,
-        serverNotes: item.serverNotes ?? undefined,
-      }
-    })
+    // Build update: only touch provided optional fields. The CASE-WHEN status
+    // demotion was removed — finalized orders are already rejected with 409 above.
+    const updates: string[] = ['updated_at = datetime(\'now\')']
+    const params: (string | number | null)[] = []
 
-    const subtotalCents = enrichedItems.reduce((s, i) => s + i.lineTotalCents, 0)
-
-    // Build update: only touch provided optional fields
-    const updates: string[] = [
-      'items = ?',
-      'subtotal_cents = ?',
-      'total_cents = ?',
-      'status = CASE WHEN status IN (\'cancelled\', \'picked_up\', \'completed\', \'paid\') THEN \'received\' ELSE status END',
-      'updated_at = datetime(\'now\')',
-    ]
-    const params: unknown[] = [JSON.stringify(enrichedItems), subtotalCents, subtotalCents]
+    if (hasItems) {
+      updates.unshift('items = ?', 'subtotal_cents = ?', 'tax_cents = ?', 'total_cents = ?')
+      params.unshift(JSON.stringify(enrichedItems), subtotalCents, newTaxCents, newTotalCents)
+    }
 
     if (body.customerName !== undefined) { updates.push('customer_name = ?'); params.push(body.customerName.trim()) }
     if (body.notes !== undefined)        { updates.push('notes = ?');         params.push(body.notes.trim() || null) }
@@ -479,22 +616,31 @@ dashboardOrders.patch(
     // never interpolate user-controlled strings into this template.
     db.run(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`, params)
 
-    // Aggregate new total quantity per itemId across all cart entries.
-    // A dish may appear as separate entries (e.g. re-added via modal) rather than
-    // a single incremented entry — treat them as a combined quantity for the diff.
-    const newQtyByItemId = new Map<string, number>()
-    for (const item of enrichedItems) {
-      newQtyByItemId.set(item.itemId, (newQtyByItemId.get(item.itemId) ?? 0) + item.quantity)
+    // Item-diff and reprint only apply when items changed. Metadata-only
+    // updates (e.g. move-table) skip straight to the lock release + response.
+    if (!hasItems) {
+      releaseLock(orderId)
+      return c.json({ orderId, subtotalCents: null, totalCents: null })
     }
 
-    // Compute added/increased items for diff-based reprint (one entry per itemId)
-    const seenItemIds = new Set<string>()
+    // Aggregate new total quantity per fingerprint across all cart entries.
+    // Two entries for the same dish with different modifiers have different
+    // fingerprints and are counted independently.
+    const newQtyByFp = new Map<string, number>()
+    for (const item of enrichedItems) {
+      const fp = fingerprintItem(item.itemId, item.modifiers)
+      newQtyByFp.set(fp, (newQtyByFp.get(fp) ?? 0) + item.quantity)
+    }
+
+    // Compute added/increased items for diff-based reprint (one entry per fingerprint)
+    const seenFps = new Set<string>()
     const addedItems = enrichedItems
       .map(item => {
-        if (seenItemIds.has(item.itemId)) return null
-        seenItemIds.add(item.itemId)
-        const newTotalQty = newQtyByItemId.get(item.itemId)!
-        const oldQty = oldItemQty.get(item.itemId) ?? 0
+        const fp = fingerprintItem(item.itemId, item.modifiers)
+        if (seenFps.has(fp)) return null
+        seenFps.add(fp)
+        const newTotalQty = newQtyByFp.get(fp)!
+        const oldQty = oldItemQty.get(fp) ?? 0
         const deltaQty = newTotalQty - oldQty
         if (deltaQty <= 0) return null
         const modCents = item.modifiers.reduce((s: number, m: ParsedModifier) => s + (m.priceCents ?? m.price_cents ?? 0), 0)
@@ -518,10 +664,11 @@ dashboardOrders.patch(
               counter_printer_protocol: string | null
               receipt_style: string | null
               business_name: string
+              timezone: string | null
             }, [string]>(
               `SELECT printer_ip, counter_printer_ip,
                       kitchen_printer_protocol, counter_printer_protocol,
-                      receipt_style, business_name FROM merchants WHERE id = ?`
+                      receipt_style, business_name, timezone FROM merchants WHERE id = ?`
             )
             .get(merchantId)
 
@@ -548,13 +695,19 @@ dashboardOrders.patch(
             pickupCode: order.pickup_code,
             items: enrichedAddedItems,
             createdAt: new Date().toISOString(),
+            scheduledFor: order.pickup_time ?? null,
+            timezone: merchant?.timezone ?? null,
             receiptStyle,
           }
 
-          const kitchenResult = await printKitchenTicket({ ...baseOpts, printerIp: kitchenIp, printerProtocol: kitchenProtocol })
-          console.log(`[dashboard-orders] 🖨️  Kitchen ticket printed for ${addedItems.length} new item(s) on order ${orderId}`)
+          const hasKitchenItems = kitchenItems(enrichedAddedItems).length > 0
+          let kitchenResult = { webprntFallbackUsed: false }
+          if (hasKitchenItems) {
+            kitchenResult = await printKitchenTicket({ ...baseOpts, printerIp: kitchenIp, printerProtocol: kitchenProtocol })
+            console.log(`[dashboard-orders] 🖨️  Kitchen ticket printed for ${addedItems.length} new item(s) on order ${orderId}`)
+          }
 
-          if (counterIp === kitchenIp) await sleep(500)
+          if (hasKitchenItems && counterIp === kitchenIp) await sleep(500)
 
           const counterResult = await printCounterTicket({ ...baseOpts, printerIp: counterIp, printerProtocol: counterProtocol })
           console.log(`[dashboard-orders] 🖨️  Counter ticket printed for ${addedItems.length} new item(s) on order ${orderId}`)
@@ -596,8 +749,8 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const orderId = c.req.param('orderId')
-    const body = await c.req.json<{ employeeId?: string; employeeName?: string }>().catch(() => ({}))
+    const orderId = c.req.param('orderId')!
+    const body = await c.req.json<{ employeeId?: string; employeeName?: string }>().catch(() => ({} as { employeeId?: string; employeeName?: string }))
     const employeeId   = body.employeeId   || c.get('userId') || 'unknown'
     const employeeName = body.employeeName || 'Someone'
 
@@ -618,9 +771,9 @@ dashboardOrders.delete(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const orderId = c.req.param('orderId')
+    const orderId = c.req.param('orderId')!
     // Body is optional for DELETE — parse leniently
-    const body = await c.req.json<{ employeeId?: string }>().catch(() => ({}))
+    const body = await c.req.json<{ employeeId?: string }>().catch(() => ({} as { employeeId?: string }))
     const employeeId = body.employeeId || c.get('userId') || 'unknown'
 
     releaseLock(orderId, employeeId)
@@ -637,8 +790,8 @@ dashboardOrders.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     const order = db
@@ -666,8 +819,8 @@ dashboardOrders.patch(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
 
     const VALID_STATUSES = ['submitted', 'confirmed', 'preparing', 'ready', 'picked_up', 'cancelled', 'paid'] as const
     type ValidStatus = typeof VALID_STATUSES[number]
@@ -712,10 +865,11 @@ dashboardOrders.patch(
         items: string; subtotal_cents: number; tax_cents: number
         table_label: string | null; room_label: string | null
         notes: string | null; created_at: string; pickup_time: string | null
+        pickup_code: string | null; utensils_needed: number
       }, [string, string]>(
         `SELECT id, status, pos_order_id, customer_name, order_type,
                 items, subtotal_cents, tax_cents, table_label, room_label,
-                notes, created_at, pickup_time
+                notes, created_at, pickup_time, pickup_code, utensils_needed
          FROM orders WHERE id = ? AND merchant_id = ?`
       )
       .get(orderId, merchantId)
@@ -793,10 +947,11 @@ dashboardOrders.patch(
               counter_printer_protocol: string | null
               receipt_style: string | null
               business_name: string
+              timezone: string | null
             }, [string]>(
               `SELECT printer_ip, counter_printer_ip,
                       kitchen_printer_protocol, counter_printer_protocol,
-                      receipt_style, business_name FROM merchants WHERE id = ?`
+                      receipt_style, business_name, timezone FROM merchants WHERE id = ?`
             )
             .get(merchantId)
 
@@ -808,7 +963,7 @@ dashboardOrders.patch(
           const counterProtocol = (merchant?.counter_printer_protocol ?? 'star-line') as 'star-line' | 'star-line-tsp100' | 'webprnt'
           const receiptStyle = (merchant?.receipt_style ?? 'classic') as 'classic' | 'html'
 
-          let rawItems: Array<{ name: string; qty: number; priceCents: number; modifiers?: unknown[]; totalCents?: number; categoryId?: string }>
+          let rawItems: OrderItemShape[]
           try { rawItems = JSON.parse(order.items) } catch {
             console.error('[dashboard-orders] Malformed items JSON for order', order.id)
             return c.json({ error: 'Order items data is corrupt' }, 500)
@@ -825,9 +980,12 @@ dashboardOrders.patch(
             tableLabel: order.table_label ?? null,
             roomLabel: order.room_label ?? null,
             notes: order.notes ?? null,
-            utensilsNeeded: false,
+            utensilsNeeded: order.utensils_needed === 1,
+            pickupCode: order.pickup_code ?? null,
             items: printItems,
             createdAt: order.created_at,
+            scheduledFor: order.pickup_time ?? null,
+            timezone: merchant?.timezone ?? null,
             receiptStyle,
           }
 
@@ -917,17 +1075,18 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     const order = db
       .query<{
         id: string; customer_name: string | null; order_type: string
         items: string; table_label: string | null; room_label: string | null
-        notes: string | null; utensils_needed: number; created_at: string; pickup_code: string | null
+        notes: string | null; utensils_needed: number; created_at: string
+        pickup_code: string | null; pickup_time: string | null
       }, [string, string]>(
-        `SELECT id, customer_name, order_type, items, table_label, room_label, notes, utensils_needed, created_at, pickup_code
+        `SELECT id, customer_name, order_type, items, table_label, room_label, notes, utensils_needed, created_at, pickup_code, pickup_time
          FROM orders WHERE id = ? AND merchant_id = ?`
       )
       .get(orderId, merchantId)
@@ -942,8 +1101,9 @@ dashboardOrders.post(
         counter_printer_protocol: string | null
         receipt_style: string | null
         business_name: string
+        timezone: string | null
       }, [string]>(
-        `SELECT printer_ip, counter_printer_ip, kitchen_printer_protocol, counter_printer_protocol, receipt_style, business_name FROM merchants WHERE id = ?`
+        `SELECT printer_ip, counter_printer_ip, kitchen_printer_protocol, counter_printer_protocol, receipt_style, business_name, timezone FROM merchants WHERE id = ?`
       )
       .get(merchantId)
 
@@ -973,13 +1133,19 @@ dashboardOrders.post(
       pickupCode: order.pickup_code,
       items: printItems,
       createdAt: order.created_at,
+      scheduledFor: order.pickup_time ?? null,
+      timezone: merchant?.timezone ?? null,
       receiptStyle,
     }
 
     try {
-      const kitchenResult = await printKitchenTicket({ ...baseOpts, printerIp: kitchenIp, printerProtocol: kitchenProtocol })
-      console.log(`[dashboard-orders] 🖨️  Kitchen ticket reprinted for order ${orderId}`)
-      if (counterIp === kitchenIp) await sleep(500)
+      const hasKitchenItems = kitchenItems(printItems).length > 0
+      let kitchenResult = { webprntFallbackUsed: false }
+      if (hasKitchenItems) {
+        kitchenResult = await printKitchenTicket({ ...baseOpts, printerIp: kitchenIp, printerProtocol: kitchenProtocol })
+        console.log(`[dashboard-orders] 🖨️  Kitchen ticket reprinted for order ${orderId}`)
+      }
+      if (hasKitchenItems && counterIp === kitchenIp) await sleep(500)
       const counterResult = await printCounterTicket({ ...baseOpts, printerIp: counterIp, printerProtocol: counterProtocol })
       console.log(`[dashboard-orders] 🖨️  Counter ticket reprinted for order ${orderId}`)
       const fallbackIps = new Set<string>()
@@ -1009,8 +1175,8 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     const order = db
@@ -1021,11 +1187,13 @@ dashboardOrders.post(
         notes: string | null; created_at: string
         discount_cents: number; discount_label: string | null
         service_charge_cents: number; service_charge_label: string | null
+        feedback_token: string | null
       }, [string, string]>(
         `SELECT id, customer_name, order_type, items, subtotal_cents, tax_cents,
                 table_label, room_label, notes, created_at,
                 COALESCE(discount_cents, 0) AS discount_cents, discount_label,
-                COALESCE(service_charge_cents, 0) AS service_charge_cents, service_charge_label
+                COALESCE(service_charge_cents, 0) AS service_charge_cents, service_charge_label,
+                feedback_token
          FROM orders WHERE id = ? AND merchant_id = ?`
       )
       .get(orderId, merchantId)
@@ -1073,11 +1241,11 @@ dashboardOrders.post(
       console.error('[dashboard-orders] Malformed items JSON for order', orderId, '(print-bill)')
       return c.json({ error: 'Order items data is corrupt' }, 500)
     }
-    const printItems = rawItems.map((item: ParsedOrderItem) => ({
+    const printItems = rawItems.map((item) => ({
       quantity:       item.quantity      ?? 1,
-      dishName:       item.dishName      ?? item.name ?? '',
+      dishName:       (item as ParsedOrderItem).dishName ?? item.name ?? '',
       priceCents:     item.priceCents    ?? item.price_cents ?? 0,
-      modifiers:      (item.modifiers ?? []).map((m: ParsedModifier) => ({
+      modifiers:      (item.modifiers ?? []).map((m) => ({
         name:       m.name ?? '',
         priceCents: m.priceCents ?? m.price_cents ?? 0,
       })),
@@ -1126,6 +1294,9 @@ dashboardOrders.post(
         phoneNumber: merchant?.phone_number,
         website: merchant?.website,
         tipPercentages,
+        feedbackUrl: order.feedback_token
+          ? `${process.env.PUBLIC_URL ?? `https://${c.req.header('host')}`}/?fb=${order.feedback_token}`
+          : undefined,
       })
       console.log(`[dashboard-orders] 🧾  Customer bill printed for order ${orderId}`)
       return c.json({ ok: true, ...(result.webprntFallbackUsed ? { webprntFallbackUsed: true } : {}) })
@@ -1146,8 +1317,8 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId = c.req.param('orderId')!
     const db = getDatabase()
 
     const body = await c.req.json<{ paidAmountCents?: number }>()
@@ -1216,11 +1387,11 @@ dashboardOrders.post(
       console.error('[dashboard-orders] Malformed items JSON for order', orderId, '(print-receipt)')
       return c.json({ error: 'Order items data is corrupt' }, 500)
     }
-    const printItems = rawItems.map((item: ParsedOrderItem) => ({
+    const printItems = rawItems.map((item) => ({
       quantity:       item.quantity      ?? 1,
-      dishName:       item.dishName      ?? item.name ?? '',
+      dishName:       (item as ParsedOrderItem).dishName ?? item.name ?? '',
       priceCents:     item.priceCents    ?? item.price_cents ?? 0,
-      modifiers:      (item.modifiers ?? []).map((m: ParsedModifier) => ({
+      modifiers:      (item.modifiers ?? []).map((m) => ({
         name:       m.name ?? '',
         priceCents: m.priceCents ?? m.price_cents ?? 0,
       })),
@@ -1267,6 +1438,197 @@ dashboardOrders.post(
 )
 
 // ---------------------------------------------------------------------------
+// GET /api/merchants/:id/campaigns/active
+//
+// Dashboard-internal: returns ALL currently-active campaigns regardless of
+// channel. The public `/api/campaigns` endpoint filters to channel='ambient'
+// for the customer PWA's auto-apply list, but dashboard staff need to see
+// QR / printed / per-customer campaigns too (e.g. for the print-coupon flow).
+//
+// "Active" = status='active' AND start_at <= now AND end_at >= now.
+// ---------------------------------------------------------------------------
+dashboardOrders.get(
+  '/api/merchants/:id/campaigns/active',
+  authenticate,
+  requireRole('owner', 'manager', 'staff'),
+  (c: AuthContext) => {
+    const db  = getDatabase()
+    const now = Date.now()
+    const rows = db.query<{
+      id: number; slug: string; name: string; status: string; channel: string | null
+      start_at: number; end_at: number
+      discount_type: string; discount_value: number; min_order_cents: number
+      max_uses_per_customer: number; max_uses_global: number | null
+      fulfillment_restriction: string | null; schedule_json: string | null
+      campaign_type: string
+      target_json: string | null; trigger_json: string | null; reward_json: string | null
+    }, [number, number]>(
+      `SELECT id, slug, name, status, channel, start_at, end_at,
+              discount_type, discount_value, min_order_cents,
+              max_uses_per_customer, max_uses_global,
+              fulfillment_restriction, schedule_json, campaign_type,
+              target_json, trigger_json, reward_json
+       FROM campaigns
+       WHERE status = 'active' AND start_at <= ? AND end_at >= ?
+       ORDER BY start_at ASC`,
+    ).all(now, now)
+
+    return c.json({
+      campaigns: rows.map((r) => {
+        // Build label mirroring the customer-facing buildCampaignPayload format
+        let label = ''
+        if (r.campaign_type === 'bogo' && r.trigger_json && r.reward_json) {
+          try {
+            const t = JSON.parse(r.trigger_json) as { item_name?: string; category?: string; quantity?: number }
+            const w = JSON.parse(r.reward_json) as { item_name?: string; type?: string; discount_type?: string; discount_value?: number }
+            const tQty = t.quantity ?? 1
+            const tName = t.item_name ?? t.category ?? 'items'
+            const rName = w.item_name ?? 'item'
+            if (w.type === 'free_item') label = `Order ${tQty}+ ${tName} — free ${rName}`
+            else if (w.discount_type === 'percent') label = `Order ${tQty}+ ${tName} — ${w.discount_value}% off ${rName}`
+            else label = `Order ${tQty}+ ${tName} — $${((w.discount_value ?? 0) / 100).toFixed(2)} off ${rName}`
+          } catch { label = r.name }
+        } else {
+          const v = r.discount_value
+          label = r.discount_type === 'percent' ? `${v}% off` : `$${(v / 100).toFixed(2)} off`
+        }
+        return {
+          slug:    r.slug,
+          name:    r.name,
+          channel: r.channel,
+          startAt: r.start_at,
+          endAt:   r.end_at,
+          fulfillmentRestriction: r.fulfillment_restriction,
+          schedule: r.schedule_json ? JSON.parse(r.schedule_json) : null,
+          offer: {
+            label,
+            discount_type:           r.discount_type,
+            discount_value:          r.discount_value,
+            min_order_cents:         r.min_order_cents,
+            fulfillment_restriction: r.fulfillment_restriction,
+          },
+        }
+      }),
+    })
+  },
+)
+
+// ---------------------------------------------------------------------------
+// POST /api/merchants/:id/print-coupon
+// Prints a marketing coupon ticket to the counter printer.
+// Body: { campaignSlug: string }
+// ---------------------------------------------------------------------------
+dashboardOrders.post(
+  '/api/merchants/:id/print-coupon',
+  authenticate,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const db = getDatabase()
+
+    const body = await c.req.json<{ campaignSlug?: string }>()
+    const campaignSlug = body.campaignSlug?.trim().toUpperCase()
+    if (!campaignSlug) return c.json({ error: 'campaignSlug is required' }, 400)
+
+    // Look up active campaign
+    const campaign = db.query<{
+      slug: string; name: string; status: string; start_at: number; end_at: number
+      discount_type: string; discount_value: number
+      campaign_type: string; target_json: string | null; trigger_json: string | null; reward_json: string | null
+      fulfillment_restriction: string | null; schedule_json: string | null
+    }, [string]>(
+      `SELECT slug, name, status, start_at, end_at,
+              discount_type, discount_value, campaign_type,
+              target_json, trigger_json, reward_json,
+              fulfillment_restriction, schedule_json
+       FROM campaigns WHERE slug = ?`
+    ).get(campaignSlug)
+
+    if (!campaign) return c.json({ error: 'campaign_not_found' }, 404)
+    if (campaign.status !== 'active') return c.json({ error: 'campaign_inactive' }, 422)
+    const now = Date.now()
+    if (now < campaign.start_at) return c.json({ error: 'campaign_not_started' }, 422)
+    if (now > campaign.end_at)   return c.json({ error: 'campaign_ended' }, 422)
+
+    // Build discount label
+    type CampaignRow = NonNullable<typeof campaign>
+    function buildLabel(row: CampaignRow): string {
+      if (row.campaign_type === 'bogo' && row.trigger_json && row.reward_json) {
+        try {
+          const trigger = JSON.parse(row.trigger_json)
+          const reward  = JSON.parse(row.reward_json)
+          const tQty  = trigger.quantity ?? 1
+          const tName = trigger.item_name ?? trigger.category ?? 'items'
+          const rName = reward.item_name ?? 'item'
+          if (reward.type === 'free_item') return `Order ${tQty}+ ${tName} — free ${rName}`
+          const rDisc = reward.discount_type === 'percent'
+            ? `${reward.discount_value}% off`
+            : `$${(reward.discount_value / 100).toFixed(2)} off`
+          return `Order ${tQty}+ ${tName} — ${rDisc} ${rName}`
+        } catch { return row.name }
+      }
+      if (row.target_json) {
+        try {
+          const target = JSON.parse(row.target_json)
+          const amt = row.discount_type === 'percent'
+            ? `${row.discount_value}%`
+            : `$${(row.discount_value / 100).toFixed(2)}`
+          return `${amt} off ${target.item_name ?? 'selected item'}`
+        } catch { /* fall through */ }
+      }
+      return row.discount_type === 'percent'
+        ? `${row.discount_value}% off your order`
+        : `$${(row.discount_value / 100).toFixed(2)} off your order`
+    }
+
+    const merchant = db.query<{
+      printer_ip: string | null
+      counter_printer_ip: string | null
+      counter_printer_protocol: string | null
+      kitchen_printer_protocol: string | null
+      business_name: string
+      address: string | null
+      phone_number: string | null
+      website: string | null
+    }, [string]>(
+      `SELECT printer_ip, counter_printer_ip, counter_printer_protocol, kitchen_printer_protocol,
+              business_name, address, phone_number, website
+       FROM merchants WHERE id = ?`
+    ).get(merchantId)
+
+    // Coupon prints to counter printer (QR code requires raster — any protocol works)
+    const counterIp = merchant?.counter_printer_ip || merchant?.printer_ip || process.env.PRINTER_IP
+    if (!counterIp) return c.json({ error: 'No printer configured' }, 400)
+
+    const counterProtocol = (
+      merchant?.counter_printer_protocol ||
+      merchant?.kitchen_printer_protocol ||
+      'star-graphic'
+    ) as 'star-line' | 'star-line-tsp100' | 'webprnt' | 'star-graphic' | 'generic-escpos'
+
+    try {
+      await printCouponTicket({
+        printerIp:      counterIp,
+        printerProtocol: counterProtocol,
+        merchantName:   merchant?.business_name ?? 'Demo Thai Cuisine',
+        address:        merchant?.address,
+        phoneNumber:    merchant?.phone_number,
+        website:        merchant?.website,
+        campaignSlug:          campaign.slug,
+        campaignName:          campaign.name,
+        discountLabel:         buildLabel(campaign),
+        fulfillmentRestriction: campaign.fulfillment_restriction,
+        scheduleJson:          campaign.schedule_json,
+      })
+      console.log(`[dashboard-orders] 🎟  Coupon printed for campaign ${campaign.slug}`)
+      return c.json({ ok: true })
+    } catch (err) {
+      return serverError(c, '[dashboard-orders] print-coupon', err, 'Print failed — check printer connection')
+    }
+  }
+)
+
+// ---------------------------------------------------------------------------
 // GET /api/merchants/:id/orders
 // Returns orders from local DB within an optional date range.
 // Default: today (midnight → now in merchant local time)
@@ -1280,7 +1642,7 @@ dashboardOrders.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     // Parse date range — default to today
@@ -1342,7 +1704,8 @@ dashboardOrders.get(
         delivery_instructions: string | null
         clover_order_id: string | null
         clover_payment_id: string | null
-      }, [string, string, string, string, number]>(
+        processor_fee_cents: number | null
+      }, [string, string, string, string, string, number]>(
         `SELECT
            o.id, o.pos_order_id, o.customer_name, o.customer_phone, o.customer_email,
            o.items, o.subtotal_cents, o.tax_cents, o.total_cents, o.status, o.order_type,
@@ -1359,7 +1722,8 @@ dashboardOrders.get(
            COALESCE(o.service_charge_cents, 0) AS service_charge_cents,
            o.service_charge_label,
            o.delivery_address, o.delivery_instructions,
-           o.clover_order_id, o.clover_payment_id
+           o.clover_order_id, o.clover_payment_id,
+           p.processor_fee_cents
          FROM orders o
          LEFT JOIN (
            SELECT order_id,
@@ -1368,6 +1732,12 @@ dashboardOrders.get(
            FROM refunds WHERE merchant_id = ?
            GROUP BY order_id
          ) r ON r.order_id = o.id
+         LEFT JOIN (
+           SELECT order_id, SUM(processor_fee_cents) AS processor_fee_cents
+           FROM payments
+           WHERE merchant_id = ? AND processor_fee_cents IS NOT NULL
+           GROUP BY order_id
+         ) p ON p.order_id = o.id
          WHERE o.merchant_id = ?
            AND o.created_at >= ?
            AND o.created_at <= ?
@@ -1375,7 +1745,7 @@ dashboardOrders.get(
          ORDER BY o.created_at DESC
          LIMIT ?`
       )
-      .all(merchantId, merchantId, fromStr, toStr, limit)
+      .all(merchantId, merchantId, merchantId, fromStr, toStr, limit)
 
     return c.json({
       orders: rows.map((o) => ({
@@ -1414,6 +1784,7 @@ dashboardOrders.get(
         deliveryInstructions: o.delivery_instructions ?? null,
         cloverOrderId: o.clover_order_id ?? null,
         cloverPaymentId: o.clover_payment_id ?? null,
+        processorFeeCents: o.processor_fee_cents,
       })),
       range: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
     })
@@ -1430,7 +1801,7 @@ dashboardOrders.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const rows = db
@@ -1479,7 +1850,7 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     const apiKey = await getAPIKey(merchantId, 'pos', 'clover')
     if (!apiKey) {
@@ -1491,7 +1862,7 @@ dashboardOrders.post(
       return c.json({ error: 'Clover Merchant ID not configured' }, 400)
     }
 
-    const body = await c.req.json<{ from?: number; to?: number }>().catch(() => ({}))
+    const body = await c.req.json<{ from?: number; to?: number }>().catch(() => ({} as { from?: number; to?: number }))
 
     const nowMs = Date.now()
     const todayMidnightMs = new Date(new Date().toDateString()).getTime()
@@ -1578,8 +1949,8 @@ dashboardOrders.patch(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
     const db = getDatabase()
 
     const body = await c.req.json<{ discountCents: number; discountLabel?: string | null }>()
@@ -1644,8 +2015,8 @@ dashboardOrders.patch(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
     const db = getDatabase()
 
     const body = await c.req.json<{ serviceChargeCents: number; serviceChargeLabel?: string | null }>()
@@ -1716,8 +2087,8 @@ dashboardOrders.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
     const db = getDatabase()
 
     if (!cloverClient.isEnabled()) {
@@ -1767,6 +2138,142 @@ dashboardOrders.post(
       console.error('[clover] manual pushOrder failed:', err instanceof Error ? err.message : err)
       return c.json({ error: err instanceof Error ? err.message : 'Push to Clover failed' }, 502)
     }
+  }
+)
+
+// ---------------------------------------------------------------------------
+// POST /api/merchants/:id/orders/manual
+//
+// Creates a manual catering order from dollar-level amounts (no item breakdown).
+// Optionally reconciles with an existing Finix payment:
+//   - If finixTransferId matches a stub order (items=[], customer='Catering')
+//     created by the webhook → updates that order in place.
+//   - If finixTransferId has no existing match → creates order + payment record.
+//   - If finixTransferId is already linked to a non-stub order → 409 conflict.
+// ---------------------------------------------------------------------------
+dashboardOrders.post(
+  '/api/merchants/:id/orders/manual',
+  authenticate,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const body = await c.req.json<{
+      customerName?: string
+      customerEmail?: string
+      notes?: string
+      subtotalCents: number
+      discountCents?: number
+      tipCents?: number
+      finixTransferId?: string
+    }>()
+
+    const subtotalCents = Math.round(body.subtotalCents ?? 0)
+    const discountCents = Math.round(body.discountCents ?? 0)
+    const tipCents      = Math.round(body.tipCents ?? 0)
+
+    if (!Number.isInteger(subtotalCents) || subtotalCents <= 0)
+      return c.json({ error: 'subtotalCents must be a positive integer' }, 400)
+    if (discountCents < 0 || discountCents >= subtotalCents)
+      return c.json({ error: 'discountCents must be ≥ 0 and less than subtotalCents' }, 400)
+    if (tipCents < 0)
+      return c.json({ error: 'tipCents must be non-negative' }, 400)
+
+    const db = getDatabase()
+
+    const merchantRow = db.query<{ tax_rate: number }, [string]>(
+      'SELECT tax_rate FROM merchants WHERE id = ?'
+    ).get(merchantId)
+    const taxRate         = merchantRow?.tax_rate ?? 0
+    const taxCents        = Math.round((subtotalCents - discountCents) * taxRate)
+    const totalCents      = (subtotalCents - discountCents) + taxCents + tipCents
+    const customerName    = body.customerName?.trim() || 'Catering Order'
+    const notes           = body.notes?.trim() ?? null
+    const finixTransferId = body.finixTransferId?.trim() || null
+
+    // ── Reconciliation path ───────────────────────────────────────────────
+    if (finixTransferId) {
+      const existingPay = db.query<{ id: string; order_id: string | null }, [string, string]>(
+        'SELECT id, order_id FROM payments WHERE merchant_id = ? AND finix_transfer_id = ?'
+      ).get(merchantId, finixTransferId)
+
+      if (existingPay?.order_id) {
+        const stub = db.query<{ id: string; customer_name: string; items: string }, [string]>(
+          'SELECT id, customer_name, items FROM orders WHERE id = ?'
+        ).get(existingPay.order_id)
+
+        if (stub) {
+          let items: unknown[]
+          try { items = JSON.parse(stub.items) } catch { items = [] }
+          if (!Array.isArray(items) || items.length > 0 || stub.customer_name !== 'Catering')
+            return c.json({ error: 'already_reconciled', orderId: stub.id }, 409)
+
+          db.run(
+            `UPDATE orders SET
+               customer_name = ?, customer_email = ?, notes = ?,
+               subtotal_cents = ?, tax_cents = ?, total_cents = ?,
+               discount_cents = ?, tip_cents = ?, paid_amount_cents = ?,
+               payment_transfer_id = ?, updated_at = datetime('now')
+             WHERE id = ?`,
+            [
+              customerName,
+              body.customerEmail?.trim() ?? null,
+              notes,
+              subtotalCents,
+              taxCents,
+              totalCents,
+              discountCents,
+              tipCents,
+              totalCents,
+              finixTransferId,
+              stub.id,
+            ]
+          )
+          broadcastToMerchant(merchantId, 'order_updated', { orderId: stub.id })
+          return c.json({ ok: true, orderId: stub.id, reconciled: true })
+        }
+      }
+    }
+
+    // ── Fresh order path ──────────────────────────────────────────────────
+    const orderId = generateId('ord')
+    db.run(
+      `INSERT INTO orders (
+         id, merchant_id, customer_name, customer_email,
+         items, subtotal_cents, tax_cents, total_cents,
+         discount_cents, tip_cents, paid_amount_cents,
+         status, order_type, source, notes,
+         payment_method, payment_transfer_id,
+         created_at, updated_at
+       ) VALUES (?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, 'paid', 'catering', 'manual', ?,
+                 'card', ?, datetime('now'), datetime('now'))`,
+      [
+        orderId,
+        merchantId,
+        customerName,
+        body.customerEmail?.trim() ?? null,
+        subtotalCents,
+        taxCents,
+        totalCents,
+        discountCents,
+        tipCents,
+        totalCents,
+        notes,
+        finixTransferId,
+      ]
+    )
+
+    if (finixTransferId) {
+      const paymentId = generateId('pay')
+      db.run(
+        `INSERT INTO payments (id, merchant_id, order_id, payment_type, amount_cents,
+           subtotal_cents, tax_cents, tip_cents, processor, finix_transfer_id, created_at)
+         VALUES (?, ?, ?, 'card', ?, ?, ?, ?, 'finix', ?, datetime('now'))`,
+        [paymentId, merchantId, orderId, totalCents, subtotalCents, taxCents, tipCents, finixTransferId]
+      )
+    }
+
+    broadcastToMerchant(merchantId, 'order_created', { orderId })
+    return c.json({ ok: true, orderId, reconciled: false }, 201)
   }
 )
 

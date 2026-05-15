@@ -1,0 +1,25 @@
+﻿[Unit]
+Description=OCR receipt service (Mistral OCR -> JSON)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/invoice-ocr
+EnvironmentFile=/etc/ocr-api.env
+ExecStart=/home/pi/invoice-ocr/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Modest hardening — keep /usr, /boot, /etc read-only; isolate /tmp.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

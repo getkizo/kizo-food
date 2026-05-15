@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SMTP transport factory
  *
  * Maps a merchant-configured provider name to explicit host/port/secure

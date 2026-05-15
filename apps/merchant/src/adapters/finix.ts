@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Finix payment adapter
  *
  * Two payment flows:
@@ -211,10 +211,11 @@ async function parseFinixResponse(
       ? errors[0] as Record<string, unknown>
       : null
 
-    // 422 duplicate idempotency key — the original transfer is in a terminal
-    // FAILED state (device cancel, bad read, technical error, etc.).
-    // Finix won't reuse a failed idempotency key; throw a typed error so the
-    // caller can retry with a fresh key regardless of failure_code.
+    // 422 duplicate idempotency key — a transfer with this key already exists.
+    // The existing transfer may be FAILED (device cancel, bad read) OR SUCCEEDED
+    // (connectivity loss after the customer tapped but before our response arrived).
+    // Surface the existing transfer ID so the caller can fetch its actual state
+    // before deciding whether to decline or honour the charge.
     const failureCode       = firstErr?.failure_code as string | undefined
     const existingTransfer  = firstErr?.transfer     as string | undefined
     if (response.status === 422 && existingTransfer) {
@@ -514,6 +515,129 @@ export async function listTransfers(
   }
 
   return results
+}
+
+/**
+ * Finds a transfer by its idempotency_id (the key we sent on createTerminalSale).
+ *
+ * Used by the orphan recovery sweep to resolve "verification pending" rows where
+ * createTerminalSale's HTTP call timed out before we received the transfer ID.
+ * Finix stores every successful transfer keyed on the idempotency_id passed in
+ * the body — so we can look up the authoritative result even when our original
+ * request never returned a response.
+ *
+ * Returns null when no transfer exists for the given key (meaning Finix never
+ * received our request — safe to decline locally without risk of double-charge).
+ *
+ * @param creds         - Finix credentials
+ * @param idempotencyId - The key used on the original createTerminalSale call
+ * @returns             - The resolved transfer, or null when no match
+ */
+export async function findTransferByIdempotencyId(
+  creds: FinixCredentials,
+  idempotencyId: string,
+): Promise<{
+  id:             string
+  state:          string
+  amount:         number
+  tipAmountCents: number
+  cardBrand:      string | null
+  cardLastFour:   string | null
+  approvalCode:   string | null
+  entryMode:      string | null
+  failureCode:    string | null
+  failureMessage: string | null
+} | null> {
+  const t0 = Date.now()
+  const params = new URLSearchParams({
+    idempotency_id: idempotencyId,
+    merchant_id:    creds.merchantId,
+    limit:          '1',
+  })
+  const data = await finixGet(creds, `/transfers?${params.toString()}`, FINIX_VERSION)
+
+  const embedded  = data._embedded as Record<string, unknown> | undefined
+  const transfers = (embedded?.transfers ?? []) as Array<Record<string, unknown>>
+  if (transfers.length === 0) {
+    console.log(JSON.stringify({ ts: new Date().toISOString(), label: '[finix-api]', method: 'GET', path: '/transfers?idempotency_id=…', durationMs: Date.now() - t0, match: false, idempotencyId }))
+    return null
+  }
+
+  const t   = transfers[0]
+  const cpd = t.card_present_details as Record<string, unknown> | undefined
+  const ab  = t.amount_breakdown as Record<string, unknown> | undefined
+  const result = {
+    id:             t.id as string,
+    state:          (t.state as string) ?? 'UNKNOWN',
+    amount:         (t.amount as number) ?? 0,
+    tipAmountCents: (ab?.tip_amount as number | undefined) ?? 0,
+    cardBrand:      (cpd?.brand as string | undefined) ?? null,
+    cardLastFour:   (cpd?.masked_account_number as string | undefined)?.slice(-4) ?? null,
+    approvalCode:   (cpd?.approval_code as string | undefined) ?? null,
+    entryMode:      (cpd?.entry_mode as string | undefined) ?? null,
+    failureCode:    (t.failure_code as string | undefined) ?? null,
+    failureMessage: (t.failure_message as string | undefined) ?? null,
+  }
+  console.log(JSON.stringify({ ts: new Date().toISOString(), label: '[finix-api]', method: 'GET', path: '/transfers?idempotency_id=…', durationMs: Date.now() - t0, match: true, transferId: result.id, state: result.state, idempotencyId }))
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Fees (processor markup, interchange, assessments) linked to transfers
+// ---------------------------------------------------------------------------
+
+/**
+ * Lists Fee records linked to a single Transfer and returns the total fee in
+ * cents. One transfer typically has a handful of fee records (interchange,
+ * assessment, processor markup, report-line) which arrive after settlement
+ * (~24h+).
+ *
+ * Returns:
+ *   - { totalCents: 0, settled: false } when the response has no fees yet
+ *     (settlement hasn't populated them yet — caller should retry later)
+ *   - { totalCents: N, settled: true } when at least one fee record exists
+ *
+ * Finix returns `Fee.amount` as either an integer (whole cents) or a double
+ * (fractional cents — sub-cent precision for basis-point calculations). The
+ * docs phrasing "fractional amounts (e.g., 2.393)" is ambiguous about units,
+ * but real-world responses on card-present transactions show basis-point
+ * fees like 0.154 — i.e. 0.154 cents (~14bps × $1.10), not 0.154 dollars.
+ * Prior versions of this code multiplied fractional amounts by 100, producing
+ * 100x over-counts on every fee except the integer-cent "fixed" fees.
+ */
+export async function listFeesByTransfer(
+  creds: FinixCredentials,
+  transferId: string,
+): Promise<{ totalCents: number; settled: boolean; count: number }> {
+  let path: string | null = `/fees?linked_to=${encodeURIComponent(transferId)}&limit=100`
+  let totalCents = 0
+  let count = 0
+
+  while (path) {
+    const data = await finixGet(creds, path)
+    const embedded = data._embedded as Record<string, unknown> | undefined
+    const fees = (embedded?.fees ?? []) as Array<Record<string, unknown>>
+
+    for (const fee of fees) {
+      const raw = fee.amount as number | undefined
+      if (typeof raw !== 'number') continue
+      // Both integer and fractional amounts are already in cents; round to a
+      // whole cent. Integers pass through unchanged.
+      totalCents += Math.round(raw)
+      count++
+    }
+
+    const links    = data._links as Record<string, unknown> | undefined
+    const nextHref = (links?.next as Record<string, unknown> | undefined)?.href as string | undefined
+    if (nextHref) {
+      const u = new URL(nextHref)
+      path = u.pathname + u.search
+    } else {
+      path = null
+    }
+  }
+
+  return { totalCents, settled: count > 0, count }
 }
 
 // ---------------------------------------------------------------------------

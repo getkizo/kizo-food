@@ -1,4 +1,4 @@
-/**
+﻿/**
  * POS Adapter Registry
  * Factory pattern for creating POS adapters based on type
  */

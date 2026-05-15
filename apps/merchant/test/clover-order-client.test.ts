@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CloverOrderClient unit tests
  *
  * All Clover HTTP calls are mocked via global `fetch` replacement so no real

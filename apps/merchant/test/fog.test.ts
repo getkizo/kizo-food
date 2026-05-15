@@ -1,4 +1,4 @@
-/**
+﻿/**
  * F.O.G. route tests
  *
  * Focus: XSS regression for the public /fog-report HTML endpoint.

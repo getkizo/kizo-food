@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Reservations route tests
  * Tests public config/slots/booking endpoints and authenticated management endpoints.
  */
@@ -335,6 +335,85 @@ describe('Reservations — patch', () => {
       }
     ))
     expect(res.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Reservation booking constraints
+// ---------------------------------------------------------------------------
+
+describe('Reservations — booking constraints', () => {
+  test('party size >= max_party_size returns 422 with pleaseCall flag', async () => {
+    // reservation_max_party_size = 10 (set in beforeAll); condition is ps >= max
+    const res = await app.fetch(new Request(
+      'http://localhost:3000/api/store/reservations',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName:  'Large Party',
+          customerPhone: '555-1234',
+          partySize:     10,
+          date:          '2099-06-20',
+          time:          '19:00',
+        }),
+      }
+    ))
+    expect(res.status).toBe(422)
+    const body = await res.json() as any
+    expect(body.pleaseCall).toBe(true)
+  })
+
+  test('date beyond advance_days returns 400', async () => {
+    // reservation_advance_days = 14; use a date 100 days from now
+    const far = new Date()
+    far.setDate(far.getDate() + 100)
+    const dateStr = far.toISOString().slice(0, 10)
+
+    const res = await app.fetch(new Request(
+      'http://localhost:3000/api/store/reservations',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName:  'Future Booker',
+          customerPhone: '555-1234',
+          partySize:     2,
+          date:          dateStr,
+          time:          '19:00',
+        }),
+      }
+    ))
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toMatch(/advance/)
+  })
+
+  test('reservation_busy_until in the future returns 503', async () => {
+    const db = getDatabase()
+    const future = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() // 2 hours from now
+    db.run(`UPDATE merchants SET reservation_busy_until = ? WHERE id = ?`, [future, merchantId])
+
+    try {
+      const res = await app.fetch(new Request(
+        'http://localhost:3000/api/store/reservations',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customerName: 'Walk-in Caller',
+            partySize:    2,
+            date:         '2099-07-01',
+            time:         '19:00',
+          }),
+        }
+      ))
+      expect(res.status).toBe(503)
+      const body = await res.json() as any
+      expect(body.busyMode).toBe(true)
+    } finally {
+      db.run(`UPDATE merchants SET reservation_busy_until = NULL WHERE id = ?`, [merchantId])
+    }
   })
 })
 

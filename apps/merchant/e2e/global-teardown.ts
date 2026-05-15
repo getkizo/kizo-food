@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Playwright globalTeardown — removes the test DB and cache after all specs finish.
  */
 

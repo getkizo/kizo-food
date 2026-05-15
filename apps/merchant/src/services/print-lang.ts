@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared translation strings for all receipt printer modules.
  *
  * This is the single source of truth for printable UI strings.

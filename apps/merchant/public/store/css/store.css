@@ -1,4 +1,4 @@
-/* ============================================================
+﻿/* ============================================================
    Kizo Customer Store — Mobile-first stylesheet  v21
    ============================================================ */
 
@@ -220,6 +220,100 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   color: #fff;
 }
 
+/* ── Offer banner ─────────────────────────────────────────── */
+.offer-banner-container {
+  background: #f0fdf4;
+  border-bottom: 1px solid #bbf7d0;
+  font-size: .875rem;
+  color: #166534;
+}
+.offer-banner-container[hidden] { display: none !important; }
+.offer-banner-item {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem 1rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.offer-banner-item + .offer-banner-item {
+  border-top: 1px solid #d1fae5;
+}
+.offer-banner-item:hover { background: #ecfdf5; }
+.offer-banner-item--selected { background: #dcfce7; }
+.offer-banner-select {
+  flex-shrink: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 2px solid #16a34a;
+  box-sizing: border-box;
+  transition: background .15s, border-color .15s;
+}
+.offer-banner-item--selected .offer-banner-select {
+  background: #16a34a;
+  /* checkmark via inset box-shadow cross */
+  box-shadow: inset 0 0 0 2px #fff;
+}
+.offer-banner-text {
+  flex: 1;
+  font-weight: 500;
+}
+.offer-banner-item--selected .offer-banner-text {
+  font-weight: 600;
+}
+.offer-banner-dismiss {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  line-height: 1;
+  color: #166534;
+  opacity: .5;
+  cursor: pointer;
+  padding: 0 .25rem;
+  flex-shrink: 0;
+}
+.offer-banner-dismiss:hover { opacity: 1; }
+/* Inactive offer — menu (BROWSING): amber/yellow — soft informational */
+.offer-banner-item--inactive { background: #fef9c3; cursor: default; }
+.offer-banner-item--inactive:hover { background: #fef9c3; }
+.offer-banner-item--inactive .offer-banner-text { color: #92400e; }
+.offer-banner-inactive-notice {
+  font-size: .75rem;
+  font-weight: 600;
+  color: #b45309;
+  flex-shrink: 0;
+  margin-right: .25rem;
+}
+/* Inactive offer — checkout: red + strikethrough — clear rejection */
+.offer-banner--checkout .offer-banner-item--inactive { background: transparent; opacity: .8; }
+.offer-banner--checkout .offer-banner-item--inactive:hover { background: transparent; }
+.offer-banner--checkout .offer-banner-item--inactive .offer-banner-text { color: #6b7280; }
+.offer-banner--checkout .offer-banner-inactive-notice { color: #dc2626; }
+
+/* ── General-purpose toast ─────────────────────────────────── */
+.store-toast {
+  position: fixed;
+  bottom: calc(var(--cart-bar-h, 72px) + 12px);
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: #1a1a2e;
+  color: #fff;
+  padding: .65rem 1.1rem;
+  border-radius: 8px;
+  font-size: .875rem;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s, transform .2s;
+  z-index: 1100;
+}
+.store-toast--visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
 /* ── View toggle nav (Menu / My Orders) ──────────────────── */
 .store-view-nav {
   display: flex;
@@ -363,6 +457,43 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .dietary-tag.vegetarian { background: #cce5ff; color: #004085; } /* 7.7:1 */
 .dietary-tag.gluten_free{ background: #fff3cd; color: #6b4e00; } /* #856404→#6b4e00: 5.9:1 */
 
+/* Drink vessel + brand badges */
+.drink-meta {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  margin-top: .2rem;
+  flex-wrap: wrap;
+}
+.vessel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .22rem;
+  font-size: .68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #7a6652;
+  background: #f5ede3;
+  border-radius: var(--radius-pill);
+  padding: .1rem .38rem .1rem .28rem;
+}
+.vessel-badge svg { flex-shrink: 0; }
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: .68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border-radius: var(--radius-pill);
+  padding: .1rem .38rem;
+}
+.brand-badge.singha    { background: #fdf3d7; color: #9a6e00; }
+.brand-badge.sapporo   { background: #1a1a1a; color: #e8e8e8; }
+.brand-badge.heineken  { background: #00772f; color: #fff; }
+.brand-badge.space-dust{ background: #1c2f52; color: #f4a832; }
+
 /* "Popular" badge */
 .popular-badge {
   position: absolute;
@@ -425,6 +556,21 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   padding: .4rem .9rem;
   font-size: .85rem;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Online paused banner ────────────────────────────────── */
+.store-paused-banner {
+  background: #fff1f2;
+  border-bottom: 1px solid #fecdd3;
+  padding: .75rem 1rem;
+}
+.store-paused-banner[hidden] { display: none !important; }
+.store-paused-title {
+  font-weight: 600;
+  font-size: .9rem;
+  color: #be123c;
+  margin: 0;
   flex-shrink: 0;
 }
 
@@ -952,6 +1098,10 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
   margin-top: .25rem;
   padding-top: .5rem;
   border-top: 1px solid var(--color-border);
+}
+.checkout-discount-amount {
+  color: #27ae60;
+  font-weight: 600;
 }
 
 .form-group {
@@ -2089,3 +2239,142 @@ button { cursor: pointer; border: none; background: none; font-family: inherit; 
 .feedback-thumb:hover { background: #f3f4f6; }
 .feedback-thumb.active-up   { background: #d1fae5; border-color: #10b981; }
 .feedback-thumb.active-down { background: #fee2e2; border-color: #ef4444; }
+
+
+/* ── Special instruction review sheet ─────────────────────────────────────── */
+.sheet-note-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  font-size: 15px;
+  font-family: inherit;
+  resize: none;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+}
+.sheet-note-textarea:focus {
+  outline: none;
+  border-color: var(--primary, #f97316);
+}
+.kitchen-note-counter {
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+  text-align: right;
+  margin-top: 4px;
+}
+.kitchen-note-counter.near   { color: var(--warning, #f59e0b); }
+.kitchen-note-counter.at-max { color: var(--error,   #ef4444); }
+.instruction-messages {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+.instruction-messages li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.instruction-messages li:last-child { border-bottom: none; }
+.instruction-review-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  font-size: 16px;
+  border-top: 1px solid var(--border, #e5e7eb);
+}
+.instruction-review-total[hidden] { display: none !important; }
+#instruction-review-sheet[hidden] { display: none !important; }
+#instruction-review-backdrop[hidden] { display: none !important; }
+.checkout-item-instr-surcharge {
+  font-size: 12px;
+  color: var(--primary, #f97316);
+  margin-top: 2px;
+}
+
+
+/* ── Offer preview sheet ─────────────────────────────────────────────────── */
+#offer-preview-sheet[hidden]   { display: none !important; }
+#offer-preview-backdrop[hidden] { display: none !important; }
+.offer-preview-description {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 4px 0 16px;
+  color: var(--text, #111827);
+}
+.offer-preview-meta {
+  background: var(--surface, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.offer-preview-dates {
+  font-size: 14px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.6;
+}
+.offer-preview-schedule {
+  font-size: 13px;
+  color: var(--color-primary, #6c63ff);
+  font-weight: 500;
+}
+.offer-preview-schedule[hidden] { display: none !important; }
+.checkout-offer-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+}
+.checkout-offer-hint[hidden] { display: none !important; }
+.offer-preview-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.offer-preview-code[hidden] { display: none !important; }
+.offer-code-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #6b7280);
+}
+.offer-code-value {
+  font-family: monospace;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text, #111827);
+  background: var(--border, #e5e7eb);
+  padding: 2px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.1em;
+}
+.offer-preview-pending {
+  display: inline-block;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.offer-preview-pending[hidden] { display: none !important; }
+.offer-preview-used {
+  display: inline-block;
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.offer-preview-used[hidden] { display: none !important; }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Merchant management routes — profile, printer discovery, API key management.
  *
  * ── SINGLE-MERCHANT APPLIANCE ──────────────────────────────────────────────
@@ -16,12 +16,11 @@
 
 import { Hono } from 'hono'
 import { getDatabase } from '../db/connection'
-import { generateId } from '../utils/id'
 import { authenticate, requireOwnMerchant, requireRole } from '../middleware/auth'
-import { storeAPIKey, getAPIKey, getPOSMerchantId, hasAPIKey } from '../crypto/api-keys'
+import { storeAPIKey, getAPIKey, hasAPIKey } from '../crypto/api-keys'
 import { getDEK } from '../crypto/dek'
 import { discoverPrinters, probeIp } from '../services/printer-discovery'
-import { printTestPage, printDiagnostic, type DiagnosticResult } from '../services/printer'
+import { printTestPage, printDiagnostic } from '../services/printer'
 import { updateDeviceTippingConfig } from '../adapters/finix'
 import type { AuthContext } from '../middleware/auth'
 import { invalidateApplianceMerchantCache } from './store'
@@ -65,7 +64,7 @@ merchants.get('/api/merchants/check-slug', async (c) => {
  * Get merchant profile
  */
 merchants.get('/api/merchants/:id', authenticate, requireOwnMerchant, async (c: AuthContext) => {
-  const merchantId = c.req.param('id')
+  const merchantId = c.req.param('id')!
 
   try {
     const db = getDatabase()
@@ -88,6 +87,7 @@ merchants.get('/api/merchants/:id', authenticate, requireOwnMerchant, async (c: 
         tip_options: string | null
         tip_on_terminal: number
         suggested_tip_percentages: string | null
+        signature_capture: number
         stax_token: string | null
         printer_ip: string | null
         counter_printer_ip: string | null
@@ -119,6 +119,10 @@ merchants.get('/api/merchants/:id', authenticate, requireOwnMerchant, async (c: 
         reservation_advance_days: number | null
         reservation_max_party_size: number | null
         reservation_start_time: string | null
+        online_orders_paused_until: string | null
+        ga_tag_id: string | null
+        dine_in_provider: string | null
+        counter_provider: string | null
         created_at: string
         updated_at: string
       }, [string]>(`SELECT * FROM merchants WHERE id = ?`)
@@ -148,6 +152,7 @@ merchants.get('/api/merchants/:id', authenticate, requireOwnMerchant, async (c: 
       suggestedTipPercentages: (() => {
         try { return JSON.parse(merchant.suggested_tip_percentages ?? '[15,20,25]') } catch { return [15, 20, 25] }
       })(),
+      signatureCapture: (merchant.signature_capture ?? 1) === 1,
       staxToken: merchant.stax_token ?? null,
       printerIp: merchant.printer_ip ?? null,
       counterPrinterIp: merchant.counter_printer_ip ?? null,
@@ -178,12 +183,16 @@ merchants.get('/api/merchants/:id', authenticate, requireOwnMerchant, async (c: 
       receiptEmailConfigured: hasAPIKey(merchantId, 'email', 'gmail'),
       splashUrl: merchant.splash_url ?? null,
       welcomeMessage: merchant.welcome_message ?? null,
+      gaTagId: merchant.ga_tag_id ?? null,
+      dineInProvider: merchant.dine_in_provider ?? 'clover',
+      counterProvider: merchant.counter_provider ?? 'finix',
       reservationEnabled: (merchant.reservation_enabled ?? 0) === 1,
       reservationSlotMinutes: merchant.reservation_slot_minutes ?? 120,
       reservationCutoffMinutes: merchant.reservation_cutoff_minutes ?? 75,
       reservationAdvanceDays: merchant.reservation_advance_days ?? 7,
       reservationMaxPartySize: merchant.reservation_max_party_size ?? 12,
       reservationStartTime: merchant.reservation_start_time ?? null,
+      onlineOrdersPausedUntil: merchant.online_orders_paused_until ?? null,
       createdAt: merchant.created_at,
       updatedAt: merchant.updated_at,
     })
@@ -201,7 +210,7 @@ merchants.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const user = c.get('user')
 
     try {
@@ -267,6 +276,10 @@ merchants.put(
         reservationStartTime,
         tipOnTerminal,
         suggestedTipPercentages,
+        signatureCapture,
+        gaTagId,
+        dineInProvider,
+        counterProvider,
       } = body
 
       const db = getDatabase()
@@ -302,6 +315,26 @@ merchants.put(
       if (welcomeMessage !== undefined) {
         updates.push('welcome_message = ?')
         values.push(welcomeMessage)
+      }
+      if (gaTagId !== undefined) {
+        // Accept "G-XXXXXXXXXX" format or null/empty string to clear
+        const tag = typeof gaTagId === 'string' ? gaTagId.trim() : null
+        updates.push('ga_tag_id = ?')
+        values.push(tag || null)
+      }
+      if (dineInProvider !== undefined) {
+        const provider = String(dineInProvider)
+        if (provider === 'finix' || provider === 'clover') {
+          updates.push('dine_in_provider = ?')
+          values.push(provider)
+        }
+      }
+      if (counterProvider !== undefined) {
+        const provider = String(counterProvider)
+        if (provider === 'finix' || provider === 'clover') {
+          updates.push('counter_provider = ?')
+          values.push(provider)
+        }
       }
       if (tableLayout !== undefined) {
         updates.push('table_layout = ?')
@@ -431,7 +464,7 @@ merchants.put(
           if (!lvl.label || typeof lvl.label !== 'string') {
             return c.json({ error: 'Each discount level must have a label' }, 400)
           }
-          if (!['percent', 'fixed'].includes(lvl.type)) {
+          if (!['percent', 'fixed'].includes(lvl.type as string)) {
             return c.json({ error: 'Each discount level type must be "percent" or "fixed"' }, 400)
           }
           if (typeof lvl.value !== 'number' || lvl.value <= 0) {
@@ -449,7 +482,7 @@ merchants.put(
           if (!lvl.label || typeof lvl.label !== 'string') {
             return c.json({ error: 'Each service charge preset must have a label' }, 400)
           }
-          if (!['percent', 'fixed'].includes(lvl.type)) {
+          if (!['percent', 'fixed'].includes(lvl.type as string)) {
             return c.json({ error: 'Each service charge preset type must be "percent" or "fixed"' }, 400)
           }
           if (typeof lvl.value !== 'number' || lvl.value <= 0) {
@@ -532,6 +565,10 @@ merchants.put(
         updates.push('suggested_tip_percentages = ?')
         values.push(JSON.stringify(suggestedTipPercentages))
       }
+      if (signatureCapture !== undefined) {
+        updates.push('signature_capture = ?')
+        values.push(signatureCapture ? 1 : 0)
+      }
 
       if (updates.length === 0 && receiptEmailPassword === undefined) {
         return c.json({ error: 'No fields to update' }, 400)
@@ -584,6 +621,7 @@ merchants.put(
           tip_options: string | null
           tip_on_terminal: number
           suggested_tip_percentages: string | null
+          signature_capture: number
           stax_token: string | null
           printer_ip: string | null
           counter_printer_ip: string | null
@@ -616,6 +654,9 @@ merchants.put(
           reservation_start_time: string | null
           notification_sound: string | null
           prep_time_minutes: number | null
+          ga_tag_id: string | null
+          dine_in_provider: string | null
+          counter_provider: string | null
         }, [string]>(`SELECT * FROM merchants WHERE id = ?`)
         .get(merchantId)
 
@@ -638,6 +679,7 @@ merchants.put(
         suggestedTipPercentages: (() => {
           try { return JSON.parse(updated.suggested_tip_percentages ?? '[15,20,25]') } catch { return [15, 20, 25] }
         })(),
+        signatureCapture: (updated.signature_capture ?? 1) === 1,
         staxToken: updated.stax_token ?? null,
         printerIp: updated.printer_ip ?? null,
         counterPrinterIp: updated.counter_printer_ip ?? null,
@@ -664,6 +706,9 @@ merchants.put(
         receiptEmailConfigured: hasAPIKey(merchantId, 'email', 'gmail'),
         splashUrl: updated.splash_url ?? null,
         welcomeMessage: updated.welcome_message ?? null,
+        gaTagId: updated.ga_tag_id ?? null,
+        dineInProvider: updated.dine_in_provider ?? 'clover',
+        counterProvider: updated.counter_provider ?? 'finix',
         reservationEnabled: (updated.reservation_enabled ?? 0) === 1,
         reservationSlotMinutes: updated.reservation_slot_minutes ?? 120,
         reservationCutoffMinutes: updated.reservation_cutoff_minutes ?? 75,
@@ -688,7 +733,7 @@ merchants.post(
   authenticate,
   requireRole('owner'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const body = await c.req.json()
@@ -739,8 +784,8 @@ merchants.delete(
   authenticate,
   requireRole('owner'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const provider = c.req.param('provider')
+    const merchantId = c.req.param('id')!
+    const provider = c.req.param('provider')!
     const keyType = c.req.query('keyType') as 'pos' | 'payment'
 
     if (!keyType) {
@@ -912,7 +957,7 @@ merchants.get(
 // Webhook secret — AES-256-GCM helpers (same pattern as api-keys.ts)
 // ---------------------------------------------------------------------------
 
-function encryptWebhookSecret(merchantId: string, plaintext: string): string {
+export function encryptWebhookSecret(merchantId: string, plaintext: string): string {
   const dek = getDEK(merchantId)
   const iv  = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', dek, iv)
@@ -945,7 +990,7 @@ merchants.get(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
     const row = db.query<{ webhook_secret_enc: string | null }, [string]>(
       'SELECT webhook_secret_enc FROM merchants WHERE id = ?'
@@ -964,7 +1009,7 @@ merchants.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const secret = randomBytes(32).toString('hex') // 64 hex chars
     const enc    = encryptWebhookSecret(merchantId, secret)
     const db = getDatabase()
@@ -983,9 +1028,70 @@ merchants.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
     db.run('UPDATE merchants SET webhook_secret_enc = NULL WHERE id = ?', [merchantId])
+    return c.json({ ok: true })
+  }
+)
+
+// ---------------------------------------------------------------------------
+// Finix webhook secret management endpoints
+// Separate from the generic webhook secret — Finix has its own signing secret
+// configured in the Finix dashboard under Developer → Webhooks.
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/merchants/:id/finix-webhook/secret/status
+ * Returns { configured: boolean }
+ */
+merchants.get(
+  '/api/merchants/:id/finix-webhook/secret/status',
+  authenticate,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const db = getDatabase()
+    const row = db.query<{ finix_webhook_secret_enc: string | null }, [string]>(
+      'SELECT finix_webhook_secret_enc FROM merchants WHERE id = ?'
+    ).get(merchantId)
+    return c.json({ configured: !!row?.finix_webhook_secret_enc })
+  }
+)
+
+/**
+ * POST /api/merchants/:id/finix-webhook/secret
+ * Body: { secret: string }  — the Finix signing secret copied from the Finix dashboard
+ * Stores it encrypted. Returns { ok: true }.
+ */
+merchants.post(
+  '/api/merchants/:id/finix-webhook/secret',
+  authenticate,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const body = await c.req.json().catch(() => null)
+    const secret: string = body?.secret?.trim() ?? ''
+    if (!secret || secret.length > 500) return c.json({ error: 'secret_required' }, 400)
+    const enc = encryptWebhookSecret(merchantId, secret)
+    const db = getDatabase()
+    db.run('UPDATE merchants SET finix_webhook_secret_enc = ? WHERE id = ?', [enc, merchantId])
+    return c.json({ ok: true })
+  }
+)
+
+/**
+ * DELETE /api/merchants/:id/finix-webhook/secret
+ * Removes the Finix webhook secret — webhook verification is disabled until a new one is set.
+ */
+merchants.delete(
+  '/api/merchants/:id/finix-webhook/secret',
+  authenticate,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const db = getDatabase()
+    db.run('UPDATE merchants SET finix_webhook_secret_enc = NULL WHERE id = ?', [merchantId])
     return c.json({ ok: true })
   }
 )
@@ -1028,7 +1134,7 @@ merchants.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const limit  = Math.min(parseInt(c.req.query('limit')  || '50'), 200)
@@ -1045,11 +1151,12 @@ merchants.get(
         type: string
         stars: number
         comment: string | null
+        manager_note: string | null
         dish_ratings: string | null
         contact: string | null
         created_at: string
       }, string[]>(
-        `SELECT id, order_id, type, stars, comment, dish_ratings, contact, created_at
+        `SELECT id, order_id, type, stars, comment, manager_note, dish_ratings, contact, created_at
          FROM feedback WHERE ${clause}
          ORDER BY created_at DESC
          LIMIT ${limit} OFFSET ${offset}`
@@ -1080,6 +1187,7 @@ merchants.get(
         type: r.type,
         stars: r.stars,
         comment: r.comment,
+        managerNote: r.manager_note,
         dishRatings: r.dish_ratings ? JSON.parse(r.dish_ratings) : null,
         contact: r.contact,
         createdAt: r.created_at,
@@ -1099,7 +1207,7 @@ merchants.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
     const { clause, params } = feedbackFilters(
       merchantId, undefined, c.req.query('days'),
@@ -1228,6 +1336,68 @@ async function syncDeviceTippingConfig(merchantId: string): Promise<void> {
 // ---------------------------------------------------------------------------
 // POST /api/merchants/:id/deploy
 // Pulls latest code from GitHub and restarts the server.
+// ---------------------------------------------------------------------------
+// PATCH /api/merchants/:id/store/pause — pause or resume online ordering
+//
+// Body: { pausedUntil: "<ISO datetime>" } to activate, or { pausedUntil: null } to resume.
+// ---------------------------------------------------------------------------
+
+merchants.patch(
+  '/api/merchants/:id/store/pause',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const body = await c.req.json().catch(() => ({}))
+
+    const db = getDatabase()
+
+    if (body.pausedUntil === null || body.pausedUntil === undefined) {
+      db.query(`UPDATE merchants SET online_orders_paused_until = NULL WHERE id = ?`).run(merchantId)
+      invalidateApplianceMerchantCache()
+      return c.json({ pausedUntil: null, isPaused: false })
+    }
+
+    const until = new Date(body.pausedUntil)
+    if (isNaN(until.getTime())) return c.json({ error: 'Invalid pausedUntil datetime' }, 400)
+    if (until <= new Date()) return c.json({ error: 'pausedUntil must be in the future' }, 400)
+
+    // Cap at end of current local day — pause always resets overnight
+    const tz = (db.query<{ timezone: string }, [string]>(
+      `SELECT timezone FROM merchants WHERE id = ?`
+    ).get(merchantId)?.timezone) || 'America/Los_Angeles'
+
+    const now = new Date()
+    const todayLocal = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(now)
+
+    // Compute the UTC instant of end-of-today in merchant's timezone.
+    // Strategy: find the UTC↔local offset at `now` via formatToParts, then shift
+    // today's 23:59:59 wall-clock time into UTC using that offset.
+    // (Using `new Date(dateStr)` without a Z suffix would treat it as server-local,
+    // which is wrong when the server is UTC but the merchant is in a negative offset.)
+    const localParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).formatToParts(now)
+    const lp = (t: string) => parseInt(localParts.find(p => p.type === t)?.value ?? '0')
+    // tzOffsetMs = (local wall-clock ms) − (UTC ms); negative west of UTC (e.g. PDT = −7 h)
+    const tzOffsetMs = Date.UTC(lp('year'), lp('month') - 1, lp('day'), lp('hour'), lp('minute'), lp('second')) - now.getTime()
+    const [ty, tm, td] = todayLocal.split('-').map(Number)
+    const endOfDayUTC = new Date(Date.UTC(ty, tm - 1, td, 23, 59, 59, 999) - tzOffsetMs)
+
+    const capped = until < endOfDayUTC ? until : endOfDayUTC
+    const iso = capped.toISOString()
+    db.query(`UPDATE merchants SET online_orders_paused_until = ? WHERE id = ?`).run(iso, merchantId)
+    invalidateApplianceMerchantCache()
+    return c.json({ pausedUntil: iso, isPaused: true })
+  },
+)
+
+// ---------------------------------------------------------------------------
 // Owner-only. Spawns ~/deploy.sh detached so the restart survives the current
 // process exiting, then responds immediately.
 // ---------------------------------------------------------------------------
@@ -1240,9 +1410,10 @@ merchants.post(
   async (c: AuthContext) => {
     const home = process.env.HOME ?? '/home/kizo'
     const script = `${home}/deploy.sh`
-    console.log('[merchants] deploy triggered — spawning', script)
+    const deployLog = `${home}/deploy.log`
+    console.log('[merchants] deploy triggered — spawning', script, '— log:', deployLog)
     try {
-      const proc = Bun.spawn(['bash', script], {
+      const proc = Bun.spawn(['bash', '-c', `bash ${script} >> ${deployLog} 2>&1`], {
         detached: true,
         stdio: ['ignore', 'ignore', 'ignore'],
         env: { ...process.env, PATH: `${home}/.bun/bin:${process.env.PATH}` },

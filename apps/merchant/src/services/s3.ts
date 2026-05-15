@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Minimal AWS S3 client using Signature Version 4.
  * Pure node:crypto — zero external dependencies.
  */

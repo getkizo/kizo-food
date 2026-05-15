@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Clover Menu Importer
  * Fetches the full menu hierarchy from Clover REST API v3
  *
@@ -321,7 +321,7 @@ export class CloverMenuImporter implements MenuImportAdapter {
 
     if (response.status === 204) return {} as T
 
-    return response.json()
+    return response.json() as T
   }
 }
 
@@ -375,7 +375,7 @@ export class CloverPOSAdapter implements POSAdapter {
   async testConnection(): Promise<POSConnectionTest> {
     const start = Date.now()
     try {
-      const merchant = await this.importer.makeRequest<{ id: string; name?: string }>(
+      await this.importer.makeRequest<{ id: string; name?: string }>(
         'GET',
         `/v3/merchants/${this.importer.merchantId}`
       )

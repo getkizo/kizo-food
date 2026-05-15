@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Authentication middleware for Hono — JWT verification and role-based access control.
  *
  * ── SINGLE-MERCHANT APPLIANCE ──────────────────────────────────────────────

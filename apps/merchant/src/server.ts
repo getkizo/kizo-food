@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Merchant Appliance Server
  * Bun + Hono + SQLite + SAM Pattern
  *
@@ -35,7 +35,8 @@
  *   7. Bun.serve() on PORT (default 3000)
  *
  * ── Background services ───────────────────────────────────────────────────────
- *   startAutoClockOut()    Every 15 min — auto-clocks-out shifts past max hours
+ *   startAutoClockOut()        Every 15 min — auto-clocks-out shifts past max hours
+ *   startAutoCompleteReady()   Every 15 min — completes stale "ready" online orders from prev days
  *   startAutoFire()        Every 60 s  — fires delayed course-2 kitchen tickets
  *   startAutoResetOos()    Midnight     — resets "out_today" stock flags
  *   startAutoBackup()      02:00 daily  — S3 JSON snapshot
@@ -43,11 +44,14 @@
  *   Clover reconcile       120 s / 15 s adaptive — fast-polls for 2 min after order push
  *   startDailyCloseout()   Configurable — EOD sales report + morning reservation briefing
  *   startFogReminders()    Every 6 h   — alerts if grease trap / hood cleaning is overdue
- *   setInterval (6 h)      — cleans up expired refresh tokens from SQLite
+ *   startPrinterProbe()        Every 120 s — TCP port-9100 health check; results cached for /api/status
+ *   startHourlyMetricsSample() Every 1 h   — persists req_per_min sample for anomaly baseline (Phase D)
+ *   startAutoPurgePii()        Daily 02:00 — nulls customer PII on orders > 24 h (SEC-005)
+ *   setInterval (6 h)          — cleans up expired refresh tokens from SQLite
  */
 
 import { resolve, join, sep } from 'node:path'
-import { Hono } from 'hono'
+import { Hono, type Context, type Next } from 'hono'
 import { compress } from 'hono/compress'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
@@ -58,12 +62,15 @@ import { migrate } from './db/migrate'
 import { initializeMasterKey, isMasterKeyInitialized } from './crypto/master-key'
 import { verifyCodeIntegrity, hasManifest, skipCodeVerification } from './crypto/verify-code'
 import { rehydrateActiveOrders } from './workflows/order-relay'
-import { rehydrateTerminalWorkflows } from './workflows/terminal-payment'
+import { rehydrateTerminalWorkflows, startTerminalPaymentSweep } from './workflows/terminal-payment'
 import { startAutoClockOut } from './services/auto-clockout'
+import { startAutoPurgePii } from './services/auto-purge-pii'
+import { startAutoCompleteReady } from './services/auto-complete-ready'
 import { startAutoFire } from './services/auto-fire'
 import { startAutoResetOos } from './services/auto-reset-oos'
-import { startAutoCancelStale } from './services/auto-cancel-stale'
+import { startAutoCancelStale as _startAutoCancelStale } from './services/auto-cancel-stale'
 import { startDailyCloseout } from './services/daily-closeout'
+import { startProcessorFeeSweep } from './services/processor-fees'
 import { getAdapter } from './adapters/registry'
 import { orders } from './routes/orders'
 import { dashboardOrders } from './routes/dashboard-orders'
@@ -78,9 +85,14 @@ import { hours } from './routes/hours'
 import { employees } from './routes/employees'
 import { terminals } from './routes/terminals'
 import { reservations } from './routes/reservations'
+import { ingredients } from './routes/ingredients'
+import { manager } from './routes/manager'
+import { oos } from './routes/oos'
+import { advanceOrders } from './routes/advance-orders'
 import { giftCards } from './routes/gift-cards'
 import { fog, startFogReminders } from './routes/fog'
 import { systemHealth } from './routes/system-health'
+import { weather } from './routes/weather'
 import './utils/system-monitor'   // start background CPU/mem sampling + error capture
 import { dashboardPayments } from './routes/dashboard-payments'
 import { dashboardRefunds } from './routes/dashboard-refunds'
@@ -95,7 +107,14 @@ import { store } from './routes/store'
 import { events } from './routes/events'
 import { BUILD_VERSION } from './utils/build-version'
 import { counter } from './routes/counter'
+import { status } from './routes/status'
+import { campaigns } from './routes/campaigns'
+import { startPrinterProbe } from './services/printer-probe'
+import { startHourlyMetricsSample } from './services/system-metrics'
 import { merchantIpGuard } from './middleware/ip-allowlist'
+import { recordRequest } from './utils/req-counter'
+import sharp from 'sharp'
+import { getApplianceMerchant } from './routes/store'
 import {
   counterWsOpen,
   counterWsMessage,
@@ -111,10 +130,10 @@ import type { CounterWsData } from './services/counter-ws'
 // without requiring a manual version bump in the SW source file.
 // ---------------------------------------------------------------------------
 
-const _swMerchantContent = Bun.file('./public/sw.js').text().then((t) =>
+const _swMerchantContent = Bun.file(join(import.meta.dir, '../public/sw.js')).text().then((t) =>
   t.replace('merchant-__BUILD__', `merchant-${BUILD_VERSION}`)
 )
-const _swStoreContent = Bun.file('./public/store/sw.js').text().then((t) =>
+const _swStoreContent = Bun.file(join(import.meta.dir, '../public/store/sw.js')).text().then((t) =>
   t.replace('store-__BUILD__', `store-${BUILD_VERSION}`)
 )
 
@@ -132,7 +151,7 @@ const app = new Hono<{ Variables: Variables }>()
  */
 
 // CORS (configure for your frontend domains)
-// CORS_ORIGIN supports comma-separated values: https://dev.kizo.app,http://localhost:5173
+// CORS_ORIGIN supports comma-separated values: https://dev.kizo.example,http://localhost:5173
 //
 // Production without CORS_ORIGIN: all cross-origin requests are blocked (safe default
 // for an appliance where the store and dashboard are served from the same origin as the API).
@@ -177,6 +196,18 @@ app.use('/*', async (c, next) => {
   if (process.env.NODE_ENV === 'production') {
     c.res.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains')
   }
+  // PCI DSS req 4 / 6.4: prevent proxies and browsers from caching sensitive data.
+  // Apply the full directive to every dynamic response.  Route handlers that serve
+  // static assets with fingerprinted filenames (images, versioned bundles) set their
+  // own 'public, max-age=31536000, immutable' header explicitly — those are preserved
+  // by the !get() guard.  'no-store' alone is insufficient for PCI ASV scanners, which
+  // require the full set: no-store prevents disk caching but browsers may still cache
+  // to memory; no-cache + must-revalidate + max-age=0 + private close those gaps.
+  if (!c.res.headers.get('Cache-Control')) {
+    c.res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0, private')
+    // HTTP/1.0 backwards compatibility for PCI ASV scanners (RFC 7234 §5.4).
+    c.res.headers.set('Pragma', 'no-cache')
+  }
   // SEC-XSS-05 / SEC-TPI-01: Enforced CSP for HTML pages.
   // Covers dashboard (/merchant), customer store (/), gift card (/gift-cards), etc.
   // API routes are excluded — JSON responses do not render HTML.
@@ -199,17 +230,20 @@ app.use('/*', async (c, next) => {
     c.res.headers.set(
       'Content-Security-Policy',
       "default-src 'self'; " +
-      "script-src 'self' https://js.finix.com; " +
+      "script-src 'self' https://js.finix.com https://cdn.sift.com https://www.googletagmanager.com; " +
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
       "font-src 'self' https://fonts.gstatic.com; " +
-      "connect-src 'self' https://js.finix.com https://api.finix.com; " +
-      "img-src 'self' data: blob:; " +
-      "frame-src 'none'; " +
+      "connect-src 'self' https://js.finix.com https://api.finix.com https://finix.live-payments-api.com https://www.google-analytics.com https://www.googletagmanager.com https://cdn.sift.com; " +
+      "img-src 'self' data: blob: https://api.weather.gov; " +
+      "frame-src https://js.finix.com; " +
       "object-src 'none'; " +
       "report-uri /api/csp-report"
     )
   }
 })
+
+// CSP violation reports — accept and discard (prevents 404 noise in logs)
+app.post('/api/csp-report', (c) => c.body(null, 204))
 
 // Keep-alive header — required for cloudflared compatibility.
 // cloudflared pools TCP connections to the origin and reuses them across
@@ -228,6 +262,9 @@ app.use(compress())
 
 // Request logging
 app.use('/*', logger())
+
+// Request rate counter for GET /api/status (60-second sliding window)
+app.use('/api/*', (_c, next) => { recordRequest(); return next() })
 
 // Pretty JSON in development
 if (process.env.NODE_ENV !== 'production') {
@@ -286,9 +323,19 @@ app.use('/api/payments/*',  merchantIpGuard)
  * Routes
  */
 
-// Serve static files — merchant dashboard assets
-app.use('/css/*', serveStatic({ root: './public' }))
-app.use('/js/*', serveStatic({ root: './public' }))
+// Serve static files — merchant dashboard assets.
+// CSS and JS are cache-busted with ?v=N query params on every change, so we
+// can cache the underlying files at the edge (Cloudflare) and in browsers for
+// a full year.  The global no-store middleware is bypassed because these
+// handlers set Cache-Control explicitly before it runs its !get() guard.
+const _staticCacheMiddleware = async (c: Context, next: Next) => {
+  await next()
+  if (c.res.status === 200 || c.res.status === 304) {
+    c.res.headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+  }
+}
+app.use('/css/*', _staticCacheMiddleware, serveStatic({ root: './public' }))
+app.use('/js/*',  _staticCacheMiddleware, serveStatic({ root: './public' }))
 
 // Menu images — in-memory cache + long-lived HTTP cache headers.
 // Files are content-addressed (hex hash filenames), so a new upload always
@@ -343,7 +390,7 @@ app.use('/images/*', async (c) => {
     cached = { data, contentType, etag }
     if (_imageCache.size >= 300) {
       const first = _imageCache.keys().next().value
-      _imageCache.delete(first)
+      _imageCache.delete(first!)
     }
     _imageCache.set(urlPath, cached)
   }
@@ -370,10 +417,10 @@ app.use('/images/*', async (c) => {
     },
   })
 })
-app.use('/icons/*', serveStatic({ root: './public' }))
+app.use('/icons/*', _staticCacheMiddleware, serveStatic({ root: './public' }))
 app.get('/favicon.ico', (c) => c.body(null, 204))
 app.get('/manifest.json', serveStatic({ path: './public/manifest.json' }))
-app.get('/sw.js', async (c) => {
+app.get('/sw.js', async (_c) => {
   return new Response(await _swMerchantContent, {
     headers: {
       'Content-Type': 'application/javascript',
@@ -382,6 +429,114 @@ app.get('/sw.js', async (c) => {
     },
   })
 })
+
+// Dynamic PWA manifest — serves merchant name + logo-based icons.
+// Must be registered before /store/* static handler so it shadows the static file.
+app.get('/store/manifest.json', async (c) => {
+  const merchant = getApplianceMerchant()
+  const name      = merchant?.business_name ?? 'Order Online'
+  const shortName = name.length > 12 ? name.split(/\s+/)[0] : name
+  const manifest = {
+    name,
+    short_name: shortName,
+    id:          '/',
+    scope:       '/',
+    start_url:   '/',
+    display:     'standalone',
+    background_color: '#1a1a2e',
+    theme_color:      '#1a1a2e',
+    orientation: 'portrait-primary',
+    description: `Order food online from ${name}.`,
+    icons: [
+      { src: '/store/icon/192', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/store/icon/512', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+    ],
+  }
+  return c.json(manifest, 200, { 'Cache-Control': 'no-cache, no-store' })
+})
+
+// Dynamic PWA icon — resizes the merchant logo to the requested pixel size using sharp.
+// Lanczos3 kernel provides high-quality downscaling. Falls back to a solid-color
+// placeholder if the merchant has no logo configured.
+// Must be registered before /store/* static handler.
+const _iconCache = new Map<string, { png: Uint8Array; etag: string }>()
+app.get('/store/icon/:size', async (c) => {
+  const sizeParam = Number(c.req.param('size'))
+  const size = Number.isFinite(sizeParam) && sizeParam >= 32 && sizeParam <= 1024
+    ? sizeParam : 192
+
+  const merchant = getApplianceMerchant()
+  const logoPath  = merchant?.logo_url ?? null   // e.g. "/images/merchants/id/file.jpg"
+
+  const cacheKey = `${logoPath ?? 'none'}:${size}`
+  const cached   = _iconCache.get(cacheKey)
+  if (cached) {
+    const ifNoneMatch = c.req.header('if-none-match')
+    if (ifNoneMatch === cached.etag) return c.body(null, 304)
+    return new Response(cached.png, {
+      headers: {
+        'Content-Type':  'image/png',
+        'Cache-Control': 'public, max-age=86400',
+        'ETag':          cached.etag,
+      },
+    })
+  }
+
+  let png: Uint8Array
+  if (logoPath) {
+    try {
+      const diskPath = join(import.meta.dir, '../public', logoPath.replace(/^\//, ''))
+      const buf = await Bun.file(diskPath).arrayBuffer()
+      // For maskable icons (typically 512px), center the logo with 20% padding
+      // so it survives circular/squircle crops on Android and iOS.
+      const isMaskable = size >= 512
+      const innerSize  = isMaskable ? Math.round(size * 0.8) : size
+      const pipeline   = sharp(buf)
+        .flatten({ background: { r: 26, g: 26, b: 46 } })
+        .resize(innerSize, innerSize, {
+          fit: 'contain',
+          background: { r: 26, g: 26, b: 46, alpha: 1 },
+          kernel: 'lanczos3',
+        })
+      const resized = isMaskable
+        ? await pipeline
+            .extend({
+              top: Math.round(size * 0.1), bottom: Math.round(size * 0.1),
+              left: Math.round(size * 0.1), right:  Math.round(size * 0.1),
+              background: { r: 26, g: 26, b: 46, alpha: 1 },
+            })
+            .png()
+            .toBuffer()
+        : await pipeline.png().toBuffer()
+      png = new Uint8Array(resized)
+    } catch {
+      png = await _fallbackIcon(size)
+    }
+  } else {
+    png = await _fallbackIcon(size)
+  }
+
+  const etag = `"${Bun.hash(png).toString(16)}"`
+  _iconCache.set(cacheKey, { png, etag })
+  return new Response(png, {
+    headers: {
+      'Content-Type':  'image/png',
+      'Cache-Control': 'public, max-age=86400',
+      'ETag':          etag,
+    },
+  })
+})
+
+// iOS requests /apple-touch-icon.png directly when no <link> tag is found or as a fallback.
+app.get('/apple-touch-icon.png', (c) => c.redirect('/store/icon/180', 302))
+
+async function _fallbackIcon(size: number): Promise<Uint8Array> {
+  const buf = await sharp({
+    create: { width: size, height: size, channels: 4,
+               background: { r: 26, g: 26, b: 46, alpha: 1 } },
+  }).png().toBuffer()
+  return new Uint8Array(buf)
+}
 
 // Store service worker must be served with Service-Worker-Allowed header
 // for root scope registration. This MUST be registered before the generic
@@ -397,12 +552,43 @@ app.use('/store/sw.js', async () => {
   })
 })
 
+// Manager app service worker — must precede generic /manager-app/* handler
+// so the SW response carries Service-Worker-Allowed correctly.
+const _swManagerContent = Bun.file(join(import.meta.dir, '../public/manager-app/sw.js'))
+  .exists()
+  .then(exists => exists
+    ? Bun.file(join(import.meta.dir, '../public/manager-app/sw.js')).text()
+    : Promise.resolve('// manager SW placeholder')
+  )
+
+app.get('/manager-app/sw.js', async () => {
+  return new Response(await _swManagerContent, {
+    headers: {
+      'Content-Type': 'application/javascript',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Service-Worker-Allowed': '/manager-app/',
+    },
+  })
+})
+
+// Serve static files — manager PWA assets
+app.use('/manager-app/*', serveStatic({ root: './public' }))
+
+// SPA fallback: any /manager-app/ path with no matching static file returns index.html
+// so client-side routing works for /manager-app/accept, /manager-app/receipts, etc.
+app.get('/manager-app/*', (_c) => {
+  const indexPath = join(import.meta.dir, '../public/manager-app/index.html')
+  return new Response(Bun.file(indexPath), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  })
+})
+
 // Serve static files — customer store assets
 app.use('/store/*', serveStatic({ root: './public' }))
 
 // Serve static files — refrigerator log app (no auth, localStorage-only)
 app.use('/refrigerator/*', serveStatic({ root: './public' }))
-app.get('/refrigerator', (c) => {
+app.get('/refrigerator', (_c) => {
   return new Response(Bun.file('./public/refrigerator/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
@@ -410,11 +596,20 @@ app.get('/refrigerator', (c) => {
 
 // Serve static files — gift card store (public, no auth)
 app.use('/gift-cards/*', serveStatic({ root: './public' }))
-app.get('/gift-cards', (c) => {
+app.get('/gift-cards', (_c) => {
   return new Response(Bun.file('./public/gift-cards/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
 })
+
+// Serve static files — launcher hub (owner shortcut to all three apps)
+app.use('/launch/*', serveStatic({ root: './public' }))
+app.get('/launch', (c) => c.redirect('/launch/', 301))
+app.get('/launch/', (_c) =>
+  new Response(Bun.file(join(import.meta.dir, '../public/launch/index.html')), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  }),
+)
 
 // Mount API routes
 //
@@ -449,17 +644,25 @@ app.route('/', dashboardRefunds)
 app.route('/', reports)
 app.route('/', backup)
 app.route('/', store)
+app.route('/', campaigns)
 app.route('/', events)
 app.route('/', counter)
 app.route('/', reservations)
+app.route('/', ingredients)
+app.route('/', manager)
+app.route('/', oos)
+app.route('/', advanceOrders)
 app.route('/', giftCards)
 app.route('/', fog)
 app.route('/', systemHealth)
+app.route('/', weather)
+app.route('/', status)
+app.route('/', campaigns)
 app.use('/api/merchants/*/counter/*', merchantIpGuard)
 
 // Health check
 app.get('/health', (c) => {
-  const db = getDatabase()
+  getDatabase() // ensures DB is reachable; throws if not connected
   const masterKeyInitialized = isMasterKeyInitialized()
 
   return c.json({
@@ -522,21 +725,57 @@ app.get('/:merchantSlug/menu', async (c) => {
 })
 
 // Root — customer-facing store
-app.get('/', (c) => {
+app.get('/', (_c) => {
   return new Response(Bun.file('./public/store/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
 })
 
 // Converge payment return — serve store shell; SAM JS intercepts query params
-app.get('/pay-return', (c) => {
+app.get('/pay-return', (_c) => {
   return new Response(Bun.file('./public/store/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
 })
 
+// Force-refresh the store PWA — unregisters SW, clears all caches, then
+// redirects to /  Useful after a deployment when the old SW is still running.
+app.get('/refresh', (c) => {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Refreshing…</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; min-height: 100vh; margin: 0;
+           background: #f5f5f5; color: #333; text-align: center; }
+    p { margin: 8px 0; font-size: 18px; }
+    small { color: #888; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <p>Clearing app cache…</p>
+  <small>You'll be redirected to the menu in a moment.</small>
+  <script>
+    (async () => {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(regs.map(r => r.unregister()))
+        const keys = await caches.keys()
+        await Promise.all(keys.map(k => caches.delete(k)))
+      } catch (_) {}
+      window.location.replace('/')
+    })()
+  </script>
+</body>
+</html>`
+  return c.html(html)
+})
+
 // Gift card payment return — serve gift card shell; JS intercepts query params
-app.get('/gift-cards/pay-return', (c) => {
+app.get('/gift-cards/pay-return', (_c) => {
   return new Response(Bun.file('./public/gift-cards/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
@@ -544,7 +783,7 @@ app.get('/gift-cards/pay-return', (c) => {
 
 // Payment Terms of Service — linked from Finix hosted checkout forms
 // Both with and without .html extension are accepted.
-app.get('/payments-terms-of-service', (c) => {
+app.get('/payments-terms-of-service', (_c) => {
   return new Response(Bun.file('./public/store/payments-terms-of-service.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
@@ -554,7 +793,7 @@ app.get('/payments-terms-of-service.html', (c) => {
 })
 
 // Customer reservation booking page (embeddable as iframe)
-app.get('/reserve', (c) => {
+app.get('/reserve', (_c) => {
   return new Response(Bun.file('./public/reserve/index.html'), {
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   })
@@ -562,16 +801,22 @@ app.get('/reserve', (c) => {
 app.use('/reserve/*', serveStatic({ root: './public' }))
 
 // Merchant dashboard (staff only — auth enforced client-side via JWT)
-app.get('/merchant', (c) => {
+app.get('/merchant', (_c) => {
   return new Response(Bun.file('./public/dashboard.html'), {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type':  'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0, private',
+    },
   })
 })
 
 // Merchant onboarding (initial setup when no merchant exists yet)
-app.get('/setup', (c) => {
+app.get('/setup', (_c) => {
   return new Response(Bun.file('./public/index.html'), {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type':  'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0, private',
+    },
   })
 })
 
@@ -596,6 +841,9 @@ app.onError((err, c) => {
 let stopAutoFire: () => void = () => {}
 let stopDailyCloseout: () => void = () => {}
 let stopFogReminders: () => void = () => {}
+let stopProcessorFeeSweep: () => void = () => {}
+let stopPrinterProbe: () => void = () => {}
+let stopHourlyMetrics: () => void = () => {}
 let _refreshCleanupInterval: ReturnType<typeof setInterval> | null = null
 
 
@@ -609,8 +857,10 @@ async function main() {
   // Warn about CORS config; don't exit — the appliance is same-origin in production
   if (!corsOriginEnv) {
     if (process.env.NODE_ENV === 'production') {
-      console.warn('⚠️  CORS_ORIGIN not set — cross-origin requests are blocked.')
-      console.warn('   Set CORS_ORIGIN if a separate frontend domain needs API access.')
+      // HV-04: Error-level in production — cross-origin will silently fail if a separate
+      // frontend domain is used, and operators need to notice this in log alerts.
+      console.error('❌ CORS_ORIGIN not set — cross-origin requests are blocked.')
+      console.error('   Set CORS_ORIGIN if a separate frontend domain needs API access.')
     } else {
       console.warn('⚠️  CORS_ORIGIN not set — allowing localhost:3000 and localhost:5173 (dev only)')
     }
@@ -661,6 +911,9 @@ async function main() {
   // 6. Start auto clock-out background check (runs every 15 min)
   startAutoClockOut()
 
+  // 6b. Auto-complete stale "ready" online orders from previous days (runs every 15 min)
+  startAutoCompleteReady()
+
   // 7. Start auto-fire background check (fires scheduled orders at pickup_time - prep_time, runs every 60s)
   stopAutoFire = startAutoFire()
 
@@ -674,6 +927,11 @@ async function main() {
   // reconciliation record (lost due to restart or transient Finix API failure).
   // Fires once after 5 s, then every 30 s (SWEEP_INTERVAL_MS in reconcile.ts).
   startAutoReconcile()
+
+  // 9b-ii. Terminal-payment map TTL sweep — prunes SAM handles that never
+  // reached a terminal state (COMPLETED/DECLINED/CANCELLED). Handles that do
+  // reach a terminal state are pruned immediately in the render callback.
+  startTerminalPaymentSweep()
 
   // 9c. Clover reconciliation — runs at startup then on an adaptive schedule.
   //     Default interval: 120 s.  Drops to 15 s for 2 min after a Clover order
@@ -712,12 +970,30 @@ async function main() {
     scheduleNext()
   }
 
+  // 9d. Background printer probe — TCP port-9100 health check every 120 s.
+  // Results are cached in memory and read by GET /api/status (Phase B).
+  stopPrinterProbe = startPrinterProbe()
+
+  // 9e. Hourly req_per_min sampler — persists one row/hour to system_metrics.
+  // Used by GET /api/status to compute the 24-hour baseline for anomaly detection (Phase D).
+  stopHourlyMetrics = startHourlyMetricsSample()
+
   // 10. Daily closeout email — sends sales summary 60 min after close of business
   stopDailyCloseout = startDailyCloseout()
 
   // 10b. FOG reminder emails — notifies the restaurant when grease trap or hood
   // cleaning intervals are exceeded (polls every 6 hours, sends at most once/day)
   stopFogReminders = startFogReminders()
+
+  // 10c. Nightly processor-fee sweep — fetches Finix interchange/assessment/
+  // processor-markup amounts for card-present transfers ~24h after settlement
+  // and stores them on payments.processor_fee_cents.
+  stopProcessorFeeSweep = startProcessorFeeSweep()
+
+  // 10d. Nightly PII purge — nulls customer_name/phone/email on orders and
+  //      advance_orders older than 24 hours (SEC-005). Runs once on startup
+  //      then daily at PII_PURGE_HOUR (default 02:00 local time).
+  startAutoPurgePii()
 
   // 11. Auto-cancel DISABLED — orders must never be cancelled automatically.
   // Safety invariant: only explicit staff action (or customer self-cancel) may
@@ -789,6 +1065,9 @@ async function shutdown(signal: string) {
   stopAutoFire()
   stopDailyCloseout()
   stopFogReminders()
+  stopProcessorFeeSweep()
+  stopPrinterProbe()
+  stopHourlyMetrics()
   if (_refreshCleanupInterval) clearInterval(_refreshCleanupInterval)
   // Close Puppeteer browser if it was launched for HTML receipt rendering
   try {

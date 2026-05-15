@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Payment event logger
  *
  * Writes structured payment lifecycle events to the `payment_events` table.
@@ -21,11 +21,13 @@ export type PaymentEventType =
   | 'terminal_initiated'        // POST /terminal-sale succeeded — transfer created
   | 'terminal_succeeded'        // Poll detected SUCCEEDED state
   | 'terminal_failed'           // Poll detected FAILED state
-  | 'terminal_cancelled'        // Staff cancelled in-progress sale
+  | 'terminal_cancelled'                  // Staff cancelled in-progress sale
+  | 'terminal_abandoned_switch_to_cash'   // Staff switched from card to cash after customer changed mind
   | 'terminal_timeout'          // MAX_TERMINAL_POLLS reached in client
   | 'terminal_device_offline'   // Device connection !== 'Open' at initiation time
   | 'terminal_retry'            // Previous pending sale cancelled, fresh transfer initiated
   | 'terminal_error'            // Unexpected error initiating or polling terminal sale
+  | 'terminal_verification_pending'  // createTerminalSale HTTP failed — outcome awaits orphan-sweep verification by idempotency_id
   // Record-payment events
   | 'record_payment_start'      // POST /record-payment received
   | 'record_payment_success'    // Payment inserted and order updated successfully
@@ -46,6 +48,9 @@ export type PaymentEventType =
   | 'orphan_detected'           // Pending terminal sale found by sweep
   | 'orphan_recovered'          // Orphaned payment auto-created from Finix transfer
   | 'orphan_failed'             // Orphan sweep encountered an error
+  // Write-off / finalization events
+  | 'writeoff_unpaid'           // Unpaid balance written off as discount
+  | 'finalize_partial'          // Partial payment finalized (customer left)
 
 export type PaymentEventLevel = 'info' | 'warn' | 'error'
 

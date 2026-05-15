@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Square Menu Importer (stub)
  * Placeholder for future Square POS menu import integration.
  */

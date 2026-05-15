@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Background Sync client
  *
  * Wraps API calls for menu stock updates and order status changes.

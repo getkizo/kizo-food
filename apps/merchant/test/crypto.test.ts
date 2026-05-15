@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Cryptography layer tests
  * Tests master key, DEK, and API key encryption
  */

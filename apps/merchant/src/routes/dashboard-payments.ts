@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dashboard payment routes — in-person and online payment processing.
  *
  * ── SINGLE-MERCHANT APPLIANCE ──────────────────────────────────────────────
@@ -24,6 +24,15 @@
  *   POST /api/merchants/:id/payments/:paymentId/receipt   — print/email receipt after payment
  *   GET  /api/merchants/:id/orders/:orderId/detail        — order with full payments breakdown
  *
+ * ── Split-payment session (Phase 2: pause/resume) ─────────────────────────────
+ *   GET   /api/merchants/:id/orders/:orderId/split-session       — fetch active session for resume
+ *   PATCH /api/merchants/:id/orders/:orderId/split-session/pause — PIN-gated pause
+ *
+ * ── Partial-pay write-off (Phase 5: EOD reconciliation) ──────────────────────
+ *   GET  /api/merchants/:id/split-sessions?status=paused          — list paused sessions
+ *   POST /api/merchants/:id/orders/:orderId/writeoff-unpaid       — convert unpaid balance to discount, mark paid (manager PIN, paused only)
+ *   POST /api/merchants/:id/orders/:orderId/finalize-partial      — same math, in-modal "customer left" path (staff JWT, in_progress OK)
+ *
  * ── Reconciliation ────────────────────────────────────────────────────────────
  *   GET  /api/merchants/:id/payments/reconciliation       — list payments with Finix status
  *   POST /api/merchants/:id/payments/reconcile-pending    — re-run reconciliation for gaps
@@ -43,9 +52,9 @@ import { Hono } from 'hono'
 import { randomBytes } from 'node:crypto'
 import { getDatabase } from '../db/connection'
 import { authenticate, requireOwnMerchant, requireRole } from '../middleware/auth'
-import { getAPIKey, getPOSMerchantId } from '../crypto/api-keys'
+import { getAPIKey } from '../crypto/api-keys'
 import { getConvergePaymentUrl } from '../adapters/converge'
-import { createCheckoutForm, createTerminalSale, getTerminalTransferStatus, cancelTerminalSale, checkDeviceConnection, listDevices, createPaymentInstrumentFromToken, createCNPTransfer, FinixTransferCancelledError, updateDeviceTippingConfig } from '../adapters/finix'
+import { createCheckoutForm, getTerminalTransferStatus, cancelTerminalSale, checkDeviceConnection, listDevices, createPaymentInstrumentFromToken, createCNPTransfer, updateDeviceTippingConfig } from '../adapters/finix'
 import type { FinixCredentials } from '../adapters/finix'
 import { broadcastToMerchant } from '../services/sse'
 import { printCustomerReceipt } from '../services/printer'
@@ -53,8 +62,14 @@ import { sendReceiptEmail } from '../services/email'
 import { serverError } from '../utils/server-error'
 import { scheduleReconciliation, runReconciliation } from '../services/reconcile'
 import { logPaymentEvent } from '../services/payment-log'
+import { verifyEmployeePin, getRequestIp } from '../services/pin-auth'
 import { acquirePaymentLock, releasePaymentLock } from '../services/order-locks'
 import type { AuthContext } from '../middleware/auth'
+import {
+  startTerminalPaymentForDashboard,
+  cancelTerminalPaymentByOrder,
+  getTerminalTxStatus,
+} from '../workflows/terminal-payment'
 
 const dashboardPayments = new Hono()
 
@@ -71,7 +86,7 @@ dashboardPayments.get(
   '/api/merchants/:id/payments/config',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     // Converge credentials
@@ -98,8 +113,14 @@ dashboardPayments.get(
         converge_sandbox: number
         finix_sandbox: number
         finix_refund_mode: string
+        dine_in_provider: string
+        counter_provider: string
       }, [string]>(
-        `SELECT stax_token, converge_sandbox, finix_sandbox, COALESCE(finix_refund_mode, 'local') AS finix_refund_mode FROM merchants WHERE id = ?`
+        `SELECT stax_token, converge_sandbox, finix_sandbox,
+                COALESCE(finix_refund_mode, 'local') AS finix_refund_mode,
+                COALESCE(dine_in_provider, 'clover') AS dine_in_provider,
+                COALESCE(counter_provider, 'finix')  AS counter_provider
+         FROM merchants WHERE id = ?`
       )
       .get(merchantId)
 
@@ -117,7 +138,9 @@ dashboardPayments.get(
 
     return c.json({
       clover: {
-        enabled: !!(process.env.CLOVER_MERCHANT_ID && process.env.CLOVER_API_TOKEN),
+        enabled:         !!(process.env.CLOVER_MERCHANT_ID && process.env.CLOVER_API_TOKEN),
+        dineInProvider:  merchantRow?.dine_in_provider ?? 'clover',
+        counterProvider: merchantRow?.counter_provider ?? 'finix',
       },
       stax: {
         enabled: !!merchantRow?.stax_token,
@@ -188,7 +211,7 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const body = await c.req.json()
@@ -272,7 +295,7 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
       const body = await c.req.json()
@@ -560,8 +583,8 @@ dashboardPayments.post(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
     const db = getDatabase()
 
     // Validate order belongs to this merchant and is not already paid/cancelled
@@ -596,9 +619,20 @@ dashboardPayments.post(
     if (!order) return c.json({ error: 'Order not found' }, 404)
     if (order.status === 'paid' || order.status === 'cancelled' || order.status === 'refunded') {
       const existing = db
-        .query<{ id: string }, [string]>(`SELECT id FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .query<{ id: string; split_leg_number: number | null; split_total_legs: number | null }, [string]>(
+          `SELECT id, split_leg_number, split_total_legs
+           FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`
+        )
         .get(orderId)
-      return c.json({ error: `Order is already ${order.status}`, paymentId: existing?.id ?? null }, 409)
+      // Surface whether the existing payment was a final leg so the frontend
+      // can decide between LEG_COMPLETE (continue split) and PIN_EXIT (close).
+      const existingIsLastLeg = !existing?.split_total_legs
+        || (existing.split_leg_number ?? 1) >= (existing.split_total_legs ?? 1)
+      return c.json({
+        error: `Order is already ${order.status}`,
+        paymentId: existing?.id ?? null,
+        isLastLeg: existingIsLastLeg,
+      }, 409)
     }
 
     let body: {
@@ -673,27 +707,73 @@ dashboardPayments.post(
     }
 
     // H-06: Validate split payment fields when present
+    let byItemsLegIndices: number[] = []
     if (splitMode) {
       const VALID_SPLIT_MODES = ['equal', 'by_items', 'custom', 'gift_card']
       if (!VALID_SPLIT_MODES.includes(splitMode)) {
         return c.json({ error: `splitMode must be one of: ${VALID_SPLIT_MODES.join(', ')}` }, 400)
       }
-      if (!Number.isInteger(splitLegNumber) || splitLegNumber < 1 || splitLegNumber > 10) {
+      if (splitLegNumber == null || !Number.isInteger(splitLegNumber) || splitLegNumber < 1 || splitLegNumber > 10) {
         return c.json({ error: 'splitLegNumber must be an integer between 1 and 10' }, 400)
       }
-      if (!Number.isInteger(splitTotalLegs) || splitTotalLegs < 2 || splitTotalLegs > 10) {
-        return c.json({ error: 'splitTotalLegs must be an integer between 2 and 10' }, 400)
-      }
-      if (splitLegNumber > splitTotalLegs) {
-        return c.json({ error: 'splitLegNumber cannot exceed splitTotalLegs' }, 400)
+
+      if (splitMode === 'by_items') {
+        // splitTotalLegs is optional/ignored: completion is derived from
+        // unit coverage. Index space is unit-level — a line with quantity N
+        // contributes N distinct unit indices so each can be assigned to a
+        // different leg (e.g. two customers each ordering Peanut Sauce).
+        if (!splitItemsJson) {
+          return c.json({ error: 'splitItemsJson is required for by_items split' }, 400)
+        }
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(splitItemsJson)
+        } catch {
+          return c.json({ error: 'splitItemsJson must be valid JSON' }, 400)
+        }
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          return c.json({ error: 'splitItemsJson must be a non-empty array of item indices' }, 400)
+        }
+        const totalUnits = (JSON.parse(order.items) as Array<{ quantity?: number }>)
+          .reduce((s, it) => s + Math.max(1, it.quantity ?? 1), 0)
+        const seen = new Set<number>()
+        for (const idx of parsed) {
+          if (!Number.isInteger(idx) || idx < 0 || idx >= totalUnits) {
+            return c.json({ error: `splitItemsJson contains invalid item index: ${idx}` }, 400)
+          }
+          if (seen.has(idx as number)) {
+            return c.json({ error: `splitItemsJson contains duplicate item index: ${idx}` }, 400)
+          }
+          seen.add(idx as number)
+        }
+        byItemsLegIndices = Array.from(seen)
+      } else {
+        // equal / custom / gift_card still use a fixed leg count
+        if (splitTotalLegs == null || !Number.isInteger(splitTotalLegs) || splitTotalLegs < 2 || splitTotalLegs > 10) {
+          return c.json({ error: 'splitTotalLegs must be an integer between 2 and 10' }, 400)
+        }
+        if (splitLegNumber > splitTotalLegs) {
+          return c.json({ error: 'splitLegNumber cannot exceed splitTotalLegs' }, 400)
+        }
       }
     }
 
-    // isLastLeg: true for unsplit payments, or when this is the final split leg
-    const isLastLeg = !splitMode ||
-      (splitLegNumber ?? 1) >= (splitTotalLegs ?? 1)
+    // isLastLeg: true for unsplit payments, or when this is the final split leg.
+    // For by_items, completion depends on prior payments — that read must
+    // happen INSIDE the transaction (see "Issue 2 fix" below) to prevent
+    // two concurrent legs with non-overlapping items from both passing the
+    // overlap check and creating duplicate item coverage. We compute
+    // isLastLeg up-front for non-by_items, defer it for by_items.
+    let isLastLeg: boolean
+    if (!splitMode) {
+      isLastLeg = true
+    } else if (splitMode === 'by_items') {
+      isLastLeg = false  // placeholder; reassigned inside the transaction
+    } else {
+      isLastLeg = (splitLegNumber ?? 1) >= (splitTotalLegs ?? 1)
+    }
 
-    const paymentId = `pay_${randomBytes(16).toString('hex')}`
+    let paymentId = `pay_${randomBytes(16).toString('hex')}`
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
     const signatureCapturedAt = signatureBase64 ? now : null
 
@@ -726,9 +806,50 @@ dashboardPayments.post(
           message: `Order is already ${currentStatus.status} — duplicate record-payment ignored`,
         })
         const existing = db
-          .query<{ id: string }, [string]>(`SELECT id FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`)
+          .query<{ id: string; split_leg_number: number | null; split_total_legs: number | null }, [string]>(
+            `SELECT id, split_leg_number, split_total_legs
+             FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1`
+          )
           .get(orderId)
-        return c.json({ error: `Order is already ${currentStatus.status}`, paymentId: existing?.id ?? null }, 409)
+        const existingIsLastLeg = !existing?.split_total_legs
+          || (existing.split_leg_number ?? 1) >= (existing.split_total_legs ?? 1)
+        return c.json({
+          error: `Order is already ${currentStatus.status}`,
+          paymentId: existing?.id ?? null,
+          isLastLeg: existingIsLastLeg,
+        }, 409)
+      }
+
+      // ── Issue 2 fix: by_items overlap + isLastLeg derivation inside txn ──
+      // Two concurrent record-payment calls with non-overlapping items
+      // (e.g. legs `[0,1]` and `[1,2]`) could both pass an overlap check
+      // performed before BEGIN, then both insert and create duplicate
+      // coverage. By reading priorIndices under the transaction's write
+      // lock we serialize the check.
+      if (splitMode === 'by_items') {
+        const totalUnits = (JSON.parse(order.items) as Array<{ quantity?: number }>)
+          .reduce((s, it) => s + Math.max(1, it.quantity ?? 1), 0)
+        const priorIndices = new Set<number>()
+        const priorLegs = db
+          .query<{ split_items_json: string | null }, [string]>(
+            `SELECT split_items_json FROM payments
+             WHERE order_id = ? AND split_mode = 'by_items' AND split_items_json IS NOT NULL`
+          )
+          .all(orderId)
+        for (const leg of priorLegs) {
+          try {
+            const arr = JSON.parse(leg.split_items_json ?? '[]') as number[]
+            for (const i of arr) priorIndices.add(i)
+          } catch { /* malformed legacy row — skip */ }
+        }
+        for (const idx of byItemsLegIndices) {
+          if (priorIndices.has(idx)) {
+            db.exec('ROLLBACK')
+            return c.json({ error: `Item index ${idx} has already been paid in a prior leg` }, 409)
+          }
+          priorIndices.add(idx)
+        }
+        isLastLeg = priorIndices.size === totalUnits
       }
 
       // ── Gift card: validate and debit balance inside the transaction ──────
@@ -787,8 +908,12 @@ dashboardPayments.post(
       // Insert payment record
       // For Finix card-present payments transactionId is the Finix transfer ID (TR_…).
       // Store it in finix_transfer_id so reconciliation can short-circuit immediately.
-      const finixTransferId = processor === 'finix' ? (transactionId ?? null) : null
-      db.run(
+      // Note: the dashboard modal never sends `processor`, so processor is null for all
+      // modal recordings. Always populate finix_transfer_id from transactionId —
+      // the `record-payment` endpoint is only called by the modal (never for Clover
+      // payments, which are recorded server-side with processor='clover').
+      const finixTransferId = (processor !== 'clover') ? (transactionId ?? null) : null
+      const insertResult = db.run(
         `INSERT INTO payments (
           id, order_id, merchant_id, payment_type, amount_cents,
           subtotal_cents, tax_cents, tip_cents, amex_surcharge_cents, gratuity_percent,
@@ -799,7 +924,8 @@ dashboardPayments.post(
           split_mode, split_leg_number, split_total_legs, split_items_json,
           gift_card_id, gift_card_tax_offset_cents,
           receipt_email, created_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (order_id, finix_transfer_id) DO NOTHING`,
         [
           paymentId, orderId, merchantId, paymentType, totalCents,
           subtotalCents, taxCents, tipCents, amexSurchargeCents, gratuityPercent ?? null,
@@ -813,23 +939,46 @@ dashboardPayments.post(
         ]
       )
 
+      // Recovery path (recordTerminalPayment) may have already inserted this
+      // payment row. Rebind paymentId to the existing row so all downstream
+      // references (scheduleReconciliation, response) are consistent.
+      if (insertResult.changes === 0 && finixTransferId) {
+        const existing = db
+          .query<{ id: string }, [string, string]>(
+            `SELECT id FROM payments WHERE order_id = ? AND finix_transfer_id = ? LIMIT 1`
+          )
+          .get(orderId, finixTransferId)
+        if (existing) paymentId = existing.id
+      }
+
       // Only mark order paid on the final leg
       if (isLastLeg) {
-        // For split payments, accumulate totals across all legs (including this one).
-        // The current leg's payment row was already inserted above, so the SUM
-        // covers every leg. For unsplit payments the SUM equals this leg's values.
+        // Accumulate totals across all legs (the row inserted above is included).
+        // For unsplit payments the SUM equals this leg's values.
         const totals = db
-          .query<{ total_paid: number; total_tips: number; total_tax: number }, [string]>(
-            `SELECT COALESCE(SUM(amount_cents), 0) AS total_paid,
-                    COALESCE(SUM(tip_cents), 0)    AS total_tips,
-                    COALESCE(SUM(tax_cents), 0)    AS total_tax
+          .query<{ total_paid: number; total_tips: number; total_surcharge: number }, [string]>(
+            `SELECT COALESCE(SUM(amount_cents), 0)         AS total_paid,
+                    COALESCE(SUM(tip_cents), 0)            AS total_tips,
+                    COALESCE(SUM(amex_surcharge_cents), 0) AS total_surcharge
              FROM payments WHERE order_id = ?`
           )
           .get(orderId)
 
-        const finalTax  = totals?.total_tax  ?? taxCents
-        const finalTips = totals?.total_tips ?? tipCents
-        const finalPaid = totals?.total_paid ?? totalCents
+        // Why: per-leg payments.tax_cents is not authoritative for the order's
+        // tax. For splitMode='equal'/'custom' each leg sends 0 (tax embedded in
+        // the subtotal); for 'by_items' the per-leg round() can drift ±N¢ vs.
+        // round(orderSubtotal × taxRate). The order's tax was correctly rounded
+        // at creation — preserve it verbatim regardless of split mode.
+        const finalTax       = order.tax_cents
+        const finalTips      = totals?.total_tips      ?? tipCents
+        const finalPaid      = totals?.total_paid      ?? totalCents
+        const finalSurcharge = totals?.total_surcharge ?? amexSurchargeCents
+        // Mirror the order-creation/edit formula in dashboard-orders.ts:560-562
+        // so total_cents includes discount and service charge alongside the
+        // preserved tax — otherwise discounted/serviced orders drift on payment.
+        const finalTotal     = order.subtotal_cents - order.discount_cents
+                             + order.service_charge_cents + finalTax
+                             + finalTips + finalSurcharge
 
         db.run(
           `UPDATE orders
@@ -841,8 +990,74 @@ dashboardPayments.post(
                payment_method = ?,
                updated_at = ?
            WHERE id = ?`,
-          [finalTips, finalTax, finalPaid, finalPaid, paymentType, now, orderId]
+          [finalTips, finalTax, finalTotal, finalPaid, paymentType, now, orderId]
         )
+      }
+
+      // ── Phase 2: UPSERT order_split_sessions ──────────────────────────────
+      // Track multi-leg splits (equal/by_items/custom) so staff can pause
+      // and resume from any device. gift_card and unsplit payments are not
+      // tracked here.
+      if (splitMode === 'equal' || splitMode === 'by_items' || splitMode === 'custom') {
+        const legBase = subtotalCents + taxCents
+        const sessionStatus = isLastLeg ? 'completed' : 'in_progress'
+        const expectedTotal = splitMode === 'by_items' ? null : (splitTotalLegs ?? null)
+
+        const existing = db
+          .query<{
+            paid_leg_bases_json: string
+            paid_indices_json: string
+            status: string
+          }, [string]>(
+            `SELECT paid_leg_bases_json, paid_indices_json, status
+             FROM order_split_sessions WHERE order_id = ?`
+          )
+          .get(orderId)
+
+        if (existing) {
+          if (existing.status === 'completed') {
+            db.exec('ROLLBACK')
+            return c.json({ error: 'Split session is already completed' }, 409)
+          }
+          const bases: number[] = JSON.parse(existing.paid_leg_bases_json)
+          bases.push(legBase)
+          const indices: number[] = JSON.parse(existing.paid_indices_json)
+          if (splitMode === 'by_items') {
+            for (const i of byItemsLegIndices) indices.push(i)
+          }
+          // current_leg_number = "next leg to pay" = paid count + 1.
+          // Derived from data so it stays consistent with paid_leg_bases.length
+          // regardless of what splitLegNumber the client sent.
+          const nextLegNumber = bases.length + 1
+          db.run(
+            `UPDATE order_split_sessions
+             SET paid_leg_bases_json = ?,
+                 paid_indices_json = ?,
+                 current_leg_number = ?,
+                 status = ?,
+                 paused_at = NULL,
+                 paused_by_employee_id = NULL,
+                 updated_at = ?
+             WHERE order_id = ?`,
+            [JSON.stringify(bases), JSON.stringify(indices), nextLegNumber, sessionStatus, now, orderId]
+          )
+        } else {
+          // First leg of a new session: paid count is 1, so next leg = 2.
+          db.run(
+            `INSERT INTO order_split_sessions (
+               order_id, merchant_id, split_mode, expected_total_legs,
+               current_leg_number, paid_leg_bases_json, paid_indices_json,
+               status, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              orderId, merchantId, splitMode, expectedTotal,
+              2,
+              JSON.stringify([legBase]),
+              JSON.stringify(splitMode === 'by_items' ? byItemsLegIndices : []),
+              sessionStatus, now, now,
+            ]
+          )
+        }
       }
 
       db.exec('COMMIT')
@@ -870,6 +1085,24 @@ dashboardPayments.post(
       // Fire-and-forget — email failure must never block the payment response.
       sendReceiptEmail(merchantId, orderId)
         .catch(err => console.warn('[email] Receipt failed for order', orderId, err?.message ?? err))
+
+      // Mark prior terminal_cancelled rows for this order as "superseded".
+      // These are the CANCELLATION_VIA_API rows that accumulate from customer-
+      // changed-mind, auto-retry, or device-X cancellations. Now that the order
+      // is paid, those cancels were just retry noise — hide them from audit views.
+      // Best-effort: a failure here must never block the payment response.
+      try {
+        db.run(
+          `UPDATE payment_errors
+           SET superseded_at = datetime('now')
+           WHERE order_id = ?
+             AND error_type = 'terminal_cancelled'
+             AND superseded_at IS NULL`,
+          [orderId]
+        )
+      } catch (err) {
+        console.warn('[record-payment] supersede sweep failed for', orderId, (err as Error)?.message ?? err)
+      }
     }
 
     // Schedule Finix reconciliation 60 s after payment is recorded
@@ -892,6 +1125,683 @@ dashboardPayments.post(
   }
 )
 
+// ─── Phase 2: Split-payment session (pause/resume) ──────────────────────────
+
+type SplitSessionRow = {
+  order_id:              string
+  merchant_id:           string
+  split_mode:            string
+  expected_total_legs:   number | null
+  current_leg_number:    number
+  paid_leg_bases_json:   string
+  paid_indices_json:     string
+  status:                string
+  paused_at:             string | null
+  paused_by_employee_id: string | null
+  created_at:            string
+  updated_at:            string
+}
+
+/**
+ * GET /api/merchants/:id/orders/:orderId/split-session
+ *
+ * Returns the active (in_progress or paused) split session for the order.
+ * Returns 404 when there is no session, or only a completed one — completed
+ * sessions are intentionally hidden so the modal does not offer to "resume"
+ * an already-paid order.
+ */
+dashboardPayments.get(
+  '/api/merchants/:id/orders/:orderId/split-session',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
+    const db = getDatabase()
+
+    const session = db
+      .query<SplitSessionRow, [string, string]>(
+        `SELECT order_id, merchant_id, split_mode, expected_total_legs,
+                current_leg_number, paid_leg_bases_json, paid_indices_json,
+                status, paused_at, paused_by_employee_id, created_at, updated_at
+         FROM order_split_sessions
+         WHERE order_id = ? AND merchant_id = ?
+           AND status IN ('in_progress','paused')`
+      )
+      .get(orderId, merchantId)
+
+    if (!session) return c.json({ error: 'No active split session for this order' }, 404)
+
+    return c.json({
+      orderId:            session.order_id,
+      splitMode:          session.split_mode,
+      expectedTotalLegs:  session.expected_total_legs,
+      currentLegNumber:   session.current_leg_number,
+      paidLegBases:       JSON.parse(session.paid_leg_bases_json) as number[],
+      paidIndices:        JSON.parse(session.paid_indices_json) as number[],
+      status:             session.status,
+      pausedAt:           session.paused_at,
+      pausedByEmployeeId: session.paused_by_employee_id,
+      createdAt:          session.created_at,
+      updatedAt:          session.updated_at,
+    })
+  }
+)
+
+/**
+ * PATCH /api/merchants/:id/orders/:orderId/split-session/pause
+ *
+ * Marks an in-progress split session as `paused`. Requires a valid 4-digit
+ * staff PIN; any active employee at the merchant qualifies. The session is
+ * automatically resumed (status → in_progress) on the next record-payment.
+ *
+ * @param body.pin - 4-digit employee PIN
+ * @returns 200 `{ success, pausedAt, pausedByEmployeeId }` on success
+ *          400 invalid pin · 401 wrong pin · 404 no session · 409 not in_progress
+ */
+dashboardPayments.patch(
+  '/api/merchants/:id/orders/:orderId/split-session/pause',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
+
+    let body: { pin?: string }
+    try { body = await c.req.json() } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+
+    const ip = getRequestIp({
+      cfConnectingIp: c.req.header('cf-connecting-ip') ?? null,
+      xForwardedFor:  c.req.header('x-forwarded-for') ?? null,
+    })
+    const pinResult = verifyEmployeePin({ merchantId, pin: body.pin ?? '', ip })
+    if (!pinResult.ok) {
+      return c.json({ error: pinResult.error }, pinResult.status)
+    }
+
+    const db = getDatabase()
+    const session = db
+      .query<{ status: string }, [string, string]>(
+        `SELECT status FROM order_split_sessions WHERE order_id = ? AND merchant_id = ?`
+      )
+      .get(orderId, merchantId)
+    if (!session) return c.json({ error: 'No split session for this order' }, 404)
+    if (session.status !== 'in_progress') {
+      return c.json({ error: `Cannot pause session in state '${session.status}'` }, 409)
+    }
+
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
+    db.run(
+      `UPDATE order_split_sessions
+       SET status = 'paused',
+           paused_at = ?,
+           paused_by_employee_id = ?,
+           updated_at = ?
+       WHERE order_id = ?`,
+      [now, pinResult.employee.id, now, orderId]
+    )
+
+    return c.json({ success: true, pausedAt: now, pausedByEmployeeId: pinResult.employee.id })
+  }
+)
+
+// ─── Phase 5: Partial-pay write-off (EOD reconciliation) ────────────────────
+
+/**
+ * GET /api/merchants/:id/split-sessions?status=paused
+ *
+ * Lists open split sessions for the merchant, joined with order summary.
+ * Default `status` filter is `paused` (the EOD writeoff use case); pass
+ * `status=in_progress` or `status=any` to see other states.
+ *
+ * Each entry includes: order summary, paid_total / paid_pre_tip totals so
+ * the dashboard can display "$X paid of $Y · write off the remaining $Z?"
+ * without making N+1 follow-up calls.
+ */
+dashboardPayments.get(
+  '/api/merchants/:id/split-sessions',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const statusParam = c.req.query('status') ?? 'paused'
+
+    const validStatuses = new Set(['in_progress', 'paused', 'any'])
+    if (!validStatuses.has(statusParam)) {
+      return c.json({ error: `status must be one of: in_progress, paused, any` }, 400)
+    }
+
+    const db = getDatabase()
+    type Row = {
+      order_id:                  string
+      split_mode:                string
+      expected_total_legs:       number | null
+      current_leg_number:        number
+      paid_leg_bases_json:       string
+      paid_indices_json:         string
+      status:                    string
+      paused_at:                 string | null
+      paused_by_employee_id:     string | null
+      created_at:                string
+      updated_at:                string
+      customer_name:             string
+      table_label:               string | null
+      order_subtotal_cents:      number
+      order_tax_cents:           number
+      order_total_cents:         number
+      order_discount_cents:      number
+      order_service_charge_cents: number
+      order_status:              string
+      paid_total_cents:          number
+      paid_tip_cents:            number
+      paid_surcharge_cents:      number
+    }
+
+    // LIMIT 100: defense against runaway lists if a busy bar accumulates
+    // many paused tabs over a weekend. EOD reconciliation realistically
+    // touches <20 sessions; 100 is comfortable headroom.
+    const sql = `
+      SELECT s.order_id, s.split_mode, s.expected_total_legs, s.current_leg_number,
+             s.paid_leg_bases_json, s.paid_indices_json, s.status,
+             s.paused_at, s.paused_by_employee_id, s.created_at, s.updated_at,
+             o.customer_name, o.table_label,
+             o.subtotal_cents       AS order_subtotal_cents,
+             o.tax_cents            AS order_tax_cents,
+             o.total_cents          AS order_total_cents,
+             COALESCE(o.discount_cents, 0)        AS order_discount_cents,
+             COALESCE(o.service_charge_cents, 0)  AS order_service_charge_cents,
+             o.status                             AS order_status,
+             COALESCE((SELECT SUM(amount_cents)         FROM payments WHERE order_id = s.order_id), 0) AS paid_total_cents,
+             COALESCE((SELECT SUM(tip_cents)            FROM payments WHERE order_id = s.order_id), 0) AS paid_tip_cents,
+             COALESCE((SELECT SUM(amex_surcharge_cents) FROM payments WHERE order_id = s.order_id), 0) AS paid_surcharge_cents
+      FROM order_split_sessions s
+      JOIN orders o ON o.id = s.order_id
+      WHERE s.merchant_id = ?
+        ${statusParam === 'any' ? '' : `AND s.status = ?`}
+      ORDER BY s.updated_at DESC
+      LIMIT 100
+    `
+
+    const rows = statusParam === 'any'
+      ? db.query<Row, [string]>(sql).all(merchantId)
+      : db.query<Row, [string, string]>(sql).all(merchantId, statusParam)
+
+    return c.json({
+      sessions: rows.map((r) => {
+        const paidPreTip   = r.paid_total_cents - r.paid_tip_cents - r.paid_surcharge_cents
+        // Mirror the writeoff endpoint's math so dashboard previews show
+        // the actual write-off amount, not an approximation.
+        const taxedBase    = r.order_subtotal_cents - r.order_discount_cents + r.order_service_charge_cents
+        const unpaidBase   = Math.max(0, taxedBase + r.order_tax_cents - paidPreTip)
+
+        return {
+          orderId:            r.order_id,
+          splitMode:          r.split_mode,
+          expectedTotalLegs:  r.expected_total_legs,
+          currentLegNumber:   r.current_leg_number,
+          paidLegBases:       JSON.parse(r.paid_leg_bases_json) as number[],
+          paidIndices:        JSON.parse(r.paid_indices_json)   as number[],
+          status:             r.status,
+          pausedAt:           r.paused_at,
+          pausedByEmployeeId: r.paused_by_employee_id,
+          createdAt:          r.created_at,
+          updatedAt:          r.updated_at,
+          order: {
+            customerName:        r.customer_name,
+            tableLabel:          r.table_label,
+            subtotalCents:       r.order_subtotal_cents,
+            taxCents:            r.order_tax_cents,
+            totalCents:          r.order_total_cents,
+            discountCents:       r.order_discount_cents,
+            serviceChargeCents:  r.order_service_charge_cents,
+            status:              r.order_status,
+          },
+          paidTotalCents:     r.paid_total_cents,
+          paidTipCents:       r.paid_tip_cents,
+          paidSurchargeCents: r.paid_surcharge_cents,
+          paidPreTipCents:    paidPreTip,
+          // Pre-computed preview total for the dashboard write-off button.
+          // Authoritative amount is still computed server-side at writeoff time.
+          unpaidBaseCents:    unpaidBase,
+        }
+      }),
+    })
+  }
+)
+
+/**
+ * POST /api/merchants/:id/orders/:orderId/writeoff-unpaid
+ *
+ * Reconciles a paused split session as fully paid by writing off the unpaid
+ * balance as a discount. After this:
+ *   - `orders.discount_cents` is increased by the unpaid amount
+ *   - `orders.tax_cents` is recomputed on the new (discounted) base
+ *   - `orders.total_cents` matches `paid_amount_cents` (sum of legs)
+ *   - `orders.status` becomes `paid`, `tip_cents` reflects sum of leg tips
+ *   - `order_split_sessions.status` becomes `completed`
+ *
+ * The math (preserves sales-tax integrity):
+ *   target_pre_tip = SUM(payments.amount_cents - tip_cents - amex_surcharge_cents)
+ *   new_taxed_base = round(target_pre_tip / (1 + taxRate))
+ *   added_discount = subtotal + service_charge - existing_discount - new_taxed_base
+ *   new_tax        = target_pre_tip - new_taxed_base
+ *
+ * Manager-PIN-gated. Caller must:
+ *   1. Have a JWT with `owner` or `manager` role (dashboard session).
+ *   2. Provide a 4-digit `pin` belonging to an `owner` or `manager` employee
+ *      at this merchant. Rate-limited identically to /employees/authenticate.
+ * The PIN gate exists so an unattended manager-logged-in tablet can't be
+ * abused by staff to silently zero out unpaid balances.
+ *
+ * Errors:
+ *   400 — bad JSON / bad pin format
+ *   401 — wrong PIN / PIN belongs to non-manager employee
+ *   404 — order or session missing
+ *   409 — session not paused, or order not in a paused-eligible status
+ *   422 — paid amount exceeds order total (math invariant violated)
+ *   429 — PIN rate-limit lockout
+ */
+dashboardPayments.post(
+  '/api/merchants/:id/orders/:orderId/writeoff-unpaid',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
+
+    let body: { pin?: string }
+    try { body = await c.req.json() } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    const ip = getRequestIp({
+      cfConnectingIp: c.req.header('cf-connecting-ip') ?? null,
+      xForwardedFor:  c.req.header('x-forwarded-for') ?? null,
+    })
+    const pinResult = verifyEmployeePin({
+      merchantId,
+      pin: body.pin ?? '',
+      ip,
+      allowedRoles: ['owner', 'manager'],
+    })
+    if (!pinResult.ok) {
+      return c.json({ error: pinResult.error }, pinResult.status)
+    }
+
+    const db = getDatabase()
+
+    // ── Reads + writes inside a single transaction (concurrency fix) ────────
+    // Without this, a concurrent record-payment could complete the order
+    // between our session-status read and the order UPDATE, leading to a
+    // double-paid status and a broken total.
+    let result: {
+      addedDiscount:   number
+      newDiscount:     number
+      newDiscountLabel: string
+      newTax:          number
+      newTotal:        number
+      paidTotal:       number
+      paidTips:        number
+      paidSurcharge:   number
+      paidPreTip:      number
+    }
+    try {
+      db.exec('BEGIN')
+
+      const session = db
+        .query<{ status: string }, [string, string]>(
+          `SELECT status FROM order_split_sessions WHERE order_id = ? AND merchant_id = ?`
+        )
+        .get(orderId, merchantId)
+      if (!session) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'No split session for this order' }, 404)
+      }
+      if (session.status !== 'paused') {
+        db.exec('ROLLBACK')
+        return c.json({ error: `Cannot write off session in state '${session.status}'` }, 409)
+      }
+
+      const order = db
+        .query<{
+          id:                   string
+          status:               string
+          subtotal_cents:       number
+          tax_cents:            number
+          total_cents:          number
+          discount_cents:       number
+          discount_label:       string | null
+          service_charge_cents: number
+        }, [string, string]>(
+          `SELECT id, status, subtotal_cents, tax_cents, total_cents,
+                  COALESCE(discount_cents, 0) AS discount_cents, discount_label,
+                  COALESCE(service_charge_cents, 0) AS service_charge_cents
+           FROM orders WHERE id = ? AND merchant_id = ?`
+        )
+        .get(orderId, merchantId)
+      if (!order) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'Order not found' }, 404)
+      }
+      if (order.status === 'paid' || order.status === 'cancelled' || order.status === 'refunded') {
+        db.exec('ROLLBACK')
+        return c.json({ error: `Order is already ${order.status}` }, 409)
+      }
+
+      const merchantRow = db
+        .query<{ tax_rate: number | null }, [string]>(
+          `SELECT tax_rate FROM merchants WHERE id = ?`
+        )
+        .get(merchantId)
+      const taxRate = merchantRow?.tax_rate ?? 0
+
+      const totals = db
+        .query<{ paid_total: number; paid_tips: number; paid_surcharge: number }, [string]>(
+          `SELECT COALESCE(SUM(amount_cents), 0)         AS paid_total,
+                  COALESCE(SUM(tip_cents), 0)            AS paid_tips,
+                  COALESCE(SUM(amex_surcharge_cents), 0) AS paid_surcharge
+           FROM payments WHERE order_id = ?`
+        )
+        .get(orderId)
+
+      const paidTotal     = totals?.paid_total     ?? 0
+      const paidTips      = totals?.paid_tips      ?? 0
+      const paidSurcharge = totals?.paid_surcharge ?? 0
+      const paidPreTip    = paidTotal - paidTips - paidSurcharge
+
+      if (paidPreTip < 0) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'Internal error: tips/surcharge exceed total paid' }, 422)
+      }
+
+      // newTaxedBase = round(paidPreTip / (1 + taxRate)). With taxRate=0
+      // the divisor is 1, so newTaxedBase === paidPreTip and newTax === 0.
+      const newTaxedBase = Math.round(paidPreTip / (1 + taxRate))
+      const newTax       = paidPreTip - newTaxedBase
+      const existingTaxedBase = order.subtotal_cents - order.discount_cents + order.service_charge_cents
+      const addedDiscount = existingTaxedBase - newTaxedBase
+
+      if (addedDiscount < 0) {
+        db.exec('ROLLBACK')
+        return c.json({
+          error: 'Paid amount already covers the full bill — nothing to write off',
+          paidPreTipCents: paidPreTip,
+          existingTaxedBaseCents: existingTaxedBase,
+        }, 422)
+      }
+
+      const newDiscount = order.discount_cents + addedDiscount
+      const newDiscountLabel = order.discount_label
+        ? `${order.discount_label} + Unpaid balance write-off`
+        : 'Unpaid balance write-off'
+      const newTotal = newTaxedBase + newTax + paidTips + paidSurcharge   // = paidTotal
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
+
+      db.run(
+        `UPDATE orders
+         SET status = 'paid',
+             discount_cents = ?,
+             discount_label = ?,
+             tax_cents = ?,
+             tip_cents = ?,
+             total_cents = ?,
+             paid_amount_cents = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [newDiscount, newDiscountLabel, newTax, paidTips, newTotal, paidTotal, now, orderId]
+      )
+
+      db.run(
+        `UPDATE order_split_sessions
+         SET status = 'completed', updated_at = ?
+         WHERE order_id = ?`,
+        [now, orderId]
+      )
+
+      db.exec('COMMIT')
+
+      result = {
+        addedDiscount, newDiscount, newDiscountLabel, newTax, newTotal,
+        paidTotal, paidTips, paidSurcharge, paidPreTip,
+      }
+    } catch (err) {
+      try { db.exec('ROLLBACK') } catch {}
+      return serverError(c, '[writeoff-unpaid] DB write failed', err, 'Failed to apply write-off')
+    }
+
+    logPaymentEvent('writeoff_unpaid', {
+      merchantId, orderId, amountCents: result.addedDiscount,
+      message: `Unpaid balance written off as discount: ${(result.addedDiscount / 100).toFixed(2)}`,
+      extra: {
+        newDiscountLabel: result.newDiscountLabel,
+        paidTotal: result.paidTotal,
+        paidPreTip: result.paidPreTip,
+        newTax:    result.newTax,
+        approvedByEmployeeId: pinResult.employee.id,
+      },
+    })
+
+    // SSE: include the recomputed fields so other tabs/devices can update
+    // without re-fetching the full order.
+    broadcastToMerchant(merchantId, 'order_updated', {
+      orderId,
+      status:           'paid',
+      tipCents:         result.paidTips,
+      totalCents:       result.newTotal,
+      discountCents:    result.newDiscount,
+      paidAmountCents:  result.paidTotal,
+    })
+
+    return c.json({
+      success:                true,
+      addedDiscountCents:     result.addedDiscount,
+      newDiscountCents:       result.newDiscount,
+      newDiscountLabel:       result.newDiscountLabel,
+      newTaxCents:            result.newTax,
+      newTotalCents:          result.newTotal,
+      paidAmountCents:        result.paidTotal,
+      paidTipCents:           result.paidTips,
+      paidSurchargeCents:     result.paidSurcharge,
+      approvedByEmployeeId:   pinResult.employee.id,
+    })
+  }
+)
+
+/**
+ * POST /api/merchants/:id/orders/:orderId/finalize-partial
+ *
+ * In-modal "customer left" path: staff invokes this from the EXIT_CONFIRM_SPLIT
+ * screen when the customer is leaving mid-split with no intention of paying
+ * the remainder. Applies the unpaid balance as a discount, marks the order
+ * paid, marks the session completed — same math as writeoff-unpaid but
+ * accepts `in_progress` sessions (the EOD writeoff requires `paused`).
+ *
+ * Staff JWT only — no PIN gate. The customer is in front of the staff
+ * member, the discount is small, and the alternative is the staff getting
+ * stuck mid-modal with a freed table they can't actually free.
+ *
+ * Errors:
+ *   404 — order or session missing
+ *   409 — order already paid/cancelled/refunded, or session already completed
+ *   422 — paid amount exceeds order total (math invariant violated)
+ */
+dashboardPayments.post(
+  '/api/merchants/:id/orders/:orderId/finalize-partial',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
+    const db = getDatabase()
+
+    let result: {
+      addedDiscount:    number
+      newDiscount:      number
+      newDiscountLabel: string
+      newTax:           number
+      newTotal:         number
+      paidTotal:        number
+      paidTips:         number
+      paidSurcharge:    number
+    }
+
+    try {
+      db.exec('BEGIN')
+
+      const session = db
+        .query<{ status: string }, [string, string]>(
+          `SELECT status FROM order_split_sessions WHERE order_id = ? AND merchant_id = ?`
+        )
+        .get(orderId, merchantId)
+      if (!session) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'No split session for this order' }, 404)
+      }
+      if (session.status === 'completed') {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'Split session is already completed' }, 409)
+      }
+
+      const order = db
+        .query<{
+          id:                   string
+          status:               string
+          subtotal_cents:       number
+          tax_cents:            number
+          total_cents:          number
+          discount_cents:       number
+          discount_label:       string | null
+          service_charge_cents: number
+        }, [string, string]>(
+          `SELECT id, status, subtotal_cents, tax_cents, total_cents,
+                  COALESCE(discount_cents, 0) AS discount_cents, discount_label,
+                  COALESCE(service_charge_cents, 0) AS service_charge_cents
+           FROM orders WHERE id = ? AND merchant_id = ?`
+        )
+        .get(orderId, merchantId)
+      if (!order) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'Order not found' }, 404)
+      }
+      if (order.status === 'paid' || order.status === 'cancelled' || order.status === 'refunded') {
+        db.exec('ROLLBACK')
+        return c.json({ error: `Order is already ${order.status}` }, 409)
+      }
+
+      const merchantRow = db
+        .query<{ tax_rate: number | null }, [string]>(
+          `SELECT tax_rate FROM merchants WHERE id = ?`
+        )
+        .get(merchantId)
+      const taxRate = merchantRow?.tax_rate ?? 0
+
+      const totals = db
+        .query<{ paid_total: number; paid_tips: number; paid_surcharge: number }, [string]>(
+          `SELECT COALESCE(SUM(amount_cents), 0)         AS paid_total,
+                  COALESCE(SUM(tip_cents), 0)            AS paid_tips,
+                  COALESCE(SUM(amex_surcharge_cents), 0) AS paid_surcharge
+           FROM payments WHERE order_id = ?`
+        )
+        .get(orderId)
+
+      const paidTotal     = totals?.paid_total     ?? 0
+      const paidTips      = totals?.paid_tips      ?? 0
+      const paidSurcharge = totals?.paid_surcharge ?? 0
+      const paidPreTip    = paidTotal - paidTips - paidSurcharge
+
+      if (paidPreTip < 0) {
+        db.exec('ROLLBACK')
+        return c.json({ error: 'Internal error: tips/surcharge exceed total paid' }, 422)
+      }
+
+      const newTaxedBase = Math.round(paidPreTip / (1 + taxRate))
+      const newTax       = paidPreTip - newTaxedBase
+      const existingTaxedBase = order.subtotal_cents - order.discount_cents + order.service_charge_cents
+      const addedDiscount = existingTaxedBase - newTaxedBase
+
+      if (addedDiscount < 0) {
+        db.exec('ROLLBACK')
+        return c.json({
+          error: 'Paid amount already covers the full bill — nothing to discount',
+          paidPreTipCents: paidPreTip,
+          existingTaxedBaseCents: existingTaxedBase,
+        }, 422)
+      }
+
+      const newDiscount = order.discount_cents + addedDiscount
+      const newDiscountLabel = order.discount_label
+        ? `${order.discount_label} + Customer left — partial payment closed out`
+        : 'Customer left — partial payment closed out'
+      const newTotal = newTaxedBase + newTax + paidTips + paidSurcharge   // = paidTotal
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
+
+      db.run(
+        `UPDATE orders
+         SET status = 'paid',
+             discount_cents = ?,
+             discount_label = ?,
+             tax_cents = ?,
+             tip_cents = ?,
+             total_cents = ?,
+             paid_amount_cents = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [newDiscount, newDiscountLabel, newTax, paidTips, newTotal, paidTotal, now, orderId]
+      )
+
+      db.run(
+        `UPDATE order_split_sessions
+         SET status = 'completed', updated_at = ?
+         WHERE order_id = ?`,
+        [now, orderId]
+      )
+
+      db.exec('COMMIT')
+
+      result = {
+        addedDiscount, newDiscount, newDiscountLabel, newTax, newTotal,
+        paidTotal, paidTips, paidSurcharge,
+      }
+    } catch (err) {
+      try { db.exec('ROLLBACK') } catch {}
+      return serverError(c, '[finalize-partial] DB write failed', err, 'Failed to finalize partial payment')
+    }
+
+    logPaymentEvent('finalize_partial', {
+      merchantId, orderId, amountCents: result.addedDiscount,
+      message: `Customer-left writeoff: discount ${(result.addedDiscount / 100).toFixed(2)} on $${(result.paidTotal / 100).toFixed(2)} paid`,
+      extra: { newDiscountLabel: result.newDiscountLabel, paidTotal: result.paidTotal, newTax: result.newTax },
+    })
+
+    broadcastToMerchant(merchantId, 'order_updated', {
+      orderId,
+      status:           'paid',
+      tipCents:         result.paidTips,
+      totalCents:       result.newTotal,
+      discountCents:    result.newDiscount,
+      paidAmountCents:  result.paidTotal,
+    })
+
+    return c.json({
+      success:              true,
+      addedDiscountCents:   result.addedDiscount,
+      newDiscountCents:     result.newDiscount,
+      newDiscountLabel:     result.newDiscountLabel,
+      newTaxCents:          result.newTax,
+      newTotalCents:        result.newTotal,
+      paidAmountCents:      result.paidTotal,
+      paidTipCents:         result.paidTips,
+      paidSurchargeCents:   result.paidSurcharge,
+    })
+  }
+)
+
 /**
  * POST /api/merchants/:id/payments/:paymentId/receipt
  *
@@ -907,8 +1817,8 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const paymentId  = c.req.param('paymentId')
+    const merchantId = c.req.param('id')!
+    const paymentId  = c.req.param('paymentId')!
     const db = getDatabase()
 
     const payment = db
@@ -1052,7 +1962,7 @@ dashboardPayments.get(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const nowMs        = Date.now()
@@ -1273,8 +2183,8 @@ dashboardPayments.get(
   '/api/merchants/:id/orders/:orderId/detail',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
 
     try {
       const db = getDatabase()
@@ -1394,7 +2304,7 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const pending = db
@@ -1585,7 +2495,7 @@ dashboardPayments.get(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     try {
       const creds = await loadFinixCreds(merchantId)
       if (!creds) return c.json({ terminals: [] })
@@ -1600,27 +2510,75 @@ dashboardPayments.get(
 /**
  * POST /api/merchants/:id/orders/:orderId/terminal-sale
  *
- * Initiates an in-person card payment on a PAX terminal via Finix.
- * Resolves the Finix device ID from the terminal record, creates a
- * `terminal_sale` Transfer, and persists a `pending_terminal_sales` row
- * so the frontend can poll for completion.
+ * Initiates an in-person card payment on a PAX terminal via Finix. Returns
+ * immediately — before Finix responds — with a `ttxId` the client uses to poll
+ * `GET /terminal-sale/by-ttx/:ttxId` until the customer taps or the workflow
+ * times out (180 s). The heavy lifting lives in the SAM terminal-payment
+ * workflow (`v2/src/workflows/terminal-payment.ts`).
  *
- * @param body.totalCents - Charge amount in cents
- * @param body.terminalId - Kizo terminal record ID (uses first available if omitted)
- * @returns `{ transferId: string, deviceId: string }`
+ * This route keeps only the concerns that must run synchronously in the request
+ * handler: role check, amount validation, device connection check, tipping
+ * config sync, payment-lock acquisition. Everything else — Finix create-sale,
+ * 422 idempotency recovery, cancel-beat-tap race handling, timeout — lives in
+ * the workflow and runs in a detached promise.
+ *
+ * @param body.totalCents       Charge amount in cents
+ * @param body.terminalId       Kizo terminal record ID (first available if omitted)
+ * @param body.splitLegNumber   Split-leg number, or null/omitted for non-split
+ * @returns `{ ttxId, idempotencyKey, deviceId, tipOnTerminal }`
  */
 dashboardPayments.post(
   '/api/merchants/:id/orders/:orderId/terminal-sale',
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
 
     try {
-      const { totalCents, terminalId } = await c.req.json() as { totalCents: number; terminalId?: string }
+      const {
+        totalCents,
+        terminalId,
+        splitMode,
+        splitLegNumber,
+        splitTotalLegs,
+        splitItemsJson,
+      } = await c.req.json() as {
+        totalCents:      number
+        terminalId?:     string
+        splitMode?:      string | null
+        splitLegNumber?: number | null
+        splitTotalLegs?: number | null
+        splitItemsJson?: string | null
+      }
       if (typeof totalCents !== 'number' || totalCents <= 0) {
         return c.json({ error: 'totalCents must be a positive integer' }, 400)
+      }
+
+      // by_items: validate splitItemsJson at the route layer (mirrors
+      // record-payment). The workflow does its own defense-in-depth check
+      // inside the BEGIN transaction; this layer just rejects malformed input.
+      if (splitMode === 'by_items') {
+        if (!splitItemsJson) {
+          return c.json({ error: 'splitItemsJson is required for by_items split' }, 400)
+        }
+        let parsed: unknown
+        try { parsed = JSON.parse(splitItemsJson) } catch {
+          return c.json({ error: 'splitItemsJson must be valid JSON' }, 400)
+        }
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          return c.json({ error: 'splitItemsJson must be a non-empty array of item indices' }, 400)
+        }
+        const seenInLeg = new Set<number>()
+        for (const idx of parsed) {
+          if (!Number.isInteger(idx) || (idx as number) < 0) {
+            return c.json({ error: `splitItemsJson contains invalid item index: ${idx}` }, 400)
+          }
+          if (seenInLeg.has(idx as number)) {
+            return c.json({ error: `splitItemsJson contains duplicate item index: ${idx}` }, 400)
+          }
+          seenInLeg.add(idx as number)
+        }
       }
 
       const creds = await loadFinixCreds(merchantId)
@@ -1629,8 +2587,7 @@ dashboardPayments.post(
       const deviceId = await resolveFinixDeviceId(merchantId, creds, terminalId ?? undefined)
       if (!deviceId) return c.json({ error: 'No terminal found — add a terminal with a serial number in Store Profile' }, 400)
 
-      // ── Issue 2 fix: verify device is online before creating a transfer ──
-      // A "Closed" connection means the terminal is idle/sleeping. Creating a
+      // Device connection pre-check. "Closed" = terminal asleep; creating a
       // transfer against an offline device silently succeeds on Finix but the
       // terminal never displays the payment prompt.
       try {
@@ -1646,8 +2603,6 @@ dashboardPayments.post(
           }, 503)
         }
       } catch (connErr) {
-        // Non-fatal: if the connection check fails, proceed and let the transfer
-        // attempt reveal the issue (same behaviour as before this check).
         console.warn(`[finix] terminal-sale: device connection check failed for ${deviceId}:`, (connErr as Error)?.message)
       }
 
@@ -1655,12 +2610,9 @@ dashboardPayments.post(
 
       const db = getDatabase()
 
-      // ── Phase 7: Defensive tipping config sync ────────────────────────────
-      // Read tip-on-terminal settings from DB. If enabled, push the config to
-      // the device before creating the transfer so the terminal prompt matches
-      // the merchant's current settings (handles devices registered before the
-      // feature was enabled, or terminals that were factory-reset).
-      // This is best-effort — a Finix API error here must not block the sale.
+      // Defensive tipping config sync: push tip-on-terminal settings to the device
+      // before the workflow creates a transfer. Fire-and-forget — a Finix error
+      // here must not block the sale; the device falls back to its cached config.
       const merchantTipRow = db
         .query<{ tip_on_terminal: number; suggested_tip_percentages: string }, [string]>(
           `SELECT tip_on_terminal, suggested_tip_percentages FROM merchants WHERE id = ? LIMIT 1`,
@@ -1670,146 +2622,45 @@ dashboardPayments.post(
       const tipPercentages: number[] = (() => {
         try { return JSON.parse(merchantTipRow?.suggested_tip_percentages ?? '[15,20,25]') } catch { return [15, 20, 25] }
       })()
-
       updateDeviceTippingConfig(creds, deviceId, tipOnTerminal, tipPercentages).catch((syncErr) => {
         console.warn(`[finix] terminal-sale: tipping config sync failed for device ${deviceId}:`, (syncErr as Error)?.message ?? syncErr)
       })
 
-      // ── Issue 2 fix: cancel any stale pending sale for the same order+device ──
-      // If staff taps "Pay" again after a failed attempt, the deterministic
-      // idempotency key would return the same stuck/failed Finix transfer and the
-      // terminal would never illuminate.  Cancel the previous transfer first, then
-      // use a timestamp-suffixed key to force Finix to create a fresh transfer.
-      const existingPending = db
-        .query<{ id: string; transfer_id: string }, [string, string, string]>(
-          `SELECT id, transfer_id FROM pending_terminal_sales
-           WHERE order_id = ? AND device_id = ? AND merchant_id = ? AND status = 'pending'`,
-        )
-        .get(orderId, deviceId, merchantId)
-
-      let idempotencyId: string
-      if (existingPending) {
-        // Check whether the existing transfer already succeeded before retrying.
-        // If it did, return it directly — creating a new transfer would double-charge.
-        // If the status check itself fails (Finix network blip), refuse to retry:
-        // silently falling through to cancel+create would send a second payment
-        // request to the terminal even if the customer already tapped.
-        let existingState: string | null = null
-        let statusCheckFailed = false
-        try {
-          const existingStatus = await getTerminalTransferStatus(creds, existingPending.transfer_id)
-          existingState = existingStatus.state ?? null
-        } catch (checkErr) {
-          statusCheckFailed = true
-          console.warn(`[finix] terminal-sale: status check failed for ${existingPending.transfer_id}:`, (checkErr as Error)?.message)
-        }
-
-        if (existingState === 'SUCCEEDED') {
-          logPaymentEvent('terminal_idempotent', {
-            merchantId, orderId, deviceId, amountCents: totalCents,
-            transferId: existingPending.transfer_id,
-            message: `Idempotent: existing transfer ${existingPending.transfer_id} already SUCCEEDED — returning it`,
-          })
-          // Return the already-succeeded transferId; frontend proceeds to record-payment.
-          // alreadySucceeded tells the dashboard the terminal may have shown a red screen
-          // even though Finix authorized the charge — staff should see a reassurance note.
-          acquirePaymentLock(orderId)
-          return c.json({ transferId: existingPending.transfer_id, deviceId, alreadySucceeded: true })
-        }
-
-        if (statusCheckFailed) {
-          // Cannot confirm the transfer's outcome — refusing to cancel and retry
-          // to avoid sending a second charge to the terminal.
-          logPaymentEvent('terminal_error', {
-            merchantId, orderId, deviceId, amountCents: totalCents,
-            transferId: existingPending.transfer_id,
-            level: 'warn',
-            message: `Status check failed for existing transfer ${existingPending.transfer_id} — not retrying to avoid double-charge`,
-          })
-          return c.json({
-            error: 'Could not verify the status of the previous payment attempt. Please wait a moment and try again.',
-          }, 503)
-        }
-
-        logPaymentEvent('terminal_retry', {
-          merchantId, orderId, deviceId, amountCents: totalCents,
-          transferId: existingPending.transfer_id,
-          message: `Retrying after stale pending sale ${existingPending.transfer_id} (state: ${existingState ?? 'unknown'})`,
-        })
-        try {
-          await cancelTerminalSale(creds, deviceId)
-          console.log(`[finix] terminal-sale retry: cancelled previous transfer ${existingPending.transfer_id}`)
-        } catch (cancelErr) {
-          // Non-fatal — device may already be idle
-          console.warn(`[finix] terminal-sale retry: cancel failed:`, (cancelErr as Error)?.message)
-        }
-        db.run(`DELETE FROM pending_terminal_sales WHERE id = ?`, [existingPending.id])
-        // New idempotency key forces Finix to create a fresh transfer
-        idempotencyId = `${orderId}-terminal-${deviceId}-${Date.now()}`
-      } else {
-        // First attempt: deterministic key deduplicates rapid double-taps
-        idempotencyId = `${orderId}-terminal-${deviceId}`
-      }
-
-      let result: Awaited<ReturnType<typeof createTerminalSale>>
-      try {
-        result = await createTerminalSale(creds, deviceId, totalCents, {
-          order_id: orderId,
-          merchant_id: merchantId,
-        }, idempotencyId)
-      } catch (saleErr) {
-        // The previous attempt was cancelled on the device (e.g. customer pressed
-        // Cancel before tapping card).  Finix permanently rejects the original
-        // idempotency key but embeds the old transfer ID in the 422 body.
-        // Retry once with a timestamp-suffixed key so the terminal wakes again.
-        if (saleErr instanceof FinixTransferCancelledError) {
-          logPaymentEvent('terminal_retry', {
-            merchantId, orderId, deviceId, amountCents: totalCents,
-            transferId: saleErr.existingTransferId,
-            message: `Auto-retry after ${saleErr.failureCode} on transfer ${saleErr.existingTransferId}`,
-          })
-          // Best-effort device cancel — may already be idle
-          try { await cancelTerminalSale(creds, deviceId) } catch {}
-          // Clean up stale pending row if the table exists
-          try {
-            db.run(
-              `DELETE FROM pending_terminal_sales WHERE order_id = ? AND merchant_id = ?`,
-              [orderId, merchantId],
-            )
-          } catch {}
-          const freshKey = `${orderId}-terminal-${deviceId}-${Date.now()}`
-          result = await createTerminalSale(creds, deviceId, totalCents, {
-            order_id: orderId,
-            merchant_id: merchantId,
-          }, freshKey)
-        } else {
-          throw saleErr
-        }
-      }
-
-      logPaymentEvent('terminal_initiated', {
-        merchantId, orderId, deviceId, amountCents: totalCents,
-        transferId: result.transferId,
-        message: `Transfer ${result.transferId} created (state: ${result.state})`,
+      // Hand off to the workflow. Returns synchronously once the ttx row is
+      // persisted (<100 ms); the Finix POST fires in the background.
+      const started = await startTerminalPaymentForDashboard({
+        merchantId,
+        orderId,
+        amountCents:    totalCents,
+        terminalId:     terminalId ?? undefined,
+        splitMode:      splitMode      ?? null,
+        splitLegNumber: splitLegNumber ?? null,
+        splitTotalLegs: splitTotalLegs ?? null,
+        splitItemsJson: splitItemsJson ?? null,
       })
 
-      // Track the in-flight terminal sale so orphaned payments can be auto-recovered
-      // if the client never calls record-payment (e.g. timeout, crash, network error).
-      // Wrapped in try/catch: table may not exist on older deployments (pre-migration).
-      try {
-        db.run(
-          `INSERT OR IGNORE INTO pending_terminal_sales
-             (merchant_id, order_id, transfer_id, device_id, amount_cents)
-           VALUES (?, ?, ?, ?, ?)`,
-          [merchantId, orderId, result.transferId, deviceId, totalCents],
+      if (!started.ok) {
+        logPaymentEvent('terminal_error', {
+          merchantId, orderId, deviceId, amountCents: totalCents,
+          level: 'error',
+          message: started.error,
+        })
+        return c.json(
+          { error: started.error, activeTtxId: started.activeTtxId ?? null },
+          started.statusCode as 400 | 409 | 500,
         )
-      } catch {}
+      }
 
-      // Lock the order for the duration of the terminal transaction so no one can
-      // cancel or edit it while the customer is tapping their card.
+      // Lock the order for the duration of the terminal transaction so no one
+      // can cancel or edit it while the customer is tapping their card.
       acquirePaymentLock(orderId)
 
-      return c.json({ transferId: result.transferId, deviceId, tipOnTerminal })
+      return c.json({
+        ttxId:          started.ttxId,
+        idempotencyKey: started.idempotencyKey,
+        deviceId:       started.deviceId,
+        tipOnTerminal,
+      })
     } catch (err) {
       logPaymentEvent('terminal_error', {
         merchantId, orderId, amountCents: undefined,
@@ -1822,21 +2673,46 @@ dashboardPayments.post(
 )
 
 /**
+ * GET /api/merchants/:id/terminal-sale/by-ttx/:ttxId
+ *
+ * Polls the status of an in-progress terminal sale by the workflow's ttxId.
+ * The payment modal calls this every 2 s until `state` is `SUCCEEDED` or
+ * `FAILED`. Response shape is the same as the legacy `/terminal-sale/:transferId`
+ * endpoint — card brand, last 4, approval code, tip amount, entry mode —
+ * plus `transferId` which becomes available once Finix responds.
+ */
+dashboardPayments.get(
+  '/api/merchants/:id/terminal-sale/by-ttx/:ttxId',
+  authenticate,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    const ttxId      = c.req.param('ttxId')!
+
+    try {
+      const status = getTerminalTxStatus(merchantId, ttxId)
+      if (!status) return c.json({ error: 'Terminal transaction not found' }, 404)
+      return c.json(status)
+    } catch (err) {
+      return serverError(c, '[payments] terminal sale status by ttx', err, 'Failed to check terminal sale status')
+    }
+  },
+)
+
+/**
  * GET /api/merchants/:id/terminal-sale/:transferId
  *
- * Polls the status of an in-progress terminal sale transfer.
- * The payment modal calls this every 2 s until `state` is `SUCCEEDED` or `FAILED`.
- *
- * @param param.transferId - Finix Transfer ID returned by `POST terminal-sale`
- * @returns `{ state, amount, cardBrand, cardLastFour, approvalCode, … }`
+ * Legacy pre-workflow polling endpoint (kept for compatibility until all
+ * clients are bumped past the modal cache-buster). Hits Finix directly — does
+ * not use the workflow's ttx row. New code should use `/by-ttx/:ttxId`.
  */
 dashboardPayments.get(
   '/api/merchants/:id/terminal-sale/:transferId',
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const transferId = c.req.param('transferId')
+    const merchantId = c.req.param('id')!
+    const transferId = c.req.param('transferId')!
 
     try {
       const creds = await loadFinixCreds(merchantId)
@@ -1844,7 +2720,6 @@ dashboardPayments.get(
 
       const status = await getTerminalTransferStatus(creds, transferId)
 
-      // Log terminal outcomes when they're first detected (SUCCEEDED or FAILED)
       if (status.state === 'SUCCEEDED') {
         logPaymentEvent('terminal_succeeded', {
           merchantId, transferId,
@@ -1873,38 +2748,55 @@ dashboardPayments.get(
  * POST /api/merchants/:id/terminal-sale/cancel
  *
  * Cancels an in-progress PAX terminal transaction.
- * Sends a cancel command to the Finix device; the terminal returns to idle.
+ * Prefers routing through the SAM workflow (orderId) so the FSM's cancel-beat-tap
+ * race handling fires; falls back to a raw device cancel for compatibility.
  *
- * @param body.deviceId - Finix device ID of the terminal to cancel
- * @returns `{ success: true }`
+ * @param body.orderId   Workflow-routed cancel (preferred) — cancels by orderId
+ * @param body.deviceId  Raw device cancel fallback (legacy clients)
  */
 dashboardPayments.post(
   '/api/merchants/:id/terminal-sale/cancel',
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     try {
-      const { deviceId } = await c.req.json() as { deviceId: string }
-      if (!deviceId) return c.json({ error: 'deviceId is required' }, 400)
+      const body = await c.req.json() as { orderId?: string; deviceId?: string; reason?: string }
+
+      // When staff hits "Customer changed mind — take cash", log a distinct event so
+      // reconciliation/audit can tell routine cash switches apart from timeouts and
+      // hard cancels. The resulting Finix CANCELLATION_VIA_API row will later be
+      // marked superseded by record-payment when the cash leg succeeds.
+      if (body.reason === 'switch_to_cash' && body.orderId) {
+        logPaymentEvent('terminal_abandoned_switch_to_cash', {
+          merchantId,
+          orderId:  body.orderId,
+          deviceId: body.deviceId,
+          message:  'Staff switched from card to cash after customer changed mind',
+        })
+      }
+
+      if (body.orderId) {
+        const routed = cancelTerminalPaymentByOrder(body.orderId)
+        if (routed) {
+          releasePaymentLock(body.orderId)
+          return c.json({ success: true, routed: 'workflow' })
+        }
+        // No workflow found — fall through to raw cancel if deviceId was also provided.
+      }
+
+      if (!body.deviceId) {
+        return c.json({ error: 'orderId or deviceId is required' }, 400)
+      }
 
       const creds = await loadFinixCreds(merchantId)
       if (!creds) return c.json({ error: 'Finix credentials not configured' }, 400)
 
-      await cancelTerminalSale(creds, deviceId)
+      await cancelTerminalSale(creds, body.deviceId)
+      if (body.orderId) releasePaymentLock(body.orderId)
 
-      // Release the payment lock for any order that was pending on this device
-      const db = getDatabase()
-      const pending = db
-        .query<{ order_id: string }, [string, string]>(
-          `SELECT order_id FROM pending_terminal_sales
-           WHERE device_id = ? AND merchant_id = ? AND status = 'pending' LIMIT 1`,
-        )
-        .get(deviceId, merchantId)
-      if (pending) releasePaymentLock(pending.order_id)
-
-      return c.json({ success: true })
+      return c.json({ success: true, routed: 'device' })
     } catch (err) {
       return serverError(c, '[payments] cancel terminal sale', err, 'Failed to cancel terminal sale')
     }
@@ -1928,8 +2820,8 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
 
     try {
       const { transferId } = await c.req.json() as { transferId: string }
@@ -2038,8 +2930,8 @@ dashboardPayments.post(
   authenticate,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const orderId    = c.req.param('orderId')
+    const merchantId = c.req.param('id')!
+    const orderId    = c.req.param('orderId')!
 
     let body: { token: string; totalCents: number; postalCode?: string }
     try {
@@ -2093,6 +2985,31 @@ dashboardPayments.post(
         merchant_id: merchantId,
       }, idempotencyId)
 
+      // Log every attempt — both SUCCEEDED and FAILED — so staff can audit CNP
+      // payment history in the Terminal Status modal (including declined CVV tests).
+      try {
+        db.run(
+          `INSERT INTO cnp_attempts
+             (id, merchant_id, order_id, amount_cents, state,
+              card_brand, card_last_four, approval_code, finix_transfer_id, decline_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            crypto.randomUUID(),
+            merchantId,
+            orderId,
+            totalCents,
+            result.state,
+            result.cardBrand,
+            result.cardLastFour,
+            result.approvalCode,
+            result.transferId,
+            result.state === 'FAILED' ? 'Card declined' : null,
+          ],
+        )
+      } catch (logErr) {
+        console.warn('[cnp_attempts] Failed to log attempt:', logErr)
+      }
+
       if (result.state === 'FAILED') {
         return c.json({ error: 'Card declined' }, 402)
       }
@@ -2100,6 +3017,120 @@ dashboardPayments.post(
       return c.json(result)
     } catch (err) {
       return serverError(c, '[payments] phone charge', err, 'Phone charge failed')
+    }
+  },
+)
+
+/**
+ * GET /api/merchants/:id/terminal-events
+ *
+ * Returns all terminal_transactions rows for the merchant in reverse
+ * chronological order (most recent first). Unlike the payments/reconciliation
+ * endpoint, this shows every row — succeeded, declined, cancelled, timed-out —
+ * regardless of whether a `payments` row was ever created.
+ *
+ * Intended for staff troubleshooting (e.g. duplicate charges, false-failure
+ * reports from the PAX A920 Pro). Scope: last 200 rows or 7 days, whichever
+ * is smaller.
+ *
+ * @returns `{ events: Array<TerminalEvent> }`
+ */
+dashboardPayments.get(
+  '/api/merchants/:id/terminal-events',
+  authenticate,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    const merchantId = c.req.param('id')!
+    try {
+      const db = getDatabase()
+      const rows = db.query<{
+        id:                  string
+        tx_state:            string
+        amount_cents:        number | null
+        tip_amount_cents:    number | null
+        approved_amount_cents: number | null
+        card_brand:          string | null
+        card_last_four:      string | null
+        approval_code:       string | null
+        entry_mode:          string | null
+        decline_code:        string | null
+        decline_message:     string | null
+        finix_transfer_id:   string | null
+        order_id:            string | null
+        payment_id:          string | null
+        started_at:          string | null
+        completed_at:        string | null
+        created_at:          string
+        source:              'terminal' | 'cnp'
+      }, [string, string]>(
+        `SELECT id, tx_state, amount_cents, tip_amount_cents, approved_amount_cents,
+                card_brand, card_last_four, approval_code, entry_mode,
+                decline_code, decline_message, finix_transfer_id, order_id,
+                payment_id, started_at, completed_at, created_at,
+                'terminal' AS source
+           FROM terminal_transactions
+          WHERE merchant_id = ?
+            AND created_at >= datetime('now', '-7 days')
+        UNION ALL
+        SELECT id, state AS tx_state, amount_cents, NULL AS tip_amount_cents,
+                NULL AS approved_amount_cents,
+                card_brand, card_last_four, approval_code, NULL AS entry_mode,
+                NULL AS decline_code, decline_message, finix_transfer_id, order_id,
+                NULL AS payment_id, NULL AS started_at, NULL AS completed_at, created_at,
+                'cnp' AS source
+           FROM cnp_attempts
+          WHERE merchant_id = ?
+            AND created_at >= datetime('now', '-7 days')
+          ORDER BY created_at DESC
+          LIMIT 200`,
+      ).all(merchantId, merchantId)
+
+      // Derive severity for UI display
+      const events = rows.map(r => {
+        let severity: 'success' | 'warning' | 'error' | 'pending'
+        const s = r.tx_state
+        if (s === 'SUCCEEDED' || s === 'COMPLETED') {
+          severity = 'success'
+        } else if (
+          s === 'CANCELLATION_VIA_API' || s === 'CANCELLED' ||
+          s === 'CANCELLING' || s === 'REVERSED'
+        ) {
+          severity = 'warning'
+        } else if (
+          s === 'DECLINED' || s === 'FAILED' ||
+          s === 'POLLING_TIMEOUT' || s === 'REVERSAL_FAILED'
+        ) {
+          severity = 'error'
+        } else {
+          severity = 'pending'
+        }
+
+        return {
+          id:                 r.id,
+          txState:            r.tx_state,
+          severity,
+          amountCents:        r.amount_cents,
+          tipAmountCents:     r.tip_amount_cents,
+          approvedAmountCents: r.approved_amount_cents,
+          cardBrand:          r.card_brand,
+          cardLastFour:       r.card_last_four,
+          approvalCode:       r.approval_code,
+          entryMode:          r.entry_mode,
+          declineCode:        r.decline_code,
+          declineMessage:     r.decline_message,
+          finixTransferId:    r.finix_transfer_id,
+          orderId:            r.order_id,
+          paymentId:          r.payment_id,
+          startedAt:          r.started_at,
+          completedAt:        r.completed_at,
+          createdAt:          r.created_at,
+          source:             r.source,
+        }
+      })
+
+      return c.json({ events })
+    } catch (err) {
+      return serverError(c, '[payments] terminal events', err, 'Failed to load terminal events')
     }
   },
 )

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Kizo Customer Store — SAM State Machine
  *
  * States: LOADING → BROWSING → ITEM → CHECKOUT → PAYING → CONFIRMED | ERROR
@@ -50,6 +50,7 @@
   const ORDER_HISTORY_KEY = 'kizo_order_history'
   const ACTIVE_ORDER_KEY  = 'kizo_active_order'
   const CART_KEY          = 'kizo_cart'
+  const PENDING_CART_KEY  = 'kizo_pending_cart'  // saved before redirect; cleared on confirm or restore
   const MAX_HISTORY = 20
 
   /**
@@ -129,6 +130,14 @@
   // returning to the menu from the order status page via /pay-return).
   let _splashFaded = false
 
+  // Set to true in boot() when we detect that the customer backed out of the
+  // Finix payment page.  loadStore() routes to CHECKOUT instead of BROWSING.
+  let _resumeCheckoutOnLoad = false
+
+  // Set in boot() when the URL contains ?fb=TOKEN (scanned QR code on printed bill).
+  // loadStore() opens the feedback modal once the store transitions to BROWSING.
+  let _pendingFeedbackToken = null
+
   /**
    * Fade out the splash screen. When a splash image is present the screen
    * holds for 2.4 s so customers see it; without an image the fade starts
@@ -185,20 +194,117 @@
   // Cart persistence — survives page refresh
   // ---------------------------------------------------------------------------
 
-  function saveCart(cart, tipCents) {
+  function saveCart(cart, tipCents, scheduledFor) {
     try {
-      localStorage.setItem(CART_KEY, JSON.stringify({ cart, tipCents: tipCents || 0 }))
+      localStorage.setItem(CART_KEY, JSON.stringify({ cart, tipCents: tipCents || 0, scheduledFor: scheduledFor || null }))
     } catch { /* ignore */ }
   }
 
   function loadCart() {
     try {
-      return JSON.parse(localStorage.getItem(CART_KEY) || 'null') || { cart: [], tipCents: 0 }
-    } catch { return { cart: [], tipCents: 0 } }
+      return JSON.parse(localStorage.getItem(CART_KEY) || 'null') || { cart: [], tipCents: 0, scheduledFor: null }
+    } catch { return { cart: [], tipCents: 0, scheduledFor: null } }
   }
 
   function clearSavedCart() {
     try { localStorage.removeItem(CART_KEY) } catch { /* ignore */ }
+  }
+
+  // Campaign persistence — survives page refresh; cleared on order submit
+  const CAMPAIGN_KEY         = 'kizo_campaign'
+  const REDEEMED_TOKENS_KEY  = 'kizo_redeemed_tokens'
+
+  function saveCampaign(campaign) {
+    try { localStorage.setItem(CAMPAIGN_KEY, JSON.stringify(campaign)) } catch { /* ignore */ }
+  }
+
+  function loadSavedCampaign() {
+    try {
+      const raw = localStorage.getItem(CAMPAIGN_KEY)
+      if (!raw) return null
+      const c = JSON.parse(raw)
+      if (!c || !c.valid_until || Date.now() > c.valid_until) {
+        localStorage.removeItem(CAMPAIGN_KEY)
+        return null
+      }
+      // Migration gate: stale entries without scanToken pre-date the per-scan instance
+      // feature. Force a re-scan so the user gets a valid token.
+      if (!c.scanToken) {
+        localStorage.removeItem(CAMPAIGN_KEY)
+        return null
+      }
+      // Locally redeemed: token was used on this device; treat as already consumed.
+      if (_isTokenRedeemed(c.scanToken)) {
+        localStorage.removeItem(CAMPAIGN_KEY)
+        return null
+      }
+      return c
+    } catch { return null }
+  }
+
+  function clearSavedCampaign() {
+    try { localStorage.removeItem(CAMPAIGN_KEY) } catch { /* ignore */ }
+  }
+
+  function _markScanTokenRedeemed(scanToken) {
+    try {
+      const raw    = localStorage.getItem(REDEEMED_TOKENS_KEY)
+      const tokens = raw ? JSON.parse(raw) : []
+      if (!tokens.includes(scanToken)) tokens.push(scanToken)
+      // Cap at 20 entries to avoid unbounded growth
+      if (tokens.length > 20) tokens.splice(0, tokens.length - 20)
+      localStorage.setItem(REDEEMED_TOKENS_KEY, JSON.stringify(tokens))
+    } catch { /* ignore */ }
+  }
+
+  function _isTokenRedeemed(scanToken) {
+    try {
+      const raw = localStorage.getItem(REDEEMED_TOKENS_KEY)
+      if (!raw) return false
+      const tokens = JSON.parse(raw)
+      return Array.isArray(tokens) && tokens.includes(scanToken)
+    } catch { return false }
+  }
+
+  const CAMPAIGN_DISMISSED_KEY = 'kizo_campaign_dismissed'
+
+  function _getDismissedSlugs() {
+    try {
+      const raw = localStorage.getItem(CAMPAIGN_DISMISSED_KEY)
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      // Migrate legacy string value → array
+      return Array.isArray(parsed) ? parsed : (typeof parsed === 'string' ? [parsed] : [])
+    } catch { return [] }
+  }
+
+  function dismissCampaign(slug) {
+    try {
+      const dismissed = _getDismissedSlugs()
+      if (!dismissed.includes(slug)) dismissed.push(slug)
+      localStorage.setItem(CAMPAIGN_DISMISSED_KEY, JSON.stringify(dismissed))
+    } catch { /* ignore */ }
+    // Only clear the persisted QR campaign if it's the one being dismissed
+    const saved = loadSavedCampaign()
+    if (saved?.slug === slug) clearSavedCampaign()
+  }
+
+  function isCampaignDismissed(slug) {
+    return _getDismissedSlugs().includes(slug)
+  }
+
+  function clearDismissedCampaign() {
+    try { localStorage.removeItem(CAMPAIGN_DISMISSED_KEY) } catch { /* ignore */ }
+  }
+
+  /** Show a brief toast notification above the cart bar. Auto-hides after 4 s. */
+  function showToast(message) {
+    const toast = document.getElementById('store-toast')
+    if (!toast) return
+    toast.textContent = message
+    toast.classList.add('store-toast--visible')
+    clearTimeout(toast._hideTimer)
+    toast._hideTimer = setTimeout(() => toast.classList.remove('store-toast--visible'), 4000)
   }
 
   /** Set the --active-bar-h CSS variable so sticky navs offset correctly */
@@ -226,7 +332,11 @@
     if (!bar) return
 
     const active = getActiveOrder()
-    if (!active || active.status === 'completed' || active.status === 'cancelled') {
+    // Terminal states clear the bar. picked_up is a terminal state — once
+    // the customer has the food, the order is done; no point showing a
+    // status bar (and the unrecognized status text used to leak through and
+    // push the menu off-screen).
+    if (!active || active.status === 'completed' || active.status === 'cancelled' || active.status === 'picked_up') {
       bar.hidden = true
       updateBarHeightVar(false)
       return
@@ -352,6 +462,133 @@
   // Model
   // ---------------------------------------------------------------------------
 
+  function _fmtSchedule(schedule) {
+    if (!schedule) return null
+    const parts = []
+    const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    if (schedule.days?.length) {
+      if (schedule.days.length === 7) {
+        parts.push('Daily')
+      } else {
+        const sorted = [...schedule.days].sort((a, b) => a - b)
+        const consecutive = sorted.every((d, i) => i === 0 || d === sorted[i - 1] + 1)
+        if (consecutive && sorted.length > 2) {
+          parts.push(`${DAY_ABBR[sorted[0]]}–${DAY_ABBR[sorted[sorted.length - 1]]}`)
+        } else {
+          parts.push(sorted.map(d => DAY_ABBR[d]).join(', '))
+        }
+      }
+    }
+    if (schedule.windows?.length) {
+      const fmtTime = (t) => {
+        const [h, m] = t.split(':').map(Number)
+        const suffix = h >= 12 ? 'pm' : 'am'
+        const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+        return m === 0 ? `${h12}${suffix}` : `${h12}:${String(m).padStart(2, '0')}${suffix}`
+      }
+      parts.push(schedule.windows.map(w => `${fmtTime(w.start)}–${fmtTime(w.end)}`).join(', '))
+    }
+    return parts.length ? parts.join(' ') : null
+  }
+
+  /**
+   * Compute how many cents a single campaign discounts the given subtotal.
+   * @param {object} campaign
+   * @param {number} sub  — cartSubtotalCents
+   * @param {object} m    — model reference (needs cart, orderType, profile)
+   */
+  function _campaignDiscount(campaign, sub, m) {
+    if (sub < (campaign.offer.min_order_cents || 0)) return 0
+    // Marketing-engine campaigns use 'takeout', orders use 'pickup' (the
+    // CHECK constraint on orders.order_type doesn't include 'takeout').
+    // Treat them as synonyms so a takeout-restricted coupon applies to
+    // pickup orders. TODO: migrate marketing engine to use 'pickup'.
+    const fr = campaign.offer.fulfillment_restriction
+    const orderTypeAlias = m.orderType === 'pickup' ? 'takeout' : m.orderType
+    if (fr && fr !== 'both' && fr !== m.orderType && fr !== orderTypeAlias) return 0
+
+    if (campaign.schedule) {
+      const tz        = m.profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+      // For scheduled orders evaluate the campaign window against pickup time, not "now"
+      const now       = m.scheduledFor ? new Date(m.scheduledFor) : new Date()
+      const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+      if (campaign.schedule.days?.length) {
+        const dayStr   = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now)
+        const localDay = DAY_NAMES.indexOf(dayStr)
+        if (localDay === -1 || !campaign.schedule.days.includes(localDay)) return 0
+      }
+      if (campaign.schedule.windows?.length) {
+        const timeStr   = new Intl.DateTimeFormat('en-GB',
+          { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23' }).format(now)
+        const [h, mn]   = timeStr.split(':').map(Number)
+        const localMins = h * 60 + mn
+        const inWindow  = campaign.schedule.windows.some(w => {
+          const [sh, sm] = w.start.split(':').map(Number)
+          const [eh, em] = w.end.split(':').map(Number)
+          return localMins >= sh * 60 + sm && localMins <= eh * 60 + em
+        })
+        if (!inWindow) return 0
+      }
+    }
+
+    const campaignType = campaign.campaign_type ?? 'coupon'
+    if (campaignType === 'bogo' && campaign.trigger && campaign.reward) {
+      const trigger = campaign.trigger
+      const reward  = campaign.reward
+      let triggerCount = 0
+      if (trigger.type === 'item_quantity' && trigger.item_name) {
+        const tName = trigger.item_name.toLowerCase()
+        triggerCount = m.cart.reduce((n, e) => n + (e.item.name.toLowerCase() === tName ? e.qty : 0), 0)
+      } else if (trigger.type === 'category_quantity' && trigger.category) {
+        const cName = trigger.category.toLowerCase()
+        triggerCount = m.cart.reduce((n, e) => n + (e.item.categoryName?.toLowerCase() === cName ? e.qty : 0), 0)
+      }
+      if (triggerCount < trigger.quantity) return 0
+      const rName = reward.item_name.toLowerCase()
+      const maxQty = reward.max_quantity ?? 1
+      let collected = 0
+      let rewardTotal = 0
+      for (const e of m.cart) {
+        if (e.item.name.toLowerCase() !== rName) continue
+        const take = Math.min(e.qty, maxQty - collected)
+        if (take <= 0) break
+        rewardTotal += e.unitCents * take
+        collected   += take
+      }
+      if (collected === 0) return 0
+      if (reward.type === 'free_item') return Math.min(rewardTotal, sub)
+      if (reward.type === 'item_discount') {
+        const raw = reward.discount_type === 'percent'
+          ? Math.round(rewardTotal * reward.discount_value / 100)
+          : Math.min(reward.discount_value * collected, rewardTotal)
+        return Math.min(raw, sub)
+      }
+      return 0
+    }
+
+    let base = sub
+    if (campaign.target?.type === 'item' && campaign.target.item_name) {
+      const tName = campaign.target.item_name.toLowerCase()
+      base = m.cart.reduce((s, e) => s + (e.item.name.toLowerCase() === tName ? e.totalCents : 0), 0)
+      if (base === 0) return 0
+    }
+
+    if (campaign.offer.type === 'percent') return Math.round(base * campaign.offer.value / 100)
+    return Math.min(campaign.offer.value, base)
+  }
+
+  /** Format a campaign validity window as "MM/DD–MM/DD". Falls back to "until MM/DD" when start_at is absent. */
+  function _fmtValidityWindow(startMs, endMs) {
+    if (!endMs) return ''
+    const fmt  = (d) => `${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`
+    const fmtY = (d) => `${fmt(d)}/${String(d.getFullYear()).slice(2)}`
+    const e = new Date(endMs)
+    if (!startMs) return `until ${fmt(e)}`
+    const s = new Date(startMs)
+    if (s.getFullYear() !== e.getFullYear()) return `${fmtY(s)}–${fmtY(e)}`
+    return `${fmt(s)}–${fmt(e)}`
+  }
+
   /** @type {StoreModel} */
   const model = {
     appState: 'LOADING',   // LOADING | BROWSING | ITEM | CHECKOUT | PAYING | CONFIRMED | ERROR
@@ -363,6 +600,7 @@
     // Cart
     cart: [],              // [{ item, selectedModifiers, totalCents }]
     tipCents: 0,           // customer-selected tip, applied on top of tax
+    orderType: 'pickup',   // 'pickup' | 'delivery' — always pickup for now; used for fulfillment_restriction check
 
     // Modifier sheet (ITEM state)
     selectedItem: null,    // full item object from menu
@@ -374,8 +612,23 @@
     // Confirmed order
     currentOrder: null,    // { orderId, pickupCode, totalCents, subtotalCents, taxCents }
 
+    // Payment declined state
+    paymentDeclined: false,  // true when provider returned a decline (PAYING sub-panel B)
+    declinedOrderId: null,   // orderId of the pending_payment order that was declined
+
     // Scheduled pickup time (ISO string set by checkout time selector, null = ASAP)
     scheduledFor: null,
+
+    // Offer wallet — QR-linked + ambient auto-apply campaigns available to use
+    // Each: { slug, name, start_at, valid_until, offer: { type, value, label, … } }
+    activeCampaigns: [],
+
+    // Slug of the one campaign the customer has chosen to apply (null = none)
+    selectedCampaignSlug: null,
+
+    // Offer preview modal — populated when customer arrives via QR with a coupon slug
+    // null = no preview pending; otherwise { campaign, computed_status, already_redeemed }
+    offerPreview: null,
 
     // Error message
     errorMessage: '',
@@ -390,12 +643,22 @@
     get cartSubtotalCents() {
       return this.cart.reduce((sum, entry) => sum + entry.totalCents, 0)
     },
+    /** The campaign the customer has selected to apply — null if none chosen. */
+    get selectedCampaign() {
+      if (!this.selectedCampaignSlug) return null
+      return this.activeCampaigns.find(c => c.slug === this.selectedCampaignSlug) ?? null
+    },
+    get cartDiscountCents() {
+      const campaign = this.selectedCampaign
+      if (!campaign) return 0
+      return _campaignDiscount(campaign, this.cartSubtotalCents, this)
+    },
     get cartTaxCents() {
       if (!this.profile) return 0
-      return Math.round(this.cartSubtotalCents * this.profile.taxRate)
+      return Math.round((this.cartSubtotalCents - this.cartDiscountCents) * this.profile.taxRate)
     },
     get cartTotalCents() {
-      return this.cartSubtotalCents + this.cartTaxCents + this.tipCents
+      return this.cartSubtotalCents - this.cartDiscountCents + this.cartTaxCents + this.tipCents
     },
   }
 
@@ -407,9 +670,9 @@
   function present(proposal) {
     Object.assign(model, proposal)
     // Auto-persist cart whenever it changes
-    if ('cart' in proposal || 'tipCents' in proposal) {
+    if ('cart' in proposal || 'tipCents' in proposal || 'scheduledFor' in proposal) {
       if (model.cart.length > 0 || model.tipCents > 0) {
-        saveCart(model.cart, model.tipCents)
+        saveCart(model.cart, model.tipCents, model.scheduledFor)
       } else {
         clearSavedCart()
       }
@@ -455,7 +718,136 @@
           _initFinixAuth(profileData.finixEnvironment, profileData.finixMerchantId)
         }
 
-        present({ appState: 'BROWSING', profile: profileData, menu: menuData.menu, topDishes: topDishesData.topDishes || [] })
+        // Inject Google Analytics gtag.js once — only if a measurement ID is
+        // configured and the script hasn't been injected yet this session.
+        if (profileData.gaTagId && !document.getElementById('gtag-script')) {
+          const id = profileData.gaTagId
+          const s = document.createElement('script')
+          s.id    = 'gtag-script'
+          s.async = true
+          s.src   = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id)
+          document.head.appendChild(s)
+          window.dataLayer = window.dataLayer || []
+          function gtag() { window.dataLayer.push(arguments) }
+          gtag('js', new Date())
+          gtag('config', id)
+        }
+
+        // Load campaign: prefer ?c= URL param, fall back to localStorage.
+        // Strip the params immediately to keep the URL clean (no page reload).
+        let qrCampaign = null
+        let _pendingOfferPreview = null   // set when we need to show the offer modal
+        const _urlParams = new URLSearchParams(window.location.search)
+        const _campaignSlug = _urlParams.get('c')
+        const _couponCode   = _urlParams.get('code')
+        if (_campaignSlug) {
+          try {
+            const slug      = _campaignSlug.toUpperCase().replace(/[^A-Z0-9_-]/g, '')
+            // Build hashed identifiers from stored customer data (privacy-preserving).
+            // Names are intentionally NOT hashed: customers share first names /
+            // nicknames, so a name hash creates false-positive blocks for legitimate
+            // distinct customers. Only phone + email are reliably unique.
+            let phoneHash = '', emailHash = ''
+            try {
+              const _cust = JSON.parse(localStorage.getItem('kizo_customer') || 'null')
+              if (_cust) {
+                const enc = new TextEncoder()
+                const digest = async (v) => {
+                  const buf = await crypto.subtle.digest('SHA-256', enc.encode(v))
+                  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('')
+                }
+                if (_cust.phone) phoneHash = await digest(_cust.phone.replace(/\D/g, ''))
+                if (_cust.email) emailHash = await digest(_cust.email.toLowerCase().trim())
+              }
+            } catch { /* non-fatal */ }
+
+            const previewPayload = { slug }
+            if (phoneHash) previewPayload.phoneHash = phoneHash
+            if (emailHash) previewPayload.emailHash = emailHash
+            const res = await fetch('/api/store/campaign-instance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(previewPayload),
+            })
+
+            if (res.status === 410) {
+              clearSavedCampaign()
+              setTimeout(() => showToast('This promotion has ended.'), 500)
+            } else if (res.status === 404) {
+              // Unknown slug — silently discard; clean URL
+              clearSavedCampaign()
+            } else if (res.ok) {
+              const preview = await res.json()
+              clearDismissedCampaign()  // fresh link clears any prior dismiss
+              if (_couponCode) preview.couponCode = _couponCode.toUpperCase().replace(/[^A-Z0-9]/g, '')
+              // Show the offer preview modal (user must accept to apply)
+              _pendingOfferPreview = preview
+              // Pre-save campaign data so accept action can restore it from model state
+              saveCampaign(preview)
+            } else {
+              clearSavedCampaign()
+              const errBody = await res.json().catch(() => ({}))
+              if (errBody.error === 'inactive') setTimeout(() => showToast('This offer is no longer active.'), 500)
+            }
+          } catch { /* non-fatal — store works without campaign */ }
+          // Strip ?c=, ?code=, ?src= from URL regardless of campaign validity
+          const cleanUrl = window.location.pathname
+          history.replaceState(null, '', cleanUrl)
+        } else {
+          const saved = loadSavedCampaign()
+          if (saved && !isCampaignDismissed(saved.slug)) {
+            qrCampaign = saved
+          }
+        }
+
+        // Fetch ambient auto-apply campaigns (coupon_code_required=0, currently active)
+        let ambientCampaigns = []
+        try {
+          const ambRes = await fetch('/api/campaigns')
+          if (ambRes.ok) {
+            const body = await ambRes.json()
+            ambientCampaigns = (body.campaigns || []).filter(c => !isCampaignDismissed(c.slug))
+          }
+        } catch { /* non-fatal */ }
+
+        // Merge QR campaign first, then ambient — deduplicate by slug
+        const _seen = new Set()
+        const activeCampaigns = []
+        for (const c of [qrCampaign, ...ambientCampaigns]) {
+          if (c && !_seen.has(c.slug)) {
+            _seen.add(c.slug)
+            activeCampaigns.push(c)
+          }
+        }
+
+        // QR campaigns are auto-selected only when restored from localStorage (no modal needed).
+        // When coming fresh from a QR link, _pendingOfferPreview is set — user must accept first.
+        const selectedCampaignSlug = _pendingOfferPreview ? null : (qrCampaign?.slug ?? null)
+        const offerPreview = _pendingOfferPreview ?? null
+
+        // Route to CHECKOUT if the customer backed out of the payment page —
+        // their cart was restored in boot() and they want to review/modify.
+        if (_resumeCheckoutOnLoad) {
+          _resumeCheckoutOnLoad = false
+          present({ appState: 'CHECKOUT', profile: profileData, menu: menuData.menu, topDishes: topDishesData.topDishes || [], activeCampaigns, selectedCampaignSlug, offerPreview })
+        } else {
+          present({ appState: 'BROWSING', profile: profileData, menu: menuData.menu, topDishes: topDishesData.topDishes || [], activeCampaigns, selectedCampaignSlug, offerPreview })
+        }
+
+        // If boot() detected ?fb=TOKEN (printed bill QR), fetch context and open
+        // the order feedback modal now that the store is loaded.
+        if (_pendingFeedbackToken) {
+          const token = _pendingFeedbackToken
+          _pendingFeedbackToken = null
+          fetch(`/api/store/feedback-context?token=${encodeURIComponent(token)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((ctx) => {
+              if (!ctx) return
+              const items = (ctx.dishNames || []).map((name) => ({ name }))
+              _openFeedbackOrder(ctx.orderId, items)
+            })
+            .catch(() => { /* expired or network error — silently skip */ })
+        }
       } catch (err) {
         present({ appState: 'ERROR', errorMessage: err.message || 'Failed to load store.' })
       }
@@ -518,19 +910,26 @@
     /**
      * Save the name and kitchen note for the item being edited.
      * Clears the note editor and re-renders checkout.
-     * @param {{ itemName: string, kitchenNote: string }} note
+     * @param {{ itemName: string, kitchenNote: string, instructionToken?: string|null, instructionPerUnitCents?: number, instructionPerEntryCents?: number }} note
      */
-    saveItemNote({ itemName, kitchenNote }) {
+    saveItemNote({ itemName, kitchenNote, instructionToken, instructionPerUnitCents, instructionPerEntryCents }) {
       const idx = model.editingNoteIdx
       if (idx === null || idx < 0 || idx >= model.cart.length) {
         present({ editingNoteIdx: null })
         return
       }
       const newCart = [...model.cart]
+      const entry = newCart[idx]
+      const perUnit  = instructionPerUnitCents  || 0
+      const perEntry = instructionPerEntryCents || 0
       newCart[idx] = {
-        ...newCart[idx],
+        ...entry,
         itemName:    itemName.trim()    || null,
         kitchenNote: kitchenNote.trim() || null,
+        instructionToken:          instructionToken || null,
+        instructionPerUnitCents:   perUnit,
+        instructionPerEntryCents:  perEntry,
+        instructionSurchargeCents: perUnit * entry.qty + perEntry,
       }
       present({ cart: newCart, editingNoteIdx: null })
     },
@@ -567,7 +966,11 @@
     },
 
     /** Validate modifier selections and add item(s) to cart */
-    addToCart() {
+    /**
+     * @param {{ instructionToken?: string|null, instructionPerUnitCents?: number, instructionPerEntryCents?: number }} [opts]
+     */
+    addToCart(opts = {}) {
+      const { instructionToken = null, instructionPerUnitCents = 0, instructionPerEntryCents = 0 } = opts
       const item   = model.selectedItem
       const groups = item.modifierGroups || []
       const qty    = model.itemQty || 1
@@ -601,6 +1004,9 @@
       }
 
       const unitCents = item.priceCents + modifierCents
+      // per_unit surcharge multiplied by qty; per_entry surcharge added flat once.
+      const instructionSurchargeCents = instructionPerUnitCents * qty + instructionPerEntryCents
+      const totalCents = unitCents * qty + instructionSurchargeCents
 
       const modKey  = resolvedMods.map((m) => m.id).sort().join(',')
       const newCart = [...model.cart]
@@ -613,22 +1019,27 @@
           selectedModifiers: resolvedMods,
           modKey,
           qty,
-          totalCents: unitCents * qty,
+          totalCents,
           unitCents,
           itemName,
           kitchenNote,
+          instructionToken,
+          instructionPerUnitCents,
+          instructionPerEntryCents,
+          instructionSurchargeCents,
         }
       } else {
-        // Check if same item+modifiers already in cart — increment qty instead of duplicate
-        const existingIdx = newCart.findIndex(
-          (e) => e.item.id === item.id && e.modKey === modKey
-        )
+        // Only merge identical items when there are no per-item customizations
+        const canMerge = !kitchenNote && !instructionToken
+        const existingIdx = canMerge
+          ? newCart.findIndex((e) => e.item.id === item.id && e.modKey === modKey && !e.kitchenNote && !e.instructionToken)
+          : -1
         if (existingIdx >= 0) {
           const existing = newCart[existingIdx]
           newCart[existingIdx] = {
             ...existing,
             qty:        existing.qty + qty,
-            totalCents: (existing.qty + qty) * unitCents,
+            totalCents: existing.unitCents * (existing.qty + qty),
           }
         } else {
           newCart.push({
@@ -636,12 +1047,21 @@
             selectedModifiers: resolvedMods,
             modKey,
             qty,
-            totalCents: unitCents * qty,
+            totalCents,
             unitCents,
             itemName,
             kitchenNote,
+            instructionToken,
+            instructionPerUnitCents,
+            instructionPerEntryCents,
+            instructionSurchargeCents,
           })
         }
+      }
+
+      // First item ever added — prompt iOS users to install before they reach checkout
+      if (model.cart.length === 0 && newCart.length > 0) {
+        window.StorePush?.maybeShowIOSBanner?.()
       }
 
       // Return to CHECKOUT when editing, BROWSING when adding new
@@ -669,7 +1089,10 @@
       }
       const newCart = model.cart.map((entry, i) => {
         if (i !== index) return entry
-        return { ...entry, qty: newQty, totalCents: entry.unitCents * newQty }
+        const perUnit  = entry.instructionPerUnitCents  || 0
+        const perEntry = entry.instructionPerEntryCents || 0
+        const instrCents = perUnit * newQty + perEntry
+        return { ...entry, qty: newQty, instructionSurchargeCents: instrCents, totalCents: entry.unitCents * newQty + instrCents }
       })
       present({ cart: newCart })
     },
@@ -739,6 +1162,8 @@
 
     /** Show checkout panel */
     openCheckout() {
+      const p = model.profile
+      if (p && p.ordersPaused && p.pausedUntil && new Date().toISOString() < p.pausedUntil) return
       present({ appState: 'CHECKOUT' })
     },
 
@@ -762,23 +1187,38 @@
             modifiers: entry.selectedModifiers.map((m) => m.id),
             ...(entry.itemName    ? { itemName:    entry.itemName    } : {}),
             ...(entry.kitchenNote ? { kitchenNote: entry.kitchenNote } : {}),
+            // Only the first copy of a qty>1 item carries the instruction token —
+            // token is one-time and already covers the single surcharge intent.
+            ...(entry.instructionToken ? { instructionToken: entry.instructionToken } : {}),
           }
-          return Array.from({ length: entry.qty || 1 }, () => row)
+          return Array.from({ length: entry.qty || 1 }, (_, qi) => {
+            if (qi === 0) return row
+            // Subsequent copies: no token (already consumed above)
+            const { instructionToken: _t, ...rowNoToken } = row
+            return rowNoToken
+          })
         })
 
+        const orderPayload = {
+          customerName:    customerInfo.name,
+          customerPhone:   customerInfo.phone || undefined,
+          customerEmail:   customerInfo.email || undefined,
+          items,
+          note:            customerInfo.note  || undefined,
+          utensilsNeeded:  customerInfo.utensils,
+          tipCents:        model.tipCents || 0,
+          scheduledFor:    model.scheduledFor || undefined,
+        }
+        if (model.selectedCampaign && model.cartDiscountCents > 0) {
+          orderPayload.campaignSlug          = model.selectedCampaign.slug
+          orderPayload.expectedDiscountCents = model.cartDiscountCents
+          if (model.selectedCampaign.couponCode)  orderPayload.couponCode      = model.selectedCampaign.couponCode
+          if (model.selectedCampaign.scanToken)   orderPayload.couponScanToken = model.selectedCampaign.scanToken
+        }
         const orderRes = await fetch('/api/store/orders', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({
-            customerName:    customerInfo.name,
-            customerPhone:   customerInfo.phone || undefined,
-            customerEmail:   customerInfo.email || undefined,
-            items,
-            note:            customerInfo.note  || undefined,
-            utensilsNeeded:  customerInfo.utensils,
-            tipCents:        model.tipCents || 0,
-            scheduledFor:    model.scheduledFor || undefined,
-          }),
+          body:    JSON.stringify(orderPayload),
         })
 
         if (!orderRes.ok) {
@@ -817,9 +1257,20 @@
         // Status advances to 'submitted' once payment-result confirms the charge.
         saveActiveOrder(order.orderId, order.pickupCode, 'pending_payment', null)
 
-        // Cart is now an in-flight order — clear the persisted copy so a
-        // page refresh doesn't restore a stale cart alongside the active order.
+        // Save a cart snapshot so it can be restored if the customer backs out
+        // of the payment page without completing payment.
+        try {
+          const cartSnapshot = localStorage.getItem(CART_KEY)
+          if (cartSnapshot) localStorage.setItem(PENDING_CART_KEY, cartSnapshot)
+        } catch { /* ignore */ }
+
+        // Cart is now an in-flight order — clear the persisted copies so a
+        // page refresh doesn't restore a stale cart or campaign alongside the active order.
         clearSavedCart()
+        clearSavedCampaign()
+        // Record locally that this scan_token was used so the same device can't
+        // re-present the offer after a page refresh (server is authoritative; this is UX).
+        if (model.selectedCampaign?.scanToken) _markScanTokenRedeemed(model.selectedCampaign.scanToken)
 
         // Store customer info for next visit (24-hour TTL — shared devices expire overnight)
         try {
@@ -885,7 +1336,7 @@
      * @param {string} orderId
      */
     async resumePayment(orderId) {
-      present({ appState: 'PAYING' })
+      present({ appState: 'PAYING', paymentDeclined: false, declinedOrderId: null })
       try {
         // ── Step 1: Check actual server-side order status ──────────────────
         // The payment processor may have already charged the customer even
@@ -983,11 +1434,23 @@
         }
 
         if (!res.ok || data.status === 'declined') {
-          // Declined — keep order in pending_payment so customer can retry
+          // Declined — keep order in pending_payment so customer can retry.
+          // Restore cart from the pre-redirect snapshot so the items are visible.
           try { localStorage.removeItem(PAYMENT_RETURN_KEY) } catch { /* ignore */ }
+          try {
+            const snap = JSON.parse(localStorage.getItem(PENDING_CART_KEY) || 'null')
+            if (snap?.cart?.length > 0) {
+              model.cart     = snap.cart
+              model.tipCents = snap.tipCents || 0
+            }
+            localStorage.removeItem(PENDING_CART_KEY)
+          } catch { /* ignore — proceed with empty cart */ }
+          const declinedMsg = data.message || 'Your payment was declined. Please try a different card.'
           present({
-            appState: 'CHECKOUT',
-            errorMessage: 'Your payment was declined. Please try a different card.',
+            appState:       'PAYING',
+            paymentDeclined: true,
+            declinedOrderId: params.orderId,
+            errorMessage:    declinedMsg,
           })
           return
         }
@@ -1022,8 +1485,9 @@
         // 'submitted' hides "Pay Now" — payment is confirmed at this point.
         saveActiveOrder(params.orderId, pickupCode, 'submitted', null)
 
-        // Payment confirmed — clear the crash-recovery return params
+        // Payment confirmed — clear crash-recovery and pending-cart snapshots
         try { localStorage.removeItem(PAYMENT_RETURN_KEY) } catch { /* ignore */ }
+        try { localStorage.removeItem(PENDING_CART_KEY) }   catch { /* ignore */ }
 
         // Save to order history
         saveOrderToHistory(params.orderId)
@@ -1061,11 +1525,18 @@
           window.StoreCart?.renderBar(m)
           window.StoreCart?.renderSheet(m)
           renderClosedBanner(m)
+          renderOfferBanner(m)
+          renderOfferPreviewSheet(m)
           break
         case 'CHECKOUT':
           window.StoreCart?.renderSheet(m)  // close modifier sheet if transitioning from ITEM
           window.StoreCheckout?.render(m)
           window.StoreCart?.renderBar(m)
+          renderOfferBanner(m)
+          renderOfferPreviewSheet(m)
+          break
+        case 'PAYING':
+          renderPaying(m)
           break
         case 'CONFIRMED':
           renderConfirmed(m)
@@ -1079,7 +1550,54 @@
 
   let scheduleBtnWired = false
 
+  function renderPausedBanner(m) {
+    const banner  = document.getElementById('store-paused-banner')
+    const untilEl = document.getElementById('store-paused-until')
+    if (!banner) return
+
+    // Profile may be null when the customer transitions BROWSING-from-CONFIRMED
+    // before loadStore() has populated it (e.g. /pay-return → CONFIRMED →
+    // "Back to Menu"). nap() will redirect to LOADING on the next tick, but
+    // render runs first and used to crash here, aborting StoreMenu.render and
+    // leaving an empty BROWSING screen.
+    if (!m.profile) {
+      banner.hidden = true
+      return
+    }
+
+    const isPaused = m.profile.ordersPaused && m.profile.pausedUntil &&
+                     new Date().toISOString() < m.profile.pausedUntil
+    if (!isPaused) {
+      banner.hidden = true
+      return
+    }
+
+    if (untilEl) {
+      const until = new Date(m.profile.pausedUntil)
+      const diff  = Math.max(0, Math.round((until - Date.now()) / 60000))
+      untilEl.textContent = diff > 0
+        ? `Try again in about ${diff} minute${diff === 1 ? '' : 's'}.`
+        : 'Try again shortly.'
+    }
+    banner.hidden = false
+  }
+
   function renderClosedBanner(m) {
+    // If paused, show the paused banner instead of the hours-closed banner
+    renderPausedBanner(m)
+    // Same null guard as renderPausedBanner — profile may not be loaded yet.
+    if (!m.profile) {
+      const banner = document.getElementById('store-closed-banner')
+      if (banner) banner.hidden = true
+      return
+    }
+    if (m.profile.ordersPaused && m.profile.pausedUntil &&
+        new Date().toISOString() < m.profile.pausedUntil) {
+      const banner = document.getElementById('store-closed-banner')
+      if (banner) banner.hidden = true
+      return
+    }
+
     const banner  = document.getElementById('store-closed-banner')
     const nextEl  = document.getElementById('store-closed-next')
     if (!banner) return
@@ -1103,6 +1621,212 @@
       const btn = document.getElementById('store-closed-schedule-btn')
       if (btn) btn.addEventListener('click', () => actions.openCheckout())
     }
+  }
+
+  function _isCampaignScheduleActive(campaign, tz, refDate) {
+    const sched = campaign.schedule
+    if (!sched) return true
+    const now      = refDate instanceof Date ? refDate : new Date()
+    const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+    if (sched.days?.length) {
+      const dayStr   = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now)
+      const localDay = DAY_NAMES.indexOf(dayStr)
+      if (localDay === -1 || !sched.days.includes(localDay)) return false
+    }
+    if (sched.windows?.length) {
+      const timeStr   = new Intl.DateTimeFormat('en-GB',
+        { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23' }).format(now)
+      const [h, mn]   = timeStr.split(':').map(Number)
+      const localMins = h * 60 + mn
+      return sched.windows.some(w => {
+        const [sh, sm] = w.start.split(':').map(Number)
+        const [eh, em] = w.end.split(':').map(Number)
+        return localMins >= sh * 60 + sm && localMins <= eh * 60 + em
+      })
+    }
+    return true
+  }
+
+  function renderOfferBanner(m) {
+    const banner = document.getElementById('offer-banner')
+    if (!banner) return
+
+    const campaigns = m.activeCampaigns
+    if (!campaigns || !campaigns.length) {
+      banner.hidden = true
+      banner.innerHTML = ''
+      return
+    }
+
+    const selected    = m.selectedCampaignSlug
+    const tz          = m.profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    const isCheckout  = m.appState === 'CHECKOUT'
+    // For scheduled orders, evaluate the campaign window against the scheduled time, not now
+    const schedRef    = m.scheduledFor ? new Date(m.scheduledFor) : undefined
+    banner.hidden = false
+    banner.classList.toggle('offer-banner--checkout', isCheckout)
+    banner.innerHTML = campaigns.map((c) => {
+      const isSelected  = c.slug === selected
+      const isNowValid  = _isCampaignScheduleActive(c, tz, schedRef)
+      const label       = c.offer?.label || c.name || 'Special offer'
+      const validity    = _fmtValidityWindow(c.start_at, c.valid_until)
+      const text        = validity ? `${label} · ${validity}` : label
+      const classes     = ['offer-banner-item',
+        isSelected  ? 'offer-banner-item--selected' : '',
+        !isNowValid ? 'offer-banner-item--inactive'  : '',
+      ].filter(Boolean).join(' ')
+      // Checkout: strikethrough; menu: plain label (yellow styling via CSS)
+      const labelHtml = (!isNowValid && isCheckout)
+        ? `<s>${escHtml(text)}</s>`
+        : escHtml(text)
+      const inactiveHtml = isNowValid ? '' : '<span class="offer-banner-inactive-notice">Not valid now</span>'
+      return `<div class="${classes}" data-slug="${escHtml(c.slug)}" role="button" tabindex="0" aria-pressed="${isSelected}">
+        <span class="offer-banner-select" aria-hidden="true"></span>
+        <span class="offer-banner-text">${labelHtml}</span>
+        ${inactiveHtml}
+        <button class="offer-banner-dismiss" aria-label="Remove offer" data-slug="${escHtml(c.slug)}">&times;</button>
+      </div>`
+    }).join('')
+
+    // Select / deselect on row click (inactive offers cannot be selected)
+    banner.querySelectorAll('.offer-banner-item').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.offer-banner-dismiss')) return
+        if (row.classList.contains('offer-banner-item--inactive')) return
+        const slug = row.dataset.slug
+        present({ selectedCampaignSlug: slug === model.selectedCampaignSlug ? null : slug })
+      })
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click() }
+      })
+    })
+
+    // Dismiss removes from wallet
+    banner.querySelectorAll('.offer-banner-dismiss').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const slug = btn.dataset.slug
+        dismissCampaign(slug)
+        present({
+          activeCampaigns:       model.activeCampaigns.filter(c => c.slug !== slug),
+          selectedCampaignSlug:  slug === model.selectedCampaignSlug ? null : model.selectedCampaignSlug,
+        })
+      })
+    })
+  }
+
+  // ── Offer preview sheet — shown once when customer arrives via QR link ───────
+  let _offerPreviewWired = false
+  function renderOfferPreviewSheet(m) {
+    const sheet    = document.getElementById('offer-preview-sheet')
+    const backdrop = document.getElementById('offer-preview-backdrop')
+    if (!sheet || !backdrop) return
+
+    const preview = m.offerPreview
+    if (!preview) {
+      if (sheet.classList.contains('open')) {
+        sheet.classList.remove('open')
+        const hideSheet = () => {
+          sheet.hidden    = true
+          backdrop.hidden = true
+          sheet.setAttribute('aria-hidden', 'true')
+        }
+        sheet.addEventListener('transitionend', hideSheet, { once: true })
+        setTimeout(hideSheet, 350)
+      } else {
+        sheet.hidden    = true
+        backdrop.hidden = true
+        sheet.setAttribute('aria-hidden', 'true')
+      }
+      return
+    }
+
+    // Populate content
+    const campaign = preview
+    document.getElementById('offer-preview-title').textContent = campaign.name || 'Special Offer'
+    document.getElementById('offer-preview-description').textContent = campaign.offer?.label || campaign.name || ''
+
+    const pendingBadge = document.getElementById('offer-preview-pending-badge')
+    const usedBadge    = document.getElementById('offer-preview-used-badge')
+    pendingBadge.hidden = campaign.computed_status !== 'pending'
+    usedBadge.hidden    = !campaign.already_redeemed
+
+    // Format dates
+    const datesEl = document.getElementById('offer-preview-dates')
+    const fmt = (ms) => new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    const parts = []
+    if (campaign.start_at) parts.push(`Starts: ${fmt(campaign.start_at)}`)
+    if (campaign.valid_until) parts.push(`Expires: ${fmt(campaign.valid_until)}`)
+    datesEl.textContent = parts.join('  ·  ')
+
+    // Schedule (days / time windows)
+    const scheduleEl = document.getElementById('offer-preview-schedule')
+    if (scheduleEl) {
+      const schedText = _fmtSchedule(campaign.schedule)
+      if (schedText) {
+        scheduleEl.textContent = `Valid: ${schedText}`
+        scheduleEl.hidden = false
+      } else {
+        scheduleEl.hidden = true
+      }
+    }
+
+    // Coupon code (if present in URL)
+    const codeContainer = document.getElementById('offer-preview-code')
+    const codeValue     = document.getElementById('offer-preview-code-value')
+    if (campaign.couponCode) {
+      codeValue.textContent = campaign.couponCode
+      codeContainer.hidden  = false
+    } else {
+      codeContainer.hidden = true
+    }
+
+    // Update accept button label based on state
+    const acceptBtn = document.getElementById('offer-accept-btn')
+    if (campaign.computed_status === 'pending') {
+      acceptBtn.textContent = 'Remind me when active'
+    } else if (campaign.already_redeemed) {
+      acceptBtn.textContent = 'Got it'
+    } else {
+      acceptBtn.textContent = 'Accept Offer'
+    }
+
+    // Wire buttons once. Handlers read model.offerPreview at click time (not at wire time),
+    // so scanning a second QR code in the same session always acts on the current campaign —
+    // even though the listeners themselves are attached only on the first render.
+    if (!_offerPreviewWired) {
+      _offerPreviewWired = true
+
+      document.getElementById('offer-accept-btn').addEventListener('click', () => {
+        const p = model.offerPreview
+        if (!p) return
+        const newCampaigns = model.activeCampaigns.filter(c => c.slug !== p.slug)
+        // Only actually apply if active and not already redeemed
+        const shouldApply = p.computed_status === 'active' && !p.already_redeemed
+        if (shouldApply) newCampaigns.unshift(p)
+        present({
+          offerPreview: null,
+          activeCampaigns: newCampaigns,
+          selectedCampaignSlug: shouldApply ? p.slug : model.selectedCampaignSlug,
+        })
+        if (p.computed_status === 'pending') setTimeout(() => showToast("We'll remind you when this offer is active."), 300)
+      })
+
+      document.getElementById('offer-decline-btn').addEventListener('click', () => {
+        const p = model.offerPreview
+        if (p) clearSavedCampaign()
+        present({ offerPreview: null })
+      })
+
+      document.getElementById('offer-preview-backdrop').addEventListener('click', () => {
+        present({ offerPreview: null })
+      })
+    }
+
+    // Open sheet
+    sheet.hidden    = false
+    sheet.setAttribute('aria-hidden', 'false')
+    backdrop.hidden = false
+    if (!sheet.classList.contains('open')) requestAnimationFrame(() => sheet.classList.add('open'))
   }
 
   function showPanel(appState) {
@@ -1129,6 +1853,43 @@
       const el = document.getElementById(id)
       if (el) el.hidden = (id !== target)
     })
+  }
+
+  let _payingRetryWired = false
+  let _payingBackWired  = false
+
+  function renderPaying(m) {
+    const processing = document.getElementById('paying-processing')
+    const declined   = document.getElementById('paying-declined')
+    const msgEl      = document.getElementById('paying-declined-msg')
+    if (!processing || !declined) return
+
+    setVisible(processing, !m.paymentDeclined)
+    setVisible(declined,    m.paymentDeclined)
+
+    if (!m.paymentDeclined) return
+
+    if (msgEl) msgEl.textContent = m.errorMessage || 'Your payment was declined. Please try a different card.'
+
+    if (!_payingRetryWired) {
+      _payingRetryWired = true
+      document.getElementById('paying-retry-btn')?.addEventListener('click', () => {
+        actions.resumePayment(model.declinedOrderId)
+      })
+    }
+    if (!_payingBackWired) {
+      _payingBackWired = true
+      document.getElementById('paying-back-btn')?.addEventListener('click', () => {
+        // Cancel the declined order server-side (fire-and-forget) so it doesn't
+        // linger as pending_payment when the customer edits and resubmits.
+        const oid = model.declinedOrderId
+        if (oid) {
+          fetch(`/api/store/orders/${oid}/cancel`, { method: 'POST' }).catch(() => {})
+          clearActiveOrder()
+        }
+        present({ appState: 'CHECKOUT', paymentDeclined: false, declinedOrderId: null })
+      })
+    }
   }
 
   let confirmedRenderedOrderId = null
@@ -1349,6 +2110,15 @@
         history.pushState({ view: 'menu' }, '')
         _appHistoryDepth++
         _showExitModal({ pendingOrder: false })
+        return
+      }
+
+      // ── PAYING → back to review / CHECKOUT ───────────────────────────────
+      // User pressed back mid-payment — return them to the order review page.
+      if (model.appState === 'PAYING') {
+        history.pushState({ view: 'menu' }, '')
+        _appHistoryDepth++
+        present({ appState: 'CHECKOUT', paymentDeclined: false, declinedOrderId: null })
         return
       }
 
@@ -1907,7 +2677,7 @@
     // Update the persistent active-order bar
     const active = getActiveOrder()
     if (active) {
-      if (status === 'completed' || status === 'cancelled') {
+      if (status === 'completed' || status === 'cancelled' || status === 'picked_up') {
         clearActiveOrder()
       } else {
         saveActiveOrder(active.orderId, active.pickupCode, status, estimatedReadyAt || active.estimatedReadyAt)
@@ -2079,8 +2849,13 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        console.error('[feedback] submit failed', res.status, body)
+      }
       return res.ok
-    } catch {
+    } catch (err) {
+      console.error('[feedback] submit error', err)
       return false
     }
   }
@@ -2129,6 +2904,7 @@
           setTimeout(_closeFeedbackApp, 800)
         } else {
           if (btn) { btn.disabled = false; btn.textContent = 'Submit Feedback' }
+          showToast('Could not submit feedback — please try again.')
         }
       })
     }
@@ -2173,6 +2949,7 @@
           orderId:     _fbOrderId,
           stars:       _fbOrderStars,
           comment:     document.getElementById('feedback-order-comment')?.value.trim() || null,
+          managerNote: document.getElementById('feedback-order-manager-note')?.value.trim() || null,
           contact:     document.getElementById('feedback-order-contact')?.value.trim() || null,
           dishRatings: dishRatings.length ? dishRatings : null,
         })
@@ -2180,9 +2957,15 @@
         _fbSubmitting = false
         if (ok) {
           if (btn) { btn.textContent = 'Thank you!'; btn.disabled = true }
-          setTimeout(_closeFeedbackOrder, 800)
+          setTimeout(() => {
+            _closeFeedbackOrder()
+            // Nudge iOS dine-in customers (who arrived via QR, no active order)
+            // to add the app to their home screen after they've engaged.
+            setTimeout(() => window.StorePush?.showIOSBanner?.(), 300)
+          }, 800)
         } else {
           if (btn) { btn.disabled = false; btn.textContent = 'Submit Feedback' }
+          showToast('Could not submit feedback — please try again.')
         }
       })
     }
@@ -2196,6 +2979,8 @@
     getActiveOrder,
     clearActiveOrder,
     renderActiveOrderBar,
+    fmtSchedule: _fmtSchedule,
+    isCampaignScheduleActive: (campaign, refDate) => _isCampaignScheduleActive(campaign, model.profile?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, refDate),
   }
 
   // ---------------------------------------------------------------------------
@@ -2326,9 +3111,44 @@
     if (!hasActiveOrder) {
       const savedCartData = loadCart()
       if (savedCartData.cart.length > 0) {
-        model.cart     = savedCartData.cart
-        model.tipCents = savedCartData.tipCents
+        model.cart         = savedCartData.cart
+        model.tipCents     = savedCartData.tipCents
+        model.scheduledFor = savedCartData.scheduledFor || null
       }
+    }
+
+    // ── Detect abandoned payment (customer backed out of Finix) ─────────────
+    // When submitOrder() redirects to Finix and the customer presses browser-back,
+    // the page reloads with a 'pending_payment' active order but no /pay-return.
+    // We cancel the abandoned order, restore the cart, and go straight to CHECKOUT
+    // so the customer can review and modify before paying again.
+    const pendingCartSnapshot = (() => {
+      try { return localStorage.getItem(PENDING_CART_KEY) } catch { return null }
+    })()
+    if (!isPaymentReturn && activeOnBoot?.status === 'pending_payment' && pendingCartSnapshot) {
+      try {
+        const savedCart = JSON.parse(pendingCartSnapshot)
+        if (savedCart?.cart?.length > 0) {
+          model.cart     = savedCart.cart
+          model.tipCents = savedCart.tipCents || 0
+        }
+      } catch { /* ignore — proceed with empty cart */ }
+      try { localStorage.removeItem(PENDING_CART_KEY) } catch { /* ignore */ }
+      // Fire-and-forget cancel of the abandoned order
+      const abandonedId = activeOnBoot.orderId
+      clearActiveOrder()
+      fetch(`/api/store/orders/${abandonedId}/cancel`, { method: 'POST' }).catch(() => {})
+      _resumeCheckoutOnLoad = true
+    }
+
+    // ── Detect bill QR feedback link (?fb=TOKEN) ──────────────────────────────
+    // When a customer scans the QR code printed on their bill, the URL is
+    // /?fb=TOKEN.  Capture the token, clean the URL, then fall through to the
+    // normal load so the store initialises before the feedback modal opens.
+    const fbParam = new URLSearchParams(window.location.search).get('fb')
+    if (fbParam) {
+      _pendingFeedbackToken = fbParam
+      history.replaceState(null, '', window.location.pathname)
     }
 
     // Check if returning from Converge/Finix payment redirect

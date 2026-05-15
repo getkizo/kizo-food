@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared type definitions for all receipt printer modules.
  *
  * This is the single source of truth for printer option interfaces.
@@ -25,6 +25,8 @@ export interface PrintItem {
   isLastCourse?: boolean
   /** 'both' = kitchen+counter (default); 'kitchen' = kitchen only; 'counter' = counter only */
   printDestination?: 'both' | 'kitchen' | 'counter'
+  /** Dietary tags from the menu item (e.g. ['gluten_free', 'vegan']). Populated by enrichItemsWithCategory(). */
+  dietaryTags?: string[]
 }
 
 export interface KitchenTicketOptions {
@@ -47,6 +49,13 @@ export interface KitchenTicketOptions {
   createdAt?: string | null
   /** IANA timezone name (e.g. 'America/Los_Angeles'). Used by WebPRNT builders for locale-aware timestamp formatting. */
   timezone?: string | null
+  /** ISO timestamp of when the customer wants the order ready (scheduled orders only). */
+  scheduledFor?: string | null
+  /**
+   * When true, renders a prominent GLUTEN FREE banner at the top of the kitchen ticket.
+   * Set by the dispatcher when a GF-separated first ticket is printed.
+   */
+  showGlutenFreeBanner?: boolean
 }
 
 export interface CounterTicketOptions extends KitchenTicketOptions {
@@ -77,6 +86,10 @@ export interface CustomerReceiptOptions extends KitchenTicketOptions {
    * Rendered by the HTML and raster paths; silently ignored by text-mode builders.
    */
   tipCents?: number
+  discountCents?: number
+  discountLabel?: string | null
+  serviceChargeCents?: number
+  serviceChargeLabel?: string | null
   address?: string | null
   phoneNumber?: string | null
   website?: string | null
@@ -99,6 +112,8 @@ export interface CustomerBillOptions extends KitchenTicketOptions {
   address?: string | null
   phoneNumber?: string | null
   website?: string | null
+  /** Full URL for the bill QR code feedback link (e.g. https://store.domain/?fb=TOKEN). */
+  feedbackUrl?: string | null
 }
 
 export interface TestPageOptions {
@@ -107,6 +122,26 @@ export interface TestPageOptions {
   printerProtocol?: 'star-line' | 'star-line-tsp100' | 'webprnt' | 'star-graphic' | 'generic-escpos'
   /** Human-readable label printed on the ticket, e.g. "Kitchen" */
   label?:           string
+}
+
+/** Options for printing a marketing coupon ticket (counter printer). */
+export interface CouponTicketOptions {
+  printerIp:        string
+  printerPort?:     number
+  printerProtocol?: 'star-line' | 'star-line-tsp100' | 'webprnt' | 'star-graphic' | 'generic-escpos'
+  merchantName:     string
+  address?:         string | null
+  phoneNumber?:     string | null
+  website?:         string | null
+  /** Campaign slug — used to build the QR URL https://qr.kizo.example/c/{slug} */
+  campaignSlug:     string
+  campaignName:     string
+  /** Human-readable discount label (e.g. "20% off your order") */
+  discountLabel:    string
+  /** Fulfillment restriction: null | 'dine_in' | 'takeout' | 'delivery' */
+  fulfillmentRestriction?: string | null
+  /** Raw schedule_json from campaigns table — printed as "Valid: Mon–Fri 5pm–9pm" */
+  scheduleJson?: string | null
 }
 
 /** Options for printing a gift card purchase receipt. */

@@ -1,5 +1,5 @@
-/**
- * Kizo Register Dashboard
+﻿/**
+ * Kizo Merchant Dashboard
  *
  * Implementation note — plain state object (no sam-pattern npm library):
  *   `state` is a plain mutable object updated by direct assignment.  The
@@ -99,6 +99,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.merchantId = state.merchantId
     window.state = state   // voice.js reads state.allItems for name matching
     window.dispatchEvent(new Event('merchant:authenticated'))
+    // Arm proactive refresh so the token never expires while the tab is open
+    scheduleProactiveRefresh()
   } catch {
     window.location.href = '/setup'
     return
@@ -111,6 +113,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initCropModal()
   initModifierPickerModal()
   initOrders()
+  initMoveTable()
+  initAdvanceOrders()
   initBrandImages()
   initTableLayout()
   initPrinterToggles()
@@ -119,8 +123,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   initEmployees()
   initEmployeeMode()
   initTimesheet()
+  initManagerAccess()
   await loadProfile()
-  await Promise.all([loadHours(), loadClosures(), loadPaymentConfig(), loadTerminals()])
+  await Promise.all([loadHours(), loadClosures(), loadPaymentConfig(), loadTerminals(), loadManagerUsers()])
   initConvergeUI()
   initFinixUI()
   initPayPeriodUI()
@@ -165,6 +170,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Start polling for Stax payment failure notifications
   startPaymentNotificationPolling()
+
+  startAutoSync()
 })
 
 // ---------------------------------------------------------------------------
@@ -204,7 +211,7 @@ function initSidebarCollapse() {
 }
 
 /** Sections a clocked-in server may access. Managers get everything. */
-const SERVER_SECTIONS = new Set(['orders', 'order', 'reservations', 'gift-cards'])
+const SERVER_SECTIONS = new Set(['orders', 'order', 'reservations', 'gift-cards', 'oos', 'weather'])
 
 /** Sections restricted to manager/owner employee role only. */
 const MANAGER_ONLY_SECTIONS = new Set(['reports', 'backup'])
@@ -241,6 +248,7 @@ function showSection(name) {
     menu: 'Menu Items',
     order: 'Order Entry',
     modifiers: 'Modifiers',
+    'special-instructions': 'Special Instructions',
     orders: 'Orders',
     employees: 'Employees',
     timesheet: 'Timesheet',
@@ -249,8 +257,10 @@ function showSection(name) {
     feedback: 'Customer Feedback',
     reservations: 'Reservations',
     'gift-cards': 'Gift Cards',
+    'oos': '86\'d',
     maintenance: 'Maintenance',
     health: 'System Health',
+    weather: 'Weather',
   }
 
   state.activeSection = name
@@ -290,6 +300,10 @@ function showSection(name) {
     }
   }
 
+  if (name === 'special-instructions') {
+    loadSpecialInstructions()
+  }
+
   if (name === 'orders') {
     loadOrders()
   }
@@ -323,6 +337,10 @@ function showSection(name) {
     loadGiftCards(true)
   }
 
+  if (name === 'oos') {
+    initOosSection()
+  }
+
   if (name === 'maintenance') {
     loadFog(true)
     loadHoodFog(true)
@@ -330,6 +348,10 @@ function showSection(name) {
 
   if (name === 'health') {
     startHealthPolling()
+  }
+
+  if (name === 'weather') {
+    loadWeather()
   }
 }
 
@@ -436,6 +458,24 @@ function renderHealth(data) {
     pEl.querySelectorAll('.health-printer-test-btn').forEach(btn => {
       btn.addEventListener('click', () => testPrinter(btn.dataset.ip, btn.dataset.protocol))
     })
+
+    // Auto-probe unique IPs and update status dots
+    const uniqueIps = [...new Set(printers.map(p => p.ip))]
+    const query = uniqueIps.map(ip => encodeURIComponent(ip)).join(',')
+    api(`/api/merchants/${state.merchantId}/printers/status?ips=${query}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d?.success || !d.status) return
+        printers.forEach(p => {
+          const row = document.getElementById('hpr-' + p.ip.replace(/\./g, '-'))
+          if (!row) return
+          const dot = row.querySelector('.health-status-dot')
+          if (!dot) return
+          const online = !!d.status[p.ip]
+          dot.className = 'health-status-dot ' + (online ? 'ok' : 'error')
+        })
+      })
+      .catch(() => {})
   }
 
   // Terminals
@@ -588,6 +628,201 @@ function drawMemChart(memHistory, sysTotal) {
 }
 
 // ---------------------------------------------------------------------------
+// Weather
+// ---------------------------------------------------------------------------
+
+let _weatherData = null
+
+/** Persistent °F / °C preference. */
+function weatherUseCelsius() { return localStorage.getItem('kizo_weather_unit') === 'C' }
+
+function fmtWeatherTemp(tempF) {
+  if (weatherUseCelsius()) return Math.round((tempF - 32) * 5 / 9) + '°C'
+  return tempF + '°F'
+}
+
+function initWeatherUnitToggle() {
+  const btn = document.getElementById('weather-unit-toggle')
+  btn.textContent = weatherUseCelsius() ? '°C' : '°F'
+  btn.onclick = () => {
+    const useC = !weatherUseCelsius()
+    localStorage.setItem('kizo_weather_unit', useC ? 'C' : 'F')
+    btn.textContent = useC ? '°C' : '°F'
+    if (_weatherData) renderWeather(_weatherData)
+  }
+}
+
+async function loadWeather() {
+  if (!state.merchantId) return
+  initWeatherUnitToggle()
+  document.getElementById('weather-empty').hidden = true
+  document.getElementById('weather-refresh-btn').onclick = () => {
+    document.getElementById('weather-updated').textContent = 'Refreshing…'
+    loadWeather()
+  }
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/weather`)
+    if (!res.ok) { showWeatherError(); return }
+    _weatherData = await res.json()
+    renderWeather(_weatherData)
+  } catch { showWeatherError() }
+}
+
+function showWeatherError() {
+  document.getElementById('weather-hero').hidden = true
+  document.getElementById('weather-periods').innerHTML = ''
+  document.getElementById('weather-empty').hidden = false
+}
+
+/** @param {{ periods: Array, updated: string }} data */
+function renderWeather(data) {
+  const { periods = [], updated } = data
+
+  // Daytime periods only
+  const dayPeriods = periods.filter(p => p.isDaytime)
+  if (dayPeriods.length === 0) { showWeatherError(); return }
+
+  // Updated timestamp
+  try {
+    document.getElementById('weather-updated').textContent =
+      'Updated ' + new Date(updated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch { /* ignore */ }
+
+  // Hero — first daytime period
+  const hero = dayPeriods[0]
+  document.getElementById('weather-hero-name').textContent  = hero.name ?? ''
+  document.getElementById('weather-hero-temp').textContent  = fmtWeatherTemp(hero.temperature)
+  document.getElementById('weather-hero-short').textContent = hero.shortForecast ?? ''
+  document.getElementById('weather-hero-wind').textContent  =
+    hero.windSpeed ? `Wind ${hero.windDirection} ${hero.windSpeed}` : ''
+  const heroIcon = document.getElementById('weather-hero-icon')
+  if (hero.icon) {
+    heroIcon.src = hero.icon
+    heroIcon.alt = hero.shortForecast ?? ''
+  }
+  document.getElementById('weather-hero').hidden = false
+
+  // Remaining daytime periods grid
+  document.getElementById('weather-periods').innerHTML = dayPeriods.slice(1).map(p => `
+    <div class="weather-period-card">
+      <div class="weather-period-name">${esc(p.name ?? '')}</div>
+      <img class="weather-period-icon" src="${esc(p.icon ?? '')}" alt="${esc(p.shortForecast ?? '')}" loading="lazy">
+      <div class="weather-period-temp">${esc(fmtWeatherTemp(p.temperature))}</div>
+      <div class="weather-period-short">${esc(p.shortForecast ?? '')}</div>
+    </div>
+  `).join('')
+}
+
+// ---------------------------------------------------------------------------
+// Manager App Access
+// ---------------------------------------------------------------------------
+
+async function loadManagerUsers() {
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/manager/users`)
+    if (!res.ok) return
+    const { managers, pendingInvites } = await res.json()
+    renderManagerUsers(managers, pendingInvites)
+  } catch (err) {
+    console.warn('[loadManagerUsers] failed:', err)
+  }
+}
+
+function renderManagerUsers(managers, pendingInvites) {
+  const usersList    = document.getElementById('manager-users-list')
+  const usersEmpty   = document.getElementById('manager-users-empty')
+  const invitesList  = document.getElementById('manager-invites-list')
+  const invitesEmpty = document.getElementById('manager-invites-empty')
+  if (!usersList) return
+
+  if (!managers.length) {
+    usersList.innerHTML = ''
+    usersEmpty.hidden = false
+  } else {
+    usersEmpty.hidden = true
+    usersList.innerHTML = managers.map(m => `
+      <li class="manager-list-item" data-id="${escHtml(m.id)}">
+        <span class="manager-list-name">${escHtml(m.full_name || m.email)}</span>
+        <span class="manager-list-email">${escHtml(m.full_name ? m.email : '')}</span>
+        <button type="button" class="btn-icon manager-revoke-btn"
+          data-id="${escHtml(m.id)}" data-email="${escHtml(m.email)}"
+          aria-label="Revoke access for ${escHtml(m.email)}">✕</button>
+      </li>`).join('')
+    usersList.querySelectorAll('.manager-revoke-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Revoke manager access for ${btn.dataset.email}?`)) return
+        const res = await api(
+          `/api/merchants/${state.merchantId}/manager/users/${btn.dataset.id}`,
+          { method: 'DELETE' },
+        )
+        if (res.ok) {
+          btn.closest('.manager-list-item')?.remove()
+          if (!usersList.children.length) usersEmpty.hidden = false
+          showToast('Manager access revoked')
+        } else {
+          const e = await res.json().catch(() => ({}))
+          showToast(e.error || 'Failed to revoke access', 'error')
+        }
+      })
+    })
+  }
+
+  if (!invitesList) return
+  if (!pendingInvites.length) {
+    invitesList.innerHTML = ''
+    invitesEmpty.hidden = false
+  } else {
+    invitesEmpty.hidden = true
+    invitesList.innerHTML = pendingInvites.map(inv => {
+      const exp = new Date(inv.expires_at).toLocaleDateString(undefined,
+        { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      return `
+        <li class="manager-list-item manager-list-item--pending">
+          <span class="manager-list-email">${escHtml(inv.email)}</span>
+          <span class="manager-list-meta">Expires ${escHtml(exp)}</span>
+        </li>`
+    }).join('')
+  }
+}
+
+function initManagerAccess() {
+  const btn = document.getElementById('manager-invite-btn')
+  if (!btn) return
+  btn.addEventListener('click', async () => {
+    const input  = document.getElementById('manager-invite-email')
+    const status = document.getElementById('manager-invite-status')
+    const email  = input?.value.trim()
+    if (!email) { input?.focus(); return }
+    btn.disabled = true
+    btn.textContent = 'Sending…'
+    if (status) { status.hidden = true; status.textContent = '' }
+    try {
+      const res  = await api(`/api/merchants/${state.merchantId}/manager/invites`, {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      })
+      const body = await res.json()
+      if (res.ok) {
+        if (input) input.value = ''
+        if (status) { status.textContent = `Invite sent to ${email}`; status.hidden = false }
+        showToast(`Invite sent to ${email}`)
+        loadManagerUsers()
+      } else {
+        const msg = body.error || 'Failed to send invite'
+        if (status) { status.textContent = msg; status.hidden = false }
+        showToast(msg, 'error')
+      }
+    } catch {
+      if (status) { status.textContent = 'Network error'; status.hidden = false }
+      showToast('Network error', 'error')
+    } finally {
+      btn.disabled = false
+      btn.textContent = 'Send Invite'
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Store Profile
 // ---------------------------------------------------------------------------
 
@@ -715,6 +950,12 @@ function populateProfileForm(profile) {
     })
   }
 
+  // Signature capture toggle (default on for back-compat with rows that have no value)
+  const sigCaptureToggle = document.getElementById('store-signature-capture')
+  if (sigCaptureToggle) {
+    sigCaptureToggle.checked = profile.signatureCapture !== false
+  }
+
   // Employee sales sharing toggle
   const salesToggle = document.getElementById('store-show-employee-sales')
   if (salesToggle) salesToggle.checked = profile.showEmployeeSales !== false
@@ -761,6 +1002,10 @@ function populateProfileForm(profile) {
   // Populate welcome message
   const welcomeEl = document.getElementById('welcome-message-input')
   if (welcomeEl) welcomeEl.value = profile.welcomeMessage ?? ''
+
+  // Google Analytics tag ID
+  const gaTagEl = document.getElementById('ga-tag-id-input')
+  if (gaTagEl) gaTagEl.value = profile.gaTagId ?? ''
 
   // Reservation settings
   const resEnabledCb = document.getElementById('store-reservation-enabled')
@@ -1103,6 +1348,7 @@ document.getElementById('save-profile-btn')?.addEventListener('click', async () 
         suggestedTipPercentages: [...document.querySelectorAll('.terminal-tip-btn[aria-pressed="true"]')]
           .map(b => Number(b.dataset.tip))
           .sort((a, b) => a - b),
+        signatureCapture: document.getElementById('store-signature-capture')?.checked ?? true,
         address: getValue('store-address'),
         description: getValue('store-description'),
         showEmployeeSales: document.getElementById('store-show-employee-sales')?.checked ?? true,
@@ -1147,6 +1393,9 @@ document.getElementById('save-profile-btn')?.addEventListener('click', async () 
     if (pwField) pwField.value = ''
     const savedData = await res.json().catch(() => null)
     if (savedData) {
+      // Refresh the cached profile so subsequent reads (e.g. PaymentModal's
+      // signatureCapture check) see the just-saved values without a page reload.
+      state.profile = savedData
       const emailStatus = document.getElementById('email-receipts-status')
       if (emailStatus) {
         if (savedData.receiptEmailConfigured && savedData.receiptEmailFrom) {
@@ -2504,6 +2753,120 @@ document.getElementById('import-menu-btn')?.addEventListener('click', async () =
   }
 })
 
+// ── Menu export buttons ──────────────────────────────────────────────────────
+
+document.getElementById('menu-export-md-btn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('menu-export-md-btn')
+  btn.disabled = true
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/menu/export.md`)
+    if (!res.ok) throw new Error('Export failed')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `menu-${new Date().toISOString().slice(0, 10)}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    showToast(err.message || 'Markdown export failed', 'error')
+  } finally {
+    btn.disabled = false
+  }
+})
+
+// ── Menu PDF export modal ────────────────────────────────────────────────────
+
+;(function () {
+  const modal    = document.getElementById('menu-pdf-modal')
+  const catList  = document.getElementById('menu-pdf-cat-list')
+  const togBtn   = document.getElementById('menu-pdf-cat-toggle')
+  const genBtn   = document.getElementById('menu-pdf-generate-btn')
+
+  /** Open the modal and populate category checkboxes from state.menu */
+  function openPdfModal () {
+    const cats = (state.menu?.categories ?? []).map((c) => c.name)
+
+    // Build checkbox list — all checked by default
+    catList.innerHTML = cats.length
+      ? cats.map((name) => `
+          <label>
+            <input type="checkbox" class="menu-pdf-cat-cb" value="${name.replace(/"/g, '&quot;')}" checked>
+            ${name.replace(/</g, '&lt;')}
+          </label>`).join('')
+      : '<span style="padding:0.5rem 0.75rem;font-size:0.875rem;color:var(--color-gray-500)">No categories</span>'
+
+    togBtn.textContent = 'Deselect all'
+    modal.hidden = false
+  }
+
+  /** Close modal, restore Generate button */
+  function closePdfModal () {
+    modal.hidden = true
+    genBtn.disabled = false
+    genBtn.textContent = 'Generate PDF'
+  }
+
+  // Open on toolbar button click
+  document.getElementById('menu-export-pdf-btn')?.addEventListener('click', openPdfModal)
+
+  // Close buttons
+  document.getElementById('menu-pdf-modal-close')?.addEventListener('click', closePdfModal)
+  document.getElementById('menu-pdf-modal-cancel')?.addEventListener('click', closePdfModal)
+  modal?.addEventListener('click', (e) => { if (e.target === modal) closePdfModal() })
+
+  // Select all / Deselect all toggle
+  togBtn?.addEventListener('click', () => {
+    const cbs = catList.querySelectorAll('.menu-pdf-cat-cb')
+    const allChecked = [...cbs].every((cb) => cb.checked)
+    cbs.forEach((cb) => { cb.checked = !allChecked })
+    togBtn.textContent = allChecked ? 'Select all' : 'Deselect all'
+  })
+
+  // Keep toggle label in sync when individual checkboxes change
+  catList?.addEventListener('change', () => {
+    const cbs = catList.querySelectorAll('.menu-pdf-cat-cb')
+    if (!cbs.length) return
+    const allChecked = [...cbs].every((cb) => cb.checked)
+    togBtn.textContent = allChecked ? 'Deselect all' : 'Select all'
+  })
+
+  // Generate PDF
+  genBtn?.addEventListener('click', async () => {
+    genBtn.disabled = true
+    genBtn.textContent = 'Generating…'
+
+    try {
+      const format      = document.getElementById('menu-pdf-format').value
+      const orientation = document.querySelector('input[name="menu-pdf-orientation"]:checked')?.value ?? 'portrait'
+      const images      = document.getElementById('menu-pdf-images').checked
+
+      const selectedCats = [...catList.querySelectorAll('.menu-pdf-cat-cb:checked')].map((cb) => cb.value)
+      const params = new URLSearchParams({
+        format,
+        orientation,
+        images: String(images),
+        cats:   selectedCats.join(','),
+      })
+
+      const res = await api(`/api/merchants/${state.merchantId}/menu/export.pdf?${params}`, { timeout: 120_000 })
+      if (!res.ok) throw new Error('PDF generation failed')
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `menu-${new Date().toISOString().slice(0, 10)}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      closePdfModal()
+    } catch (err) {
+      showToast(err.message || 'PDF export failed', 'error')
+      genBtn.disabled = false
+      genBtn.textContent = 'Generate PDF'
+    }
+  })
+})()
+
 function renderMenu(menuData) {
   const hasCategories = menuData.categories?.length > 0
   const hasUncategorized = menuData.uncategorizedItems?.length > 0
@@ -3854,6 +4217,16 @@ function initModifierPanel() {
     if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); mandatoryToggle.click() }
   })
 
+  // Print-first toggle
+  const printFirstToggle = document.getElementById('edit-group-print-first')
+  printFirstToggle?.addEventListener('click', () => {
+    const checked = printFirstToggle.getAttribute('aria-checked') === 'true'
+    printFirstToggle.setAttribute('aria-checked', String(!checked))
+  })
+  printFirstToggle?.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); printFirstToggle.click() }
+  })
+
   // "Add option" button
   document.getElementById('mod-option-add-btn')?.addEventListener('click', () => addModOptionRow())
 
@@ -4007,6 +4380,7 @@ function openNewModifierPanel() {
   document.getElementById('edit-group-name').value = ''
   document.getElementById('edit-group-takeout').setAttribute('aria-checked', 'true')
   document.getElementById('edit-group-mandatory').setAttribute('aria-checked', 'false')
+  document.getElementById('edit-group-print-first').setAttribute('aria-checked', 'false')
   const _minI = document.getElementById('edit-group-min')
   const _maxI = document.getElementById('edit-group-max')
   if (_minI) _minI.value = '0'
@@ -4035,6 +4409,10 @@ function openModifierPanel(group) {
   // Populate mandatory toggle
   const mandatoryToggle = document.getElementById('edit-group-mandatory')
   mandatoryToggle.setAttribute('aria-checked', String(group.isMandatory === true))
+
+  // Populate print-first toggle
+  const printFirstToggle = document.getElementById('edit-group-print-first')
+  printFirstToggle.setAttribute('aria-checked', String(group.printFirst === true))
 
   // Populate min/max selection counts
   const minInput = document.getElementById('edit-group-min')
@@ -4282,6 +4660,7 @@ async function saveModifierAssignments() {
   const groupName = document.getElementById('edit-group-name').value.trim()
   const availableForTakeout = document.getElementById('edit-group-takeout').getAttribute('aria-checked') === 'true'
   const isMandatory = document.getElementById('edit-group-mandatory').getAttribute('aria-checked') === 'true'
+  const printFirst = document.getElementById('edit-group-print-first').getAttribute('aria-checked') === 'true'
   const minRequired = parseInt(document.getElementById('edit-group-min')?.value || '0', 10) || 0
   const maxAllowedRaw = document.getElementById('edit-group-max')?.value
   const maxAllowed = maxAllowedRaw ? (parseInt(maxAllowedRaw, 10) || null) : null
@@ -4323,7 +4702,7 @@ async function saveModifierAssignments() {
     // Save options
     const optRes = await api(
       `/api/merchants/${state.merchantId}/menu/modifier-groups/${groupId}/options`,
-      { method: 'PUT', body: JSON.stringify({ name: groupName, availableForTakeout, isMandatory, minRequired, maxAllowed, options }) }
+      { method: 'PUT', body: JSON.stringify({ name: groupName, availableForTakeout, isMandatory, printFirst, minRequired, maxAllowed, options }) }
     )
     if (!optRes.ok) {
       const err = await optRes.json().catch(() => ({}))
@@ -4470,6 +4849,11 @@ async function saveBrandImages() {
   const welcomeEl = document.getElementById('welcome-message-input')
   if (welcomeEl) {
     payload.welcomeMessage = welcomeEl.value.trim() || null
+  }
+
+  const gaTagEl = document.getElementById('ga-tag-id-input')
+  if (gaTagEl) {
+    payload.gaTagId = gaTagEl.value.trim() || null
   }
 
   if (Object.keys(payload).length === 0) {
@@ -4983,6 +5367,82 @@ function clearAuth() {
   localStorage.removeItem('accessToken')
   localStorage.removeItem('refreshToken')
   localStorage.removeItem('merchantId')
+  _cancelProactiveRefresh()
+}
+
+// ---------------------------------------------------------------------------
+// Proactive token refresh — refreshes the access token 5 minutes before it
+// expires so the dashboard session never hits a 401 mid-operation.
+// A POS terminal stays open 24/7; reactive refresh on 401 causes every SSE
+// reconnect (and the first API call after midnight) to generate a logged
+// auth_expired_token security event and a brief stall while the refresh runs.
+// ---------------------------------------------------------------------------
+
+/** Timer handle for the scheduled proactive refresh, or null if not active. */
+let _proactiveRefreshTimer = null
+
+/**
+ * Decode the `exp` claim from a JWT without verifying the signature.
+ * Returns seconds-until-expiry, or 0 if the token is malformed/already expired.
+ * @param {string} token
+ * @returns {number}
+ */
+function _jwtSecondsUntilExpiry(token) {
+  try {
+    const payloadB64 = token.split('.')[1]
+    if (!payloadB64) return 0
+    const padded = payloadB64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((payloadB64.length + 3) % 4 || 4)
+    const payload = JSON.parse(atob(padded))
+    return Math.max(0, (payload.exp ?? 0) - Math.floor(Date.now() / 1000))
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Schedule a silent access-token refresh to fire 5 minutes before expiry.
+ * Safe to call multiple times — cancels any pending timer first.
+ * Should be called after every successful login or token refresh.
+ */
+function scheduleProactiveRefresh() {
+  _cancelProactiveRefresh()
+  const secsLeft = _jwtSecondsUntilExpiry(state.accessToken)
+  if (secsLeft <= 0) return  // already expired; reactive path handles it
+
+  const fireInMs = Math.max(0, (secsLeft - 300) * 1000)  // 5 min early
+  _proactiveRefreshTimer = setTimeout(async () => {
+    _proactiveRefreshTimer = null
+    const refreshToken = localStorage.getItem('refreshToken')
+    if (!refreshToken || !state.accessToken) return
+    try {
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      })
+      if (res.ok) {
+        const { accessToken } = await res.json()
+        state.accessToken = accessToken
+        localStorage.setItem('accessToken', accessToken)
+        window.authToken = accessToken  // keep pwa.js / voice.js in sync
+        scheduleProactiveRefresh()      // arm the next refresh cycle
+      } else {
+        // Refresh token expired or revoked — redirect to login
+        clearAuth()
+        window.location.href = '/setup'
+      }
+    } catch {
+      // Network error — retry in 60 s rather than giving up
+      _proactiveRefreshTimer = setTimeout(scheduleProactiveRefresh, 60_000)
+    }
+  }, fireInMs)
+}
+
+function _cancelProactiveRefresh() {
+  if (_proactiveRefreshTimer !== null) {
+    clearTimeout(_proactiveRefreshTimer)
+    _proactiveRefreshTimer = null
+  }
 }
 
 /**
@@ -5113,27 +5573,37 @@ function setSelectValue(id, value) { var e = document.getElementById(id); if (e)
  * @param {string|null|undefined} receiptIp
  */
 async function probePrinterStatus(kitchenIp, counterIp, receiptIp) {
-  var ips = [kitchenIp, counterIp, receiptIp].filter(Boolean)
+  // Build IP → [dotId, ...] map so shared IPs update all matching dots
+  var dotMap = {}
+  ;[
+    [kitchenIp, 'kitchen-printer-status'],
+    [counterIp, 'counter-printer-status'],
+    [receiptIp, 'receipt-printer-status'],
+  ].forEach(function(pair) {
+    var ip = pair[0]; var dotId = pair[1]
+    if (!ip) return
+    if (!dotMap[ip]) dotMap[ip] = []
+    dotMap[ip].push(dotId)
+  })
+
+  // Deduplicate IPs so we don't probe the same IP twice
+  var ips = Object.keys(dotMap)
   if (!ips.length) return
 
-  var dotIds = {
-    [kitchenIp]: 'kitchen-printer-status',
-    [counterIp]: 'counter-printer-status',
-    [receiptIp]: 'receipt-printer-status',
-  }
-
   function setDot(ip, online) {
-    var id = dotIds[ip]
-    if (!id) return
-    var dot = document.getElementById(id)
-    if (!dot) return
-    if (online) {
-      dot.className = 'printer-status-dot printer-status-dot--online'
-      dot.title = 'Online'
-    } else {
-      dot.className = 'printer-status-dot printer-status-dot--offline'
-      dot.title = 'Offline'
-    }
+    var ids = dotMap[ip]
+    if (!ids) return
+    ids.forEach(function(id) {
+      var dot = document.getElementById(id)
+      if (!dot) return
+      if (online) {
+        dot.className = 'printer-status-dot printer-status-dot--online'
+        dot.title = 'Online'
+      } else {
+        dot.className = 'printer-status-dot printer-status-dot--offline'
+        dot.title = 'Offline'
+      }
+    })
   }
 
   try {
@@ -5819,6 +6289,8 @@ async function loadPaymentConfig() {
     updateFinixUI(state.paymentConfig.finix)
     updateStaxBadge(state.paymentConfig.stax?.token)
     updateProviderSelector(state.paymentConfig)
+    updateDineInToggle(state.paymentConfig)
+    updateCounterToggle(state.paymentConfig)
   } catch (err) {
     console.warn('[loadPaymentConfig] failed:', err)
   }
@@ -5852,6 +6324,85 @@ function updateProviderSelector(config) {
   if (select.value === 'stax'     && !staxOk)     select.value = ''
   if (select.value === 'converge' && !convergeOk) select.value = ''
   if (select.value === 'finix'    && !finixOk)    select.value = ''
+}
+
+/**
+ * Shows/sets the dine-in terminal toggle when both Finix and Clover are configured.
+ * @param {{ finix?: { enabled: boolean }, clover?: { enabled: boolean, dineInProvider?: string } }} config
+ */
+function updateDineInToggle(config) {
+  const row = document.getElementById('dine-in-provider-row')
+  if (!row) return
+  const bothConfigured = !!config?.finix?.enabled && !!config?.clover?.enabled
+  row.hidden = !bothConfigured
+  if (!bothConfigured) return
+
+  const active = config?.clover?.dineInProvider ?? 'clover'
+  row.querySelectorAll('.dine-in-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === active)
+  })
+
+  // Wire up click handlers (idempotent — use replaceWith to avoid double-bind)
+  row.querySelectorAll('.dine-in-btn').forEach(btn => {
+    const fresh = btn.cloneNode(true)
+    fresh.addEventListener('click', async () => {
+      const value = fresh.dataset.value
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ dineInProvider: value }),
+        })
+        if (!res.ok) throw new Error('Save failed')
+        // Update local config so button rerender is consistent
+        if (state.paymentConfig?.clover) state.paymentConfig.clover.dineInProvider = value
+        row.querySelectorAll('.dine-in-btn').forEach(b => b.classList.toggle('active', b.dataset.value === value))
+        showToast(`Dine-in terminal switched to ${value === 'finix' ? 'Finix A920 Pro' : 'Clover Flex'}`, 'success')
+      } catch (err) {
+        showToast('Could not save dine-in provider', 'error')
+      }
+    })
+    btn.replaceWith(fresh)
+  })
+}
+
+/**
+ * Shows/sets the counter terminal toggle when both Finix and Clover are configured.
+ * Defaults to Finix (D135). Clicking Clover routes counter card payments through
+ * the Clover Flex server-side API instead of the Android/D135 bridge.
+ * @param {{ finix?: { enabled: boolean }, clover?: { enabled: boolean, counterProvider?: string } }} config
+ */
+function updateCounterToggle(config) {
+  const row = document.getElementById('counter-provider-row')
+  if (!row) return
+  const bothConfigured = !!config?.finix?.enabled && !!config?.clover?.enabled
+  row.hidden = !bothConfigured
+  if (!bothConfigured) return
+
+  const active = config?.clover?.counterProvider ?? 'finix'
+  row.querySelectorAll('.dine-in-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === active)
+  })
+
+  // Wire up click handlers (idempotent — use replaceWith to avoid double-bind)
+  row.querySelectorAll('.dine-in-btn').forEach(btn => {
+    const fresh = btn.cloneNode(true)
+    fresh.addEventListener('click', async () => {
+      const value = fresh.dataset.value
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ counterProvider: value }),
+        })
+        if (!res.ok) throw new Error('Save failed')
+        if (state.paymentConfig?.clover) state.paymentConfig.clover.counterProvider = value
+        row.querySelectorAll('.dine-in-btn').forEach(b => b.classList.toggle('active', b.dataset.value === value))
+        showToast(`Counter terminal switched to ${value === 'finix' ? 'Finix D135' : 'Clover Flex'}`, 'success')
+      } catch (err) {
+        showToast('Could not save counter provider', 'error')
+      }
+    })
+    btn.replaceWith(fresh)
+  })
 }
 
 /**
@@ -6054,12 +6605,47 @@ function updateFinixUI(config) {
     if (sandboxChk)   sandboxChk.checked       = !!config.sandbox
     if (refundLocalChk) refundLocalChk.checked = (config.refundMode ?? 'local') === 'local'
     updateTerminalEmuOption(!!config.sandbox)
+    loadFinixWebhookSecretStatus()
   } else {
     badge.textContent = 'Not configured'
     badge.className   = 'payment-status-badge badge-inactive'
     setupView.hidden  = false
     configView.hidden = true
     updateTerminalEmuOption(false)
+  }
+}
+
+/**
+ * Update the Finix webhook secret badge and toggle set/remove sub-views.
+ * @param {boolean} configured
+ */
+function updateFinixWebhookSecretUI(configured) {
+  const badge      = document.getElementById('finix-webhook-status-badge')
+  const setView    = document.getElementById('finix-webhook-set-view')
+  const removeView = document.getElementById('finix-webhook-remove-view')
+  if (!badge) return
+  if (configured) {
+    badge.textContent = 'Configured'
+    badge.className   = 'payment-status-badge badge-active'
+    if (setView)    setView.hidden    = true
+    if (removeView) removeView.hidden = false
+  } else {
+    badge.textContent = 'Not set'
+    badge.className   = 'payment-status-badge badge-inactive'
+    if (setView)    setView.hidden    = false
+    if (removeView) removeView.hidden = true
+  }
+}
+
+/** Fetch webhook secret status and update the sub-UI. */
+async function loadFinixWebhookSecretStatus() {
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/finix-webhook/secret/status`)
+    if (!res.ok) return
+    const data = await res.json()
+    updateFinixWebhookSecretUI(!!data.configured)
+  } catch {
+    // non-critical; leave badge as-is
   }
 }
 
@@ -6162,6 +6748,50 @@ function initFinixUI() {
       await loadPaymentConfig()
     } catch (err) {
       showToast(`Failed to remove credentials: ${err.message}`, 'error')
+    }
+  })
+
+  // Webhook secret — save
+  document.getElementById('finix-webhook-secret-save-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('finix-webhook-secret-input')
+    const secret = input?.value.trim()
+    if (!secret) {
+      showToast('Paste the Finix signing secret first', 'error')
+      return
+    }
+    const btn = document.getElementById('finix-webhook-secret-save-btn')
+    btn.disabled = true
+    btn.textContent = 'Saving…'
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/finix-webhook/secret`, {
+        method: 'POST',
+        body: JSON.stringify({ secret }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      if (input) input.value = ''
+      showToast('Webhook secret saved', 'success')
+      await loadFinixWebhookSecretStatus()
+    } catch (err) {
+      showToast(`Failed to save webhook secret: ${err.message}`, 'error')
+    } finally {
+      btn.disabled = false
+      btn.textContent = 'Save'
+    }
+  })
+
+  // Webhook secret — remove
+  document.getElementById('finix-webhook-secret-remove-btn')?.addEventListener('click', async () => {
+    if (!confirm('Remove the Finix webhook secret? Events will no longer be verified until a new secret is set.')) return
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/finix-webhook/secret`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      showToast('Webhook secret removed', 'success')
+      await loadFinixWebhookSecretStatus()
+    } catch (err) {
+      showToast(`Failed to remove webhook secret: ${err.message}`, 'error')
     }
   })
 }
@@ -7110,6 +7740,8 @@ async function deleteOrder(orderId, card, triggerBtn) {
       throw new Error(err.error || `HTTP ${res.status}`)
     }
     card.remove()
+    ordersState.allOrders = ordersState.allOrders.filter((o) => o.id !== orderId)
+    renderFilteredOrders()
     showToast('Order deleted', 'success')
   } catch (err) {
     showToast(err.message || 'Failed to delete order', 'error')
@@ -7215,6 +7847,8 @@ const ordersState = {
   activeTab: 'in-store',
   /** Unfiltered orders from API (used for tab filtering) */
   allOrders: [],
+  /** Quick filter within the in-store tab: null = all, '__takeout__' = pickup orders, or a table label string */
+  tableFilter: null,
 }
 
 /** True when at least one unmatched payment has been flagged this session */
@@ -7257,16 +7891,20 @@ function initOrders() {
       tab.classList.add('active')
       tab.setAttribute('aria-selected', 'true')
       ordersState.activeTab = tab.dataset.tab
+      ordersState.tableFilter = null
 
       const isPaymentsTab = ordersState.activeTab === 'payments'
       const isOnlineTab   = ordersState.activeTab === 'online'
-      // Toggle the orders UI vs. the payments panel
-      document.getElementById('orders-summary').hidden = isPaymentsTab
-      document.getElementById('orders-list').hidden    = isPaymentsTab
-      document.getElementById('orders-loading').hidden = isPaymentsTab
-      document.getElementById('orders-empty').hidden   = isPaymentsTab
+      const isFutureTab   = ordersState.activeTab === 'future'
+      // Toggle the orders UI vs. the payments/future panels
+      document.getElementById('orders-summary').hidden = isPaymentsTab || isFutureTab
+      document.getElementById('orders-list').hidden    = isPaymentsTab || isFutureTab
+      document.getElementById('orders-loading').hidden = isPaymentsTab || isFutureTab
+      document.getElementById('orders-empty').hidden   = isPaymentsTab || isFutureTab
       document.getElementById('payments-panel').hidden = !isPaymentsTab
       document.getElementById('gc-purchases-section').hidden = !isOnlineTab
+      document.getElementById('future-orders-panel').hidden  = !isFutureTab
+      document.getElementById('table-filter-bar').hidden = !(!isPaymentsTab && !isOnlineTab && !isFutureTab)
 
       if (isPaymentsTab) {
         // Clear alert badge when user opens the tab
@@ -7274,6 +7912,8 @@ function initOrders() {
         const badge = document.getElementById('payments-alert-badge')
         if (badge) badge.hidden = true
         loadPayments()
+      } else if (isFutureTab) {
+        loadAdvanceOrders()
       } else {
         renderFilteredOrders()
       }
@@ -7282,6 +7922,117 @@ function initOrders() {
 
   // Set default range: today
   applyPreset('today')
+
+  // Online orders pause button
+  initOnlinePause()
+}
+
+// ---------------------------------------------------------------------------
+// Online orders pause
+// ---------------------------------------------------------------------------
+
+function initOnlinePause() {
+  const btn      = document.getElementById('online-pause-btn')
+  const modal    = document.getElementById('online-pause-modal')
+  const backdrop = document.getElementById('online-pause-modal-backdrop')
+  if (!btn || !modal) return
+
+  function openModal() {
+    modal.hidden    = false
+    backdrop.hidden = false
+  }
+  function closeModal() {
+    modal.hidden    = true
+    backdrop.hidden = true
+  }
+
+  // When open → show modal. When already paused → resume directly (no modal needed).
+  btn.addEventListener('click', () => {
+    if (btn.classList.contains('paused')) {
+      setOnlinePause(null)
+    } else {
+      openModal()
+    }
+  })
+
+  document.getElementById('online-pause-modal-close')?.addEventListener('click', closeModal)
+  backdrop.addEventListener('click', closeModal)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.hidden) closeModal()
+  })
+
+  document.getElementById('online-pause-15-btn')?.addEventListener('click', () => {
+    setOnlinePause(Date.now() + 15 * 60 * 1000); closeModal()
+  })
+  document.getElementById('online-pause-30-btn')?.addEventListener('click', () => {
+    setOnlinePause(Date.now() + 30 * 60 * 1000); closeModal()
+  })
+  document.getElementById('online-pause-60-btn')?.addEventListener('click', () => {
+    setOnlinePause(Date.now() + 60 * 60 * 1000); closeModal()
+  })
+  document.getElementById('online-pause-today-btn')?.addEventListener('click', () => {
+    // Pass far-future time — backend caps it at end of local day
+    setOnlinePause(Date.now() + 24 * 60 * 60 * 1000); closeModal()
+  })
+
+  // Load current state on init
+  loadOnlinePauseStatus()
+}
+
+async function loadOnlinePauseStatus() {
+  if (!state.merchantId) return
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}`)
+    if (!res.ok) return
+    const data = await res.json()
+    applyOnlinePauseStatus(data?.onlineOrdersPausedUntil ?? null)
+  } catch { /* silent — non-critical */ }
+}
+
+/**
+ * @param {string|null} pausedUntil  ISO datetime or null
+ */
+function applyOnlinePauseStatus(pausedUntil) {
+  const isPaused = !!pausedUntil && new Date().toISOString() < pausedUntil
+  const btn      = document.getElementById('online-pause-btn')
+  if (!btn) return
+
+  btn.classList.toggle('paused', isPaused)
+  const svgPause = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'
+  const svgPlay  = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polygon points="5,3 19,12 5,21"/></svg>'
+
+  if (isPaused) {
+    const until   = new Date(pausedUntil)
+    const timeStr = until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    btn.innerHTML = svgPlay + ` Open Online (until ${timeStr})`
+  } else {
+    btn.innerHTML = svgPause + ' Online'
+  }
+}
+
+/**
+ * @param {number|null} untilMs  epoch ms or null to resume
+ */
+async function setOnlinePause(untilMs) {
+  if (!state.merchantId) return
+  try {
+    const pausedUntil = untilMs ? new Date(untilMs).toISOString() : null
+    const res = await api(`/api/merchants/${state.merchantId}/store/pause`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pausedUntil }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      showToast(err?.error || 'Failed to update online order status', 'error')
+      return
+    }
+    const data = await res.json()
+    applyOnlinePauseStatus(data.pausedUntil)
+    showToast(data.isPaused ? 'Online orders paused' : 'Online orders resumed', data.isPaused ? 'warning' : 'success')
+  } catch (err) {
+    showToast(err?.error || 'Failed to update online order status', 'error')
+  }
 }
 
 function applyPreset(preset) {
@@ -7308,13 +8059,15 @@ function showOrdersState(s) {
 }
 
 async function loadOrders() {
-  // Delegate to the payments loader when that tab is active
+  // Delegate to the payments / future loaders when those tabs are active
   if (ordersState.activeTab === 'payments') { await loadPayments(); return }
+  if (ordersState.activeTab === 'future')   { await loadAdvanceOrders(); return }
 
   // Re-apply rolling presets so 'today' and 'week' always reflect current time
   if (ordersState.activePreset !== 'custom') applyPreset(ordersState.activePreset)
 
-  showOrdersState('loading')
+  // Show spinner only on first load; background syncs render silently
+  if (ordersState.allOrders.length === 0) showOrdersState('loading')
 
   try {
     const url = `/api/merchants/${state.merchantId}/orders` +
@@ -7335,11 +8088,12 @@ async function loadOrders() {
  * Filter orders by active source tab and render.
  */
 function renderFilteredOrders() {
-  if (ordersState.activeTab === 'payments') return   // handled by loadPayments()
+  if (ordersState.activeTab === 'payments' || ordersState.activeTab === 'future') return
   const all = ordersState.allOrders
   const isOnlineTab = ordersState.activeTab === 'online'
 
-  const filtered = all.filter((o) => {
+  // Source split: online tab vs. in-store tab
+  const bySource = all.filter((o) => {
     const isOnline = o.source === 'online'
     return isOnlineTab ? isOnline : !isOnline
   })
@@ -7355,9 +8109,92 @@ function renderFilteredOrders() {
     badge.hidden = onlineActive.length === 0
   }
 
-  renderOrders(filtered)
+  if (isOnlineTab) {
+    renderOrders(bySource)
+    loadGiftCardPurchases()
+    return
+  }
 
-  if (isOnlineTab) loadGiftCardPurchases()
+  // In-store tab: render quick-filter bar then apply filter
+  renderTableFilterBar(bySource)
+
+  const tf = ordersState.tableFilter
+  let filtered = bySource
+  if (tf === '__takeout__') {
+    filtered = bySource.filter((o) => o.orderType !== 'dine_in')
+  } else if (tf !== null) {
+    filtered = bySource.filter((o) => o.tableLabel === tf)
+  }
+
+  renderOrders(filtered)
+}
+
+/** Statuses that indicate an order still needs staff attention (pre-payment). */
+const OPEN_STATUSES = new Set(['received', 'submitted', 'confirmed', 'preparing', 'ready', 'pending_payment'])
+
+/**
+ * Render the table/takeout quick-filter pill bar for the in-store tab.
+ * Only shows pills for tables/types that have at least one open order.
+ * Auto-resets ordersState.tableFilter when the selected target has no open orders.
+ */
+function renderTableFilterBar(inStoreOrders) {
+  const bar = document.getElementById('table-filter-bar')
+  if (!bar) return
+
+  // Collect unique table labels with at least one open order
+  const openTables = []
+  const seenTables = new Set()
+  let hasOpenTakeout = false
+
+  for (const o of inStoreOrders) {
+    if (!OPEN_STATUSES.has(o.status)) continue
+    if (o.orderType === 'dine_in' && o.tableLabel) {
+      if (!seenTables.has(o.tableLabel)) {
+        seenTables.add(o.tableLabel)
+        openTables.push(o.tableLabel)
+      }
+    } else if (o.orderType !== 'dine_in') {
+      hasOpenTakeout = true
+    }
+  }
+
+  // Sort table labels naturally (T1, T2, T10, Bar, …)
+  openTables.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+
+  const hasPills = openTables.length > 0 || hasOpenTakeout
+  bar.hidden = !hasPills
+
+  if (!hasPills) {
+    ordersState.tableFilter = null
+    bar.innerHTML = ''
+    return
+  }
+
+  // Auto-reset filter if its target no longer has open orders
+  const tf = ordersState.tableFilter
+  if (tf === '__takeout__' && !hasOpenTakeout) ordersState.tableFilter = null
+  else if (tf !== null && tf !== '__takeout__' && !seenTables.has(tf)) ordersState.tableFilter = null
+
+  const current = ordersState.tableFilter
+
+  // Build pills
+  const pills = [{ label: 'All', value: null }]
+  for (const lbl of openTables) pills.push({ label: lbl, value: lbl })
+  if (hasOpenTakeout) pills.push({ label: 'Takeout', value: '__takeout__' })
+
+  bar.innerHTML = ''
+  for (const { label, value } of pills) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'tbl-filter-pill' + (current === value ? ' active' : '')
+    btn.textContent = label
+    btn.setAttribute('aria-pressed', String(current === value))
+    btn.addEventListener('click', () => {
+      ordersState.tableFilter = value
+      renderFilteredOrders()
+    })
+    bar.appendChild(btn)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7624,11 +8461,16 @@ function renderOrderDetailModal(order, paymentLegs) {
     const svcLabel = order.serviceChargeLabel ? escHtml(order.serviceChargeLabel) : 'Service Charge'
     html += `<tr><td>${svcLabel}</td><td>${formatPrice(order.serviceChargeCents)}</td></tr>`
   }
-  html += `<tr><td>Tax</td><td>${formatPrice(order.taxCents)}</td></tr>`
+  const _taxRate    = state.profile?.taxRate ?? 0
+  const _discSub    = (order.subtotalCents ?? 0) - (order.discountCents ?? 0)
+  const _svcCents   = order.serviceChargeCents ?? 0
+  const _displayTax = (order.taxCents ?? 0) > 0 ? order.taxCents : Math.round((_discSub + _svcCents) * _taxRate)
+  const _displayTotal = _discSub + _svcCents + _displayTax + (order.tipCents ?? 0)
+  html += `<tr><td>Tax</td><td>${formatPrice(_displayTax)}</td></tr>`
   if (order.tipCents > 0) {
     html += `<tr><td>Tip</td><td>${formatPrice(order.tipCents)}</td></tr>`
   }
-  html += `<tr class="od-total-row"><td>Total</td><td>${formatPrice(order.totalCents)}</td></tr>`
+  html += `<tr class="od-total-row"><td>Total</td><td>${formatPrice(_displayTotal)}</td></tr>`
   html += '</tbody></table>'
 
   // Payment legs (in-person) or online payment info
@@ -7872,6 +8714,158 @@ function renderPayments(payments, summary) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Terminal Status Modal
+// ---------------------------------------------------------------------------
+
+/**
+ * Open the terminal activity modal showing all terminal_transaction rows for
+ * the last 7 days. Highlights duplicate amounts at the same time (likely
+ * double-charges) and marks cancellations-via-API as warnings rather than
+ * errors, since those are intentional server/customer-initiated cancels.
+ */
+async function openTerminalEventsModal() {
+  const overlay = document.getElementById('terminal-events-overlay')
+  const body    = document.getElementById('terminal-events-body')
+  body.innerHTML = '<p class="od-loading">Loading…</p>'
+  overlay.hidden = false
+
+  try {
+    const res  = await api(`/api/merchants/${state.merchantId}/terminal-events`)
+    if (!res.ok) throw new Error('Failed to load terminal events')
+    const { events } = await res.json()
+
+    if (!events.length) {
+      body.innerHTML = '<p class="te-empty">No terminal activity in the last 7 days.</p>'
+      return
+    }
+
+    // Surface unreconciled succeeded transactions (no linked order or payment)
+    const unreconciled = events.filter(ev =>
+      ev.severity === 'success' && ev.orderId == null && ev.paymentId == null,
+    )
+
+    const warningBanner = unreconciled.length
+      ? `<div class="te-unreconciled-banner">
+           ⚠ ${unreconciled.length} succeeded transaction${unreconciled.length > 1 ? 's' : ''} not linked to any order — potential unmatched charge${unreconciled.length > 1 ? 's' : ''}.
+         </div>`
+      : ''
+
+    // Duplicate detection uses full charged amount (including tip) + card last four.
+    // approvedAmountCents = Finix-settled total (always includes tip); use as primary source.
+    const succeededPairsRecalc = {}
+    for (const ev of events) {
+      if (ev.severity === 'success' && ev.amountCents != null) {
+        const fullCents = ev.approvedAmountCents ?? ((ev.amountCents ?? 0) + (ev.tipAmountCents ?? 0))
+        const key = `${fullCents}_${ev.cardLastFour || 'unknown'}`
+        succeededPairsRecalc[key] = (succeededPairsRecalc[key] || 0) + 1
+      }
+    }
+
+    const buildRows = (showSubtotalOnly) => events.map(ev => {
+      const time = ev.createdAt
+        ? new Date(ev.createdAt.replace(' ', 'T') + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : '—'
+
+      // Use Finix-settled amount as full total; fall back to amount+tip when not available
+      const fullCents    = ev.approvedAmountCents ?? ((ev.amountCents ?? 0) + (ev.tipAmountCents ?? 0))
+      const displayCents = showSubtotalOnly ? ev.amountCents : (ev.amountCents != null ? fullCents : null)
+      const amountStr    = displayCents != null ? `$${(displayCents / 100).toFixed(2)}` : '—'
+      const dupKey       = `${fullCents}_${ev.cardLastFour || 'unknown'}`
+      const isDup        = ev.severity === 'success' && ev.amountCents != null && succeededPairsRecalc[dupKey] > 1
+      const isReconciled = ev.severity === 'success' && ev.paymentId != null
+      const isOrphaned   = ev.severity === 'success' && ev.orderId == null && ev.paymentId == null
+
+      let amountCell
+      if (isDup) {
+        amountCell = `<span class="te-amount-dup" title="Same card and amount charged multiple times">${escHtml(amountStr)} ⚠</span>`
+      } else if (isReconciled) {
+        amountCell = `<span class="te-amount-reconciled" title="Matched to a recorded payment">${escHtml(amountStr)}</span>`
+      } else if (isOrphaned) {
+        amountCell = `<span class="te-amount-orphan" title="Succeeded but not linked to any order">${escHtml(amountStr)}</span>`
+      } else {
+        amountCell = escHtml(amountStr)
+      }
+
+      const sourceBadge = ev.source === 'cnp'
+        ? `<span class="te-chip te-chip--cnp">CNP</span> `
+        : ''
+      const cardInfo = ev.cardLastFour
+        ? `${sourceBadge}${escHtml(ev.cardBrand || '')} ···${escHtml(ev.cardLastFour)}`
+        : ev.source === 'cnp' ? `${sourceBadge}—` : '—'
+
+      const stateLabel = ev.txState.replace(/_/g, ' ')
+        .toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+
+      const chip = `<span class="te-chip te-chip--${ev.severity}">${escHtml(stateLabel)}</span>`
+
+      const reason = ev.declineMessage || ev.declineCode
+        ? `<div class="te-reason">${escHtml(ev.declineMessage || ev.declineCode || '')}</div>`
+        : ''
+
+      const approvalInfo = ev.approvalCode ? `<div class="te-reason">Auth: ${escHtml(ev.approvalCode)}</div>` : ''
+
+      return `<tr class="te-row--${ev.severity}">
+        <td>${escHtml(time)}</td>
+        <td>${amountCell}</td>
+        <td>${chip}${reason}</td>
+        <td>${cardInfo}${approvalInfo}</td>
+        <td class="te-col-transfer te-reason">${escHtml(ev.finixTransferId || '—')}</td>
+      </tr>`
+    }).join('')
+
+    body.innerHTML = `
+      ${warningBanner}
+      <div class="te-toolbar">
+        <label class="te-toggle-label">
+          <input type="checkbox" id="te-show-subtotal-only"> Show subtotal only
+        </label>
+        <label class="te-toggle-label">
+          <input type="checkbox" id="te-show-transfer-id"> Show Transfer ID
+        </label>
+      </div>
+      <table class="te-table te-hide-transfer" id="te-events-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Card</th>
+            <th class="te-col-transfer">Transfer ID</th>
+          </tr>
+        </thead>
+        <tbody id="te-events-tbody">${buildRows(false)}</tbody>
+      </table>`
+
+    document.getElementById('te-show-subtotal-only')?.addEventListener('change', e => {
+      const tbody = document.getElementById('te-events-tbody')
+      if (tbody) tbody.innerHTML = buildRows(e.target.checked)
+    })
+
+    document.getElementById('te-show-transfer-id')?.addEventListener('change', e => {
+      const table = document.getElementById('te-events-table')
+      table?.classList.toggle('te-hide-transfer', !e.target.checked)
+    })
+  } catch (err) {
+    body.innerHTML = `<p class="te-empty" style="color:#dc2626">${escHtml(err.message || 'Failed to load terminal events')}</p>`
+  }
+}
+
+// Wire up Terminal Status button and modal close
+;(function () {
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('terminal-status-btn')?.addEventListener('click', openTerminalEventsModal)
+    document.getElementById('terminal-events-close')?.addEventListener('click', () => {
+      document.getElementById('terminal-events-overlay').hidden = true
+    })
+    document.getElementById('terminal-events-overlay')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('terminal-events-overlay')) {
+        document.getElementById('terminal-events-overlay').hidden = true
+      }
+    })
+  })
+})()
+
 async function syncOrdersFromClover() {
   const btn = document.getElementById('sync-orders-btn')
   btn.disabled = true
@@ -7912,8 +8906,10 @@ function renderOrders(orders) {
   let taxCents            = 0
   let tipsCents           = 0
   let totalCents          = 0
+  let processorFeesCents  = 0
 
   for (const o of orders) {
+    if (o.status === 'cancelled') continue  // cancelled orders generated no revenue
     const sub     = o.subtotalCents        ?? 0
     const discount = o.discountCents       ?? 0
     const svc     = o.serviceChargeCents   ?? 0
@@ -7928,7 +8924,8 @@ function renderOrders(orders) {
     serviceChargeCents += svc
     taxCents           += tax
     tipsCents          += tip
-    totalCents         += total
+    totalCents         += discSub + svc + tax + tip  // grand total = (subtotal - discount) + service_charge + tax + tip
+    if (typeof o.processorFeeCents === 'number') processorFeesCents += o.processorFeeCents
   }
 
   document.getElementById('orders-count-label').textContent =
@@ -7943,6 +8940,17 @@ function renderOrders(orders) {
     document.getElementById('orders-fin-tax').textContent   = formatPrice(taxCents)
     document.getElementById('orders-fin-tips').textContent  = formatPrice(tipsCents)
     document.getElementById('orders-fin-total').textContent = formatPrice(totalCents)
+
+    // Processor fees — shown only when at least one order has fee data fetched
+    const feesWrap = document.getElementById('orders-fin-fees-wrap')
+    const feesSep  = document.getElementById('orders-fin-fees-sep')
+    if (feesWrap) {
+      feesWrap.hidden = processorFeesCents === 0
+      if (processorFeesCents > 0) {
+        document.getElementById('orders-fin-fees').textContent = formatPrice(processorFeesCents)
+      }
+    }
+    if (feesSep) feesSep.hidden = processorFeesCents === 0
 
     // Service charge — shown only when present in current view
     const svcWrap = document.getElementById('orders-fin-svc-wrap')
@@ -7976,6 +8984,144 @@ function renderOrders(orders) {
   for (const order of orders) {
     list.appendChild(buildOrderCard(order))
   }
+}
+
+// ---------------------------------------------------------------------------
+// Move Order to Another Table
+// ---------------------------------------------------------------------------
+
+function initMoveTable() {
+  const modal     = document.getElementById('move-table-modal')
+  const backdrop  = document.getElementById('move-table-modal-backdrop')
+  const body      = document.getElementById('move-table-modal-body')
+  const cancelBtn = document.getElementById('move-table-cancel-btn')
+
+  let _targetOrderId = null
+
+  function openModal(orderId, currentTableLabel) {
+    _targetOrderId = orderId
+
+    // currentTableLabel may be passed directly from Order Entry (where
+    // ordersState.allOrders may not yet be loaded). Fall back to the orders
+    // cache lookup so the Orders-tab call-path still works.
+    const order = ordersState.allOrders.find((o) => o.id === orderId)
+    const tableLabel = currentTableLabel ?? order?.tableLabel ?? null
+
+    // Build set of tables already occupied by other active orders.
+    // If ordersState hasn't loaded yet the set will be empty — a minor UX
+    // trade-off (all tables show as free) that corrects itself on the next
+    // Orders tab visit.
+    const ACTIVE = new Set(['received', 'submitted', 'confirmed', 'preparing', 'ready', 'pending_payment'])
+    const occupied = new Set(
+      ordersState.allOrders
+        .filter((o) => o.id !== orderId && o.tableLabel && ACTIVE.has(o.status))
+        .map((o) => o.tableLabel)
+    )
+
+    const rooms = state.profile?.tableLayout?.rooms ?? []
+    body.innerHTML = tableLabel
+      ? `<p class="move-table-from">Currently at: <strong>${escHtml(tableLabel)}</strong></p>`
+      : ''
+
+    const hasMultipleRooms = rooms.filter((r) => r.tables.length > 0).length > 1
+    let anyFreeTable = false
+
+    for (const room of rooms) {
+      if (room.tables.length === 0) continue
+
+      if (hasMultipleRooms) {
+        const nameEl = document.createElement('p')
+        nameEl.className = 'move-table-room-name'
+        nameEl.textContent = room.name
+        body.appendChild(nameEl)
+      }
+
+      const grid = document.createElement('div')
+      grid.className = 'move-table-grid'
+
+      for (const table of room.tables) {
+        if (table.label === tableLabel) continue  // skip current table
+
+        const isOccupied = occupied.has(table.label)
+        const btn = document.createElement('button')
+        btn.type = 'button'
+        btn.className = 'move-table-btn' + (isOccupied ? ' occupied' : '')
+        btn.textContent = table.label ?? '—'
+        btn.disabled = isOccupied
+        btn.dataset.tableLabel = table.label ?? ''
+        btn.dataset.roomLabel  = room.name
+        grid.appendChild(btn)
+        if (!isOccupied) anyFreeTable = true
+      }
+
+      body.appendChild(grid)
+    }
+
+    if (rooms.length === 0 || !anyFreeTable) {
+      const empty = document.createElement('p')
+      empty.className = 'move-table-empty'
+      empty.textContent = rooms.length === 0 ? 'No tables configured.' : 'No free tables available.'
+      body.appendChild(empty)
+    }
+
+    modal.hidden    = false
+    backdrop.hidden = false
+  }
+
+  function closeModal() {
+    modal.hidden    = true
+    backdrop.hidden = true
+    _targetOrderId  = null
+  }
+
+  // Table button click — move the order
+  body.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.move-table-btn')
+    if (!btn || btn.disabled) return
+
+    const orderId      = _targetOrderId
+    const newLabel     = btn.dataset.tableLabel
+    const newRoomLabel = btn.dataset.roomLabel
+    if (!orderId) return
+
+    closeModal()
+
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/orders/${orderId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ tableLabel: newLabel, roomLabel: newRoomLabel }),
+      })
+      if (!res.ok) throw new Error()
+
+      // Update in-memory state
+      const order = ordersState.allOrders.find((o) => o.id === orderId)
+      if (order) {
+        order.tableLabel = newLabel
+        order.roomLabel  = newRoomLabel
+      }
+
+      // Notify listeners (Order Entry tab) so they can refresh their local state.
+      document.dispatchEvent(new CustomEvent('order-table-changed', {
+        detail: { orderId, tableLabel: newLabel, roomLabel: newRoomLabel },
+      }))
+
+      // Refresh the Orders list so cards reflect the new table assignment.
+      if (typeof loadOrders === 'function') loadOrders()
+
+      showToast(`Moved to ${newLabel}`, 'success')
+    } catch {
+      showToast('Failed to move order — please try again.', 'error')
+    }
+  })
+
+  cancelBtn.addEventListener('click', closeModal)
+  backdrop.addEventListener('click',  closeModal)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.hidden) closeModal()
+  })
+
+  // Exposed so order-entry.js can open the picker from its [Move Table] button.
+  window.MoveTable = { open: openModal }
 }
 
 /**
@@ -8084,7 +9230,7 @@ function buildOrderCard(order) {
     ${isRefundNeeded ? '<span class="order-refund-needed-badge">Refund Needed</span>' : ''}
     ${isPartiallyRefunded ? '<span class="order-partial-refund-badge">Partial Refund</span>' : ''}
     ${isFullyRefunded ? '<span class="order-refunded-badge">Refunded</span>' : ''}
-    <span class="order-total">${formatPrice(order.totalCents ?? 0)}</span>
+    <span class="order-total">${formatPrice(_paidCents > 0 ? _paidCents : (order.totalCents ?? 0))}</span>
     <svg class="order-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
   `
 
@@ -8336,6 +9482,17 @@ function buildOrderCard(order) {
     })
     actionsEl.appendChild(billBtn)
 
+    // Coupon button — prints marketing coupon to counter printer
+    const couponBtn = document.createElement('button')
+    couponBtn.type = 'button'
+    couponBtn.className = 'btn btn-secondary order-action-btn'
+    couponBtn.textContent = '🎟 Coupon'
+    couponBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      openCouponModal()
+    })
+    actionsEl.appendChild(couponBtn)
+
     // Discount button — visible on any unpaid, non-cancelled order
     const discountBtn = document.createElement('button')
     discountBtn.type = 'button'
@@ -8411,16 +9568,24 @@ function buildOrderCard(order) {
         })
         actionsEl.appendChild(cashBtn)
 
-        // Counter and dine-in card buttons — hidden when Clover is the payment processor
-        // (Clover device handles card collection; cash button remains for cash payments)
-        if (!state.paymentConfig?.clover?.enabled) {
-          const counterBtn = document.createElement('button')
-          counterBtn.type = 'button'
-          counterBtn.className = 'btn btn-secondary order-action-btn'
-          counterBtn.textContent = '💳 Pay Counter'
-          counterBtn.addEventListener('click', (e) => {
-            e.stopPropagation()
-            if (window.PaymentModal) window.PaymentModal.open(order, state.profile, {
+        // Counter button — routes to Clover Flex or Finix D135 based on merchant toggle.
+        const counterIsClover = !!state.paymentConfig?.clover?.enabled
+          && (state.paymentConfig?.clover?.counterProvider ?? 'finix') === 'clover'
+
+        const counterBtn = document.createElement('button')
+        counterBtn.type = 'button'
+        counterBtn.className = 'btn btn-secondary order-action-btn'
+        counterBtn.textContent = '💳 Pay Counter'
+        counterBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          if (!window.PaymentModal) return
+          if (counterIsClover) {
+            window.PaymentModal.open(order, state.profile, {
+              mode: 'card',
+              clover: { enabled: true },
+            })
+          } else {
+            window.PaymentModal.open(order, state.profile, {
               mode: 'counter',
               finix: state.paymentConfig?.finix?.enabled ? {
                 applicationId: state.paymentConfig.finix.applicationId,
@@ -8428,9 +9593,16 @@ function buildOrderCard(order) {
                 sandbox:       state.paymentConfig.finix.sandbox,
               } : null,
             })
-          })
-          actionsEl.appendChild(counterBtn)
+          }
+        })
+        actionsEl.appendChild(counterBtn)
 
+        // Dine-in card button — shown when Clover is not active terminal
+        // dineInProvider: 'clover' (default) → Clover Flex button; 'finix' → Finix A920 Pro button
+        const cloverActive = !!state.paymentConfig?.clover?.enabled
+          && (state.paymentConfig?.clover?.dineInProvider ?? 'clover') === 'clover'
+
+        if (!cloverActive) {
           const chargeCardBtn = document.createElement('button')
           chargeCardBtn.type = 'button'
           chargeCardBtn.className = 'btn btn-success order-action-btn'
@@ -8469,8 +9641,8 @@ function buildOrderCard(order) {
         }
 
         // Clover: single entry point via payment modal (handles card, split, gift card)
-        // "Send to Clover" is handled transparently inside the modal — no separate button needed
-        if (state.paymentConfig?.clover?.enabled) {
+        // Only shown when Clover is the active dine-in terminal
+        if (cloverActive) {
           const cloverReviewBtn = document.createElement('button')
           cloverReviewBtn.type = 'button'
           cloverReviewBtn.className = 'btn btn-success order-action-btn'
@@ -8505,6 +9677,56 @@ function buildOrderCard(order) {
           receiptLink.title = 'View Clover payment receipt (internal reference)'
           actionsEl.appendChild(receiptLink)
         }
+      }
+    }
+
+    // Link Payment — manager/owner tool for rescuing an orphaned Finix tap
+    // (terminal charge went through on Finix but the local payments row was
+    // never created, e.g. client timeout during record-payment). Previously
+    // this was only reachable via the Payments-tab order detail modal, which
+    // doesn't list orders with zero payment rows — making it impossible to
+    // fix the exact case it was designed for. See docs/payments/payment_fixes_2.md bug #4.
+    if (!alreadyPaid && (order.paidAmountCents ?? 0) === 0) {
+      const _linkRole = state.currentEmployee?.role ?? 'owner'
+      if (_linkRole === 'owner' || _linkRole === 'manager') {
+        const linkBtn = document.createElement('button')
+        linkBtn.type = 'button'
+        linkBtn.className = 'btn btn-secondary order-action-btn'
+        linkBtn.textContent = '🔗 Link Payment'
+        linkBtn.title = 'Attach an existing Finix transfer to this order (for orphaned taps)'
+        linkBtn.addEventListener('click', async (e) => {
+          e.stopPropagation()
+          const transferId = window.prompt(
+            'Enter the Finix Transfer ID (starts with TR…) for the tap that already went through on the terminal:',
+            '',
+          )
+          if (!transferId) return
+          const trimmed = transferId.trim()
+          if (!/^TR/i.test(trimmed)) {
+            showToast('Transfer ID must start with "TR"', 'error')
+            return
+          }
+          linkBtn.disabled = true
+          const prevText = linkBtn.textContent
+          linkBtn.textContent = 'Linking…'
+          try {
+            const res = await api(
+              `/api/merchants/${state.merchantId}/orders/${order.id}/link-transfer`,
+              { method: 'POST', body: JSON.stringify({ transferId: trimmed }) },
+            )
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}))
+              throw new Error(err.error || `Link failed (${res.status})`)
+            }
+            showToast('Payment linked successfully', 'success')
+            if (state.activeSection === 'orders') loadOrders()
+          } catch (err) {
+            showToast(`Link failed: ${err.message}`, 'error')
+            linkBtn.disabled = false
+            linkBtn.textContent = prevText
+          }
+        })
+        actionsEl.appendChild(linkBtn)
       }
     }
 
@@ -8612,6 +9834,94 @@ function buildOrderCard(order) {
   card.appendChild(header)
   card.appendChild(detail)
   return card
+}
+
+// ---------------------------------------------------------------------------
+// Coupon modal
+// ---------------------------------------------------------------------------
+
+/**
+ * Open the coupon modal — fetches active campaigns, lets staff select one,
+ * then prints a QR coupon ticket to the counter printer.
+ */
+async function openCouponModal() {
+  const modal      = document.getElementById('coupon-modal')
+  const listEl     = document.getElementById('coupon-campaign-list')
+  const hintEl     = document.getElementById('coupon-modal-hint')
+  const printBtn   = document.getElementById('coupon-print-btn')
+  if (!modal) return
+
+  let selectedSlug = null
+
+  // Reset state
+  listEl.innerHTML = ''
+  printBtn.disabled = true
+  hintEl.hidden = false
+  hintEl.textContent = 'Loading campaigns…'
+
+  modal.hidden = false
+
+  const close = () => { modal.hidden = true }
+  document.getElementById('coupon-modal-close').onclick = close
+  document.getElementById('coupon-modal-cancel').onclick = close
+  modal.onclick = (e) => { if (e.target === modal) close() }
+
+  // Fetch ALL active campaigns (any channel — staff prints coupons for
+  // QR/per-customer campaigns too, not just auto-apply ambient ones).
+  // /api/campaigns is the customer-facing ambient-only list and would
+  // exclude HTC-style campaigns; the dashboard endpoint returns them all.
+  try {
+    const res = await window.api(`/api/merchants/${state.merchantId}/campaigns/active`)
+    const data = res.ok ? await res.json() : []
+    const campaigns = Array.isArray(data) ? data : (data.campaigns ?? [])
+
+    if (campaigns.length === 0) {
+      hintEl.textContent = 'No active campaigns found.'
+      return
+    }
+
+    hintEl.hidden = true
+    for (const c of campaigns) {
+      const item = document.createElement('div')
+      item.className = 'coupon-campaign-item'
+      item.dataset.slug = c.slug
+      item.innerHTML = `<strong>${escHtml(c.name)}</strong><span class="coupon-campaign-label">${escHtml(c.offer?.label ?? '')}</span>`
+      item.addEventListener('click', () => {
+        listEl.querySelectorAll('.coupon-campaign-item').forEach((el) => el.classList.remove('selected'))
+        item.classList.add('selected')
+        selectedSlug = c.slug
+        printBtn.disabled = false
+      })
+      listEl.appendChild(item)
+    }
+  } catch (err) {
+    hintEl.hidden = false
+    hintEl.textContent = `Failed to load campaigns: ${err.message}`
+    return
+  }
+
+  printBtn.onclick = async () => {
+    if (!selectedSlug) return
+    printBtn.disabled = true
+    printBtn.textContent = 'Printing…'
+    try {
+      const res = await window.api(`/api/merchants/${state.merchantId}/print-coupon`, {
+        method: 'POST',
+        body: JSON.stringify({ campaignSlug: selectedSlug }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Print failed')
+      }
+      close()
+      showToast('Coupon sent to printer', 'success')
+    } catch (err) {
+      showToast(`Coupon print failed: ${err.message}`, 'error')
+    } finally {
+      printBtn.disabled = false
+      printBtn.textContent = 'Print'
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -9263,7 +10573,102 @@ function _resInitListeners() {
     if (e.target === document.getElementById('res-modal')) closeResModal()
   })
 
+  // Busy mode toggle
+  document.getElementById('res-busy-toggle')?.addEventListener('click', () => {
+    const toggle = document.getElementById('res-busy-toggle')
+    const isOn = toggle.getAttribute('aria-checked') === 'true'
+    if (isOn) {
+      // Already on — clicking toggle turns it off immediately
+      setResBusy(null)
+    } else {
+      // Show duration picker
+      const setter = document.getElementById('res-busy-setter')
+      if (setter) setter.hidden = false
+      toggle.setAttribute('aria-checked', 'true')
+    }
+  })
+
+  document.getElementById('res-busy-confirm-btn')?.addEventListener('click', () => {
+    const sel = document.getElementById('res-busy-hours-sel')
+    const hours = parseFloat(sel?.value ?? '2')
+    let until
+    if (hours === 0) {
+      // Rest of day: 23:59:59 local — send a far-future time; backend caps it
+      const d = new Date()
+      d.setHours(23, 59, 59, 0)
+      until = d.toISOString()
+    } else {
+      until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
+    }
+    setResBusy(until)
+  })
+
+  document.getElementById('res-busy-clear-btn')?.addEventListener('click', () => setResBusy(null))
+
   // SSE reservation listeners are registered in connectSSE() on the EventSource directly
+}
+
+/**
+ * Apply busy-mode UI state.
+ * @param {string|null} busyUntil  ISO datetime string, or null if not busy
+ */
+function applyBusyStatus(busyUntil) {
+  const isBusy = !!busyUntil && new Date().toISOString() < busyUntil
+  const bar    = document.getElementById('res-busy-bar')
+  const toggle = document.getElementById('res-busy-toggle')
+  const setter = document.getElementById('res-busy-setter')
+
+  // Active banner
+  if (bar) {
+    bar.hidden = !isBusy
+    if (isBusy) {
+      const label = document.getElementById('res-busy-until-label')
+      if (label) {
+        const dt = new Date(busyUntil)
+        label.textContent = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      }
+    }
+  }
+
+  // Toggle switch
+  if (toggle) toggle.setAttribute('aria-checked', isBusy ? 'true' : 'false')
+
+  // Hide setter if not in "pending" state
+  if (setter && !isBusy) setter.hidden = true
+}
+
+/**
+ * PATCH busy mode on/off.
+ * @param {string|null} busyUntil  ISO datetime to activate, null to clear
+ */
+async function setResBusy(busyUntil) {
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/reservations/busy`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ busyUntil }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      showToast(err.error || 'Failed to update busy mode', 'error')
+      return
+    }
+    const data = await res.json()
+    applyBusyStatus(data.busyUntil)
+    showToast(data.isBusy ? 'Busy mode on — walk-ins only' : 'Busy mode off — taking reservations', 'success')
+  } catch {
+    showToast('Failed to update busy mode', 'error')
+  }
+}
+
+/** Load and display current busy mode status */
+async function loadBusyStatus() {
+  try {
+    const res = await fetch('/api/store/reservations/config')
+    if (!res.ok) return
+    const cfg = await res.json()
+    applyBusyStatus(cfg.isBusy ? cfg.busyUntil : null)
+  } catch { /* non-critical */ }
 }
 
 /** Entry point called by showSection('reservations') */
@@ -9272,6 +10677,7 @@ function initReservations() {
   if (!_resDate) _resDate = _resToday()
   loadReservations()
   loadResUpcoming()
+  loadBusyStatus()
 }
 
 /** Load upcoming reservations (next 60 min) for the reminder strip */
@@ -9384,7 +10790,7 @@ function renderReservationList(rows) {
 function _resTableOptions(selectedLabel) {
   const layout = state.profile?.tableLayout
   if (!layout) return ''
-  const allTables = (layout.rooms ?? []).flatMap((r) => r.tables ?? [])
+  const allTables = (layout.rooms ?? []).flatMap((r) => r.tables ?? []).filter((t) => !t.noReservations)
   const groups    = layout.groups ?? []
   let html = '<option value="">Unassigned</option>'
   allTables.forEach((t) => {
@@ -9609,6 +11015,21 @@ function initTableLayout() {
     if (!isNaN(seatsVal) && seatsVal >= 1) table.seats = seatsVal
   })
 
+  // Live update: walk-in only (no reservations) toggle
+  document.getElementById('layout-table-no-res')?.addEventListener('change', () => {
+    const room = activeRoom()
+    const id = tableLayoutState.selectedTableId
+    if (!room || !id) return
+    const table = room.tables.find((t) => t.id === id)
+    if (!table) return
+    const checked = /** @type {HTMLInputElement} */ (document.getElementById('layout-table-no-res')).checked
+    table.noReservations = checked || undefined
+    // Refresh canvas token to show/hide the walk-in badge
+    const token = document.querySelector(`.layout-table[data-table-id="${id}"]`)
+    if (token) token.classList.toggle('no-reservations', !!checked)
+    saveTableLayout()
+  })
+
   // Rotate button
   document.getElementById('layout-rotate-btn')?.addEventListener('click', () => {
     const room = activeRoom()
@@ -9655,11 +11076,14 @@ function applyTableLabel() {
   if (labelVal) table.label = labelVal
   const seatsVal = parseInt(document.getElementById('layout-table-seats')?.value ?? '', 10)
   if (!isNaN(seatsVal) && seatsVal >= 1) table.seats = seatsVal
+  const noResChk = /** @type {HTMLInputElement|null} */ (document.getElementById('layout-table-no-res'))
+  if (noResChk) table.noReservations = noResChk.checked || undefined
   // Update the canvas token directly — avoids full re-render which can lose changes
   const token = document.querySelector(`.layout-table[data-table-id="${id}"]`)
   if (token) {
     token.textContent = table.label
     token.setAttribute('aria-label', `Table ${table.label}`)
+    token.classList.toggle('no-reservations', !!table.noReservations)
   }
   updateTableEditor()
   updateDeleteBtn()
@@ -9795,7 +11219,7 @@ function renderCanvas() {
 
   room.tables.forEach((table) => {
     const el = document.createElement('div')
-    el.className = `layout-table${table.id === tableLayoutState.selectedTableId ? ' selected' : ''}`
+    el.className = `layout-table${table.id === tableLayoutState.selectedTableId ? ' selected' : ''}${table.noReservations ? ' no-reservations' : ''}`
     el.dataset.tableId = table.id
     el.dataset.shape = table.shape
     el.textContent = table.label
@@ -9855,6 +11279,8 @@ function updateTableEditor() {
     input.value = table.label
     if (seatsInput) seatsInput.value = table.seats ?? _seatsFromShape(table.shape)
     if (rotateBtn) rotateBtn.hidden = (table.shape === 'round')
+    const noResChk = /** @type {HTMLInputElement|null} */ (document.getElementById('layout-table-no-res'))
+    if (noResChk) noResChk.checked = !!table.noReservations
   } else {
     editor.hidden = true
   }
@@ -10135,6 +11561,7 @@ function openEmployeeForm(empId = null) {
     code.value            = ''
     code.placeholder      = '(leave blank to keep current code)'
     role.value            = emp.role
+    document.getElementById('emp-form-language').value = emp.language ?? 'en'
     activeRow.hidden      = false
     activeChk.checked     = emp.active
     codeHint.hidden       = false
@@ -10146,6 +11573,7 @@ function openEmployeeForm(empId = null) {
     code.value            = ''
     code.placeholder      = 'e.g. 1234'
     role.value            = 'server'
+    document.getElementById('emp-form-language').value = 'en'
     activeRow.hidden      = true
     activeChk.checked     = true
     codeHint.hidden       = true
@@ -10167,6 +11595,7 @@ async function saveEmployee() {
   const nickname = document.getElementById('emp-form-nickname').value.trim()
   const code     = document.getElementById('emp-form-code').value.trim()
   const role     = document.getElementById('emp-form-role').value
+  const language = document.getElementById('emp-form-language').value
   const active   = document.getElementById('emp-form-active').checked
   const schedule = readScheduleGrid()
 
@@ -10180,7 +11609,7 @@ async function saveEmployee() {
   try {
     let res
     if (empId) {
-      const body = { nickname, role, schedule, active }
+      const body = { nickname, role, language, schedule, active }
       if (code) body.accessCode = code
       res = await api(`/api/merchants/${state.merchantId}/employees/${empId}`, {
         method: 'PUT',
@@ -10189,7 +11618,7 @@ async function saveEmployee() {
     } else {
       res = await api(`/api/merchants/${state.merchantId}/employees`, {
         method: 'POST',
-        body: JSON.stringify({ nickname, accessCode: code, role, schedule }),
+        body: JSON.stringify({ nickname, accessCode: code, role, language, schedule }),
       })
     }
 
@@ -10269,11 +11698,15 @@ function initEmployeeMode() {
     if (state.currentEmployee) openClockModal(state.currentEmployee, true)
   })
 
-  // Sidebar "Return to Keypad" button — locks the screen without clocking out
-  // The shift stays open in the DB; re-entering the PIN resumes the session
+  // Sidebar "Switch Employee" button — always show PIN keypad regardless of employeeMode
   document.getElementById('emp-return-keypad-btn')?.addEventListener('click', () => {
     clearCurrentEmployee()
-    if (state.employeeMode) showPinOverlay()
+    showPinOverlay()
+  })
+
+  // "Use as owner" link in PIN overlay — lets the manager dismiss the keypad
+  document.getElementById('emp-pin-owner-btn')?.addEventListener('click', () => {
+    hidePinOverlay()
   })
 
   // Set merchant name in PIN overlay from profile (when available)
@@ -10399,6 +11832,23 @@ function hidePinOverlay() {
  * @param {object} employee  - { id, nickname, role, openShiftId }
  * @param {boolean} isOut    - true = clock out, false = clock in
  */
+const CLOCK_STRINGS = {
+  en: {
+    clockIn: 'Clock In', clockOut: 'Clock Out', cancel: 'Cancel',
+    mySales: 'My Sales', today: 'Today', fortnight: 'Last 14 days',
+    orders: (n) => `${n} order${n !== 1 ? 's' : ''}`,
+    tips: (s) => `${s} tips`,
+    worked: (h, m) => h > 0 ? `${h}h ${m}m worked today` : `${m}m worked today`,
+  },
+  es: {
+    clockIn: 'Registrar entrada', clockOut: 'Registrar salida', cancel: 'Cancelar',
+    mySales: 'Mis ventas', today: 'Hoy', fortnight: 'Últimos 14 días',
+    orders: (n) => `${n} ${n !== 1 ? 'pedidos' : 'pedido'}`,
+    tips: (s) => `${s} propinas`,
+    worked: (h, m) => h > 0 ? `${h}h ${m}m trabajadas hoy` : `${m}m trabajadas hoy`,
+  },
+}
+
 function openClockModal(employee, isOut) {
   const modal    = document.getElementById('emp-clock-modal')
   const backdrop = document.getElementById('emp-clock-backdrop')
@@ -10410,10 +11860,18 @@ function openClockModal(employee, isOut) {
   const confirm  = document.getElementById('emp-clock-confirm')
   const cancel   = document.getElementById('emp-clock-cancel')
 
+  const T = CLOCK_STRINGS[employee.language] ?? CLOCK_STRINGS.en
+
   icon.textContent  = isOut ? '🔴' : '🟢'
-  title.textContent = isOut ? 'Clock Out' : 'Clock In'
+  title.textContent = isOut ? T.clockOut : T.clockIn
   name.textContent  = employee.nickname
   time.textContent  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  // Apply translations to static labels
+  document.querySelector('.emp-clock-sales-title').textContent = T.mySales
+  const [labelToday, labelFort] = document.querySelectorAll('.emp-clock-sales-label')
+  if (labelToday) labelToday.textContent = T.today
+  if (labelFort)  labelFort.textContent  = T.fortnight
 
   // Worked-today + sales summary: only shown on clock-out
   worked.hidden = true
@@ -10441,22 +11899,21 @@ function openClockModal(employee, isOut) {
         const totalMin = Math.round(totalMs / 60000)
         const h   = Math.floor(totalMin / 60)
         const min = totalMin % 60
-        worked.textContent = h > 0 ? `${h}h ${min}m worked today` : `${min}m worked today`
+        worked.textContent = T.worked(h, min)
         worked.hidden = false
       })
       .catch(() => {})
 
-    // Sales collected today and over the last 14 days
-    api(`/api/merchants/${state.merchantId}/employees/${employee.id}/sales`)
+    // Sales collected today and over the last 14 days — servers/managers only
+    if (employee.role !== 'chef') api(`/api/merchants/${state.merchantId}/employees/${employee.id}/sales`)
       .then(r => r.json())
       .then(data => {
         const fmt = (n) => formatPrice(n ?? 0)
-        const orderLabel = (n) => `${n} order${n !== 1 ? 's' : ''}`
 
         document.getElementById('emp-sales-today-total').textContent = fmt(data.today?.totalCents)
-        document.getElementById('emp-sales-today-count').textContent = orderLabel(data.today?.orderCount ?? 0)
+        document.getElementById('emp-sales-today-count').textContent = T.orders(data.today?.orderCount ?? 0)
         document.getElementById('emp-sales-fort-total').textContent  = fmt(data.fortnight?.totalCents)
-        document.getElementById('emp-sales-fort-count').textContent  = orderLabel(data.fortnight?.orderCount ?? 0)
+        document.getElementById('emp-sales-fort-count').textContent  = T.orders(data.fortnight?.orderCount ?? 0)
 
         // Tips — only shown when non-zero
         const todayTips = data.today?.tipsCents ?? 0
@@ -10464,11 +11921,11 @@ function openClockModal(employee, isOut) {
         const todayTipsEl = document.getElementById('emp-sales-today-tips')
         const fortTipsEl  = document.getElementById('emp-sales-fort-tips')
         if (todayTipsEl) {
-          todayTipsEl.textContent = `${fmt(todayTips)} tips`
+          todayTipsEl.textContent = T.tips(fmt(todayTips))
           todayTipsEl.hidden = todayTips === 0
         }
         if (fortTipsEl) {
-          fortTipsEl.textContent = `${fmt(fortTips)} tips`
+          fortTipsEl.textContent = T.tips(fmt(fortTips))
           fortTipsEl.hidden = fortTips === 0
         }
 
@@ -10485,7 +11942,7 @@ function openClockModal(employee, isOut) {
   const newConfirm = confirm.cloneNode(true)
   confirm.parentNode.replaceChild(newConfirm, confirm)
   newConfirm.disabled    = false
-  newConfirm.textContent = isOut ? 'Clock Out' : 'Clock In'
+  newConfirm.textContent = isOut ? T.clockOut : T.clockIn
   newConfirm.className   = 'btn'
   newConfirm.style.cssText = isOut
     ? 'background:rgba(220,38,38,0.15);color:#dc2626;border:1px solid rgba(220,38,38,0.3)'
@@ -10507,6 +11964,7 @@ function openClockModal(employee, isOut) {
 
   const newCancel = cancel.cloneNode(true)
   cancel.parentNode.replaceChild(newCancel, cancel)
+  newCancel.textContent = T.cancel
   newCancel.addEventListener('click', () => {
     closeClockModal()
     // Return to PIN if in employee mode and nobody is logged in
@@ -10586,7 +12044,7 @@ function setCurrentEmployee(emp) {
   // Only servers and managers see the clock-out button in the topbar
   clockBtn.hidden = emp.role === 'chef'
 
-  // Sidebar "Return to Keypad" is visible for servers and managers (not chefs)
+  // Hide Switch Employee for chefs — they use the PIN only to clock out via the modal
   if (returnKeypadBtn) returnKeypadBtn.hidden = emp.role === 'chef'
 
   // Apply nav restrictions based on role
@@ -10605,8 +12063,6 @@ function setCurrentEmployee(emp) {
 function clearCurrentEmployee() {
   state.currentEmployee = null
   document.getElementById('emp-topbar-chip').hidden = true
-  const returnKeypadBtn = document.getElementById('emp-return-keypad-btn')
-  if (returnKeypadBtn) returnKeypadBtn.hidden = true
   window.currentEmployee = null
   // Restore full nav (admin view)
   applyNavRestrictions(null)
@@ -10820,9 +12276,10 @@ async function loadActiveReport() {
   const to   = reportsState.to   || rptTodayStr()
   reportsState.from = from
   reportsState.to   = to
-  if (tab === 'sales')  await loadSalesReport(from, to)
-  if (tab === 'shifts') await loadShiftsReport(from, to)
-  if (tab === 'tips')   await loadTipsReport(from, to)
+  if (tab === 'sales')        await loadSalesReport(from, to)
+  if (tab === 'shifts')       await loadShiftsReport(from, to)
+  if (tab === 'tips')         await loadTipsReport(from, to)
+  if (tab === 'open-splits')  await loadOpenSplitsReport()
 }
 
 // ── Sales ────────────────────────────────────────────────────────────────────
@@ -10857,6 +12314,11 @@ function renderSalesReport(data) {
     const gcAmt       = summary.tenders?.giftCard ?? 0
     const giftCardRow = gcAmt > 0 ? '<tr><td>Gift Card</td><td class="num">' + fmt(gcAmt) + '</td></tr>' : ''
     const orderCount = summary.totalOrders
+    const feeCents = summary.processorFeeCents ?? 0
+    const feeRow = feeCents > 0
+      ? '<div class="ss-row ss-neg"><span>Processor Fees</span><span>-' + fmt(feeCents) + '</span></div>' +
+        '<div class="ss-row ss-total"><span>Net to You</span><span>' + fmt(summary.amountCollectedCents - feeCents) + '</span></div>'
+      : ''
     summaryBlock.innerHTML =
       '<div class="sales-summary-layout">' +
         '<div class="ss-block">' +
@@ -10868,6 +12330,7 @@ function renderSalesReport(data) {
           '<div class="ss-row"><span>Tips</span><span>' + fmt(summary.tipCents) + '</span></div>' +
           svcRow +
           '<div class="ss-row ss-total"><span>Amount Collected</span><span>' + fmt(summary.amountCollectedCents) + '</span></div>' +
+          feeRow +
         '</div>' +
         '<div class="ss-block">' +
           '<div class="ss-heading">Tender Types</div>' +
@@ -10895,6 +12358,7 @@ function renderSalesReport(data) {
 
   if (isSingleDay && orders?.length) {
     // Per-order detail for same-day view
+    const fmtFee = (v) => v == null ? '<span style="color:#999">—</span>' : fmt(v)
     const rowsHtml = orders.map((o) =>
       '<tr>' +
       '<td>' + fmtReportTime(o.createdAt) + '</td>' +
@@ -10906,6 +12370,7 @@ function renderSalesReport(data) {
       '<td class="num">' + fmt(o.tipCents) + '</td>' +
       '<td class="num">' + fmt(o.serviceChargeCents) + '</td>' +
       '<td class="num">' + fmt(o.amountCollectedCents) + '</td>' +
+      '<td class="num">' + fmtFee(o.processorFeeCents) + '</td>' +
       '</tr>'
     ).join('')
     const totalRow =
@@ -10917,13 +12382,14 @@ function renderSalesReport(data) {
       '<td class="num">' + fmt(summary.tipCents) + '</td>' +
       '<td class="num">' + fmt(summary.serviceChargeCents) + '</td>' +
       '<td class="num">' + fmt(summary.amountCollectedCents) + '</td>' +
+      '<td class="num">' + fmt(summary.processorFeeCents ?? 0) + '</td>' +
       '</tr>'
     if (detailWrap) detailWrap.innerHTML =
       '<h4 class="reports-section-sub-heading">Order Detail</h4>' +
       '<div class="reports-table-wrap"><table class="reports-table">' +
       '<thead><tr><th>Time</th><th>Customer</th><th>Tender</th>' +
       '<th class="num">Subtotal</th><th class="num">Discount</th>' +
-      '<th class="num">Tax</th><th class="num">Tip</th><th class="num">Svc Charge</th><th class="num">Total</th></tr></thead>' +
+      '<th class="num">Tax</th><th class="num">Tip</th><th class="num">Svc Charge</th><th class="num">Total</th><th class="num">Fee</th></tr></thead>' +
       '<tbody>' + rowsHtml + totalRow + '</tbody>' +
       '</table></div>'
   } else {
@@ -10939,6 +12405,7 @@ function renderSalesReport(data) {
       '<td class="num">' + fmt(d.tipCents) + '</td>' +
       '<td class="num">' + fmt(d.serviceChargeCents) + '</td>' +
       '<td class="num">' + fmt(d.amountCollectedCents) + '</td>' +
+      '<td class="num">' + fmt(d.processorFeeCents ?? 0) + '</td>' +
       '</tr>'
     ).join('')
     const totalRow =
@@ -10952,13 +12419,14 @@ function renderSalesReport(data) {
       '<td class="num">' + fmt(summary.tipCents) + '</td>' +
       '<td class="num">' + fmt(summary.serviceChargeCents) + '</td>' +
       '<td class="num">' + fmt(summary.amountCollectedCents) + '</td>' +
+      '<td class="num">' + fmt(summary.processorFeeCents ?? 0) + '</td>' +
       '</tr>'
     if (detailWrap) detailWrap.innerHTML =
       '<div class="reports-table-wrap"><table class="reports-table">' +
       '<thead><tr><th>Date</th><th class="num">Orders</th>' +
       '<th class="num">Gross Sales</th><th class="num">Discounts</th>' +
       '<th class="num">Net Sales</th><th class="num">Tax</th>' +
-      '<th class="num">Tips</th><th class="num">Svc Charge</th><th class="num">Collected</th></tr></thead>' +
+      '<th class="num">Tips</th><th class="num">Svc Charge</th><th class="num">Collected</th><th class="num">Fees</th></tr></thead>' +
       '<tbody>' + rowsHtml + totalRow + '</tbody>' +
       '</table></div>'
   }
@@ -10998,18 +12466,50 @@ function renderShiftsReport(data) {
   const table = document.getElementById('shifts-table')
   const empty = document.getElementById('shifts-empty')
 
-  const allShifts = employees.flatMap((e) =>
-    e.shifts.map((s) => Object.assign({}, s, { nickname: e.nickname, role: e.role }))
-  )
-
-  if (allShifts.length === 0) {
+  if (!employees.length || employees.every((e) => e.shifts.length === 0)) {
     table.hidden = true; empty.hidden = false
     empty.textContent = 'No shifts recorded in this period.'
     return
   }
   table.hidden = false; empty.hidden = true
 
-  const rowsHtml = allShifts.map((s) => {
+  const rowsHtml = employees
+    .filter((e) => e.shifts.length > 0)
+    .map((e) => {
+      return '<tr>' +
+        '<td><button class="shifts-emp-link" data-emp-id="' + escHtml(e.employeeId) + '">' + escHtml(e.nickname) + '</button></td>' +
+        '<td><span class="employee-role-badge ' + escHtml(e.role) + '">' + escHtml(e.role) + '</span></td>' +
+        '<td class="num">' + e.shifts.length + '</td>' +
+        '<td class="num">' + e.totalHours.toFixed(2) + ' h</td>' +
+        '</tr>'
+    }).join('')
+
+  const totalRow = '<tr class="total-row">' +
+    '<td colspan="3">Total</td>' +
+    '<td class="num">' + summary.grandTotalHours.toFixed(2) + ' h</td>' +
+    '</tr>'
+
+  tbody.innerHTML = rowsHtml + totalRow
+
+  // Store employee data for modal lookup
+  tbody._shiftsData = employees
+
+  tbody.querySelectorAll('.shifts-emp-link').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const emp = (tbody._shiftsData || []).find((e) => e.employeeId === btn.dataset.empId)
+      if (emp) openShiftsDetailModal(emp)
+    })
+  })
+}
+
+function openShiftsDetailModal(emp) {
+  const modal  = document.getElementById('shifts-detail-modal')
+  const title  = document.getElementById('shifts-detail-modal-title')
+  const tbody  = document.getElementById('shifts-detail-tbody')
+
+  title.textContent = emp.nickname + ' \u2014 Shifts'
+
+  const rowsHtml = emp.shifts.map((s) => {
     const hoursStr = s.hours != null
       ? s.hours.toFixed(2) + ' h'
       : '<span class="ts-clocked-in">Active</span>'
@@ -11017,8 +12517,6 @@ function renderShiftsReport(data) {
       ? fmtReportTime(s.clockOut)
       : '<span class="ts-clocked-in">Active</span>'
     return '<tr>' +
-      '<td>' + escHtml(s.nickname) + '</td>' +
-      '<td><span class="employee-role-badge ' + escHtml(s.role) + '">' + escHtml(s.role) + '</span></td>' +
       '<td>' + escHtml(s.date) + '</td>' +
       '<td>' + fmtReportTime(s.clockIn) + '</td>' +
       '<td>' + clockOutCell + '</td>' +
@@ -11027,11 +12525,12 @@ function renderShiftsReport(data) {
   }).join('')
 
   const totalRow = '<tr class="total-row">' +
-    '<td colspan="5">Total</td>' +
-    '<td class="num">' + summary.grandTotalHours.toFixed(2) + ' h</td>' +
+    '<td colspan="3">Total</td>' +
+    '<td class="num">' + emp.totalHours.toFixed(2) + ' h</td>' +
     '</tr>'
 
   tbody.innerHTML = rowsHtml + totalRow
+  modal.hidden = false
 }
 
 // ── Tips ─────────────────────────────────────────────────────────────────────
@@ -11086,6 +12585,135 @@ function renderTipsReport(data) {
     '</tr>'
 
   tbody.innerHTML = rowsHtml + totalRow
+}
+
+// ── Open Splits (Phase 5: paused split sessions for EOD write-off) ──────────
+
+async function loadOpenSplitsReport() {
+  const merchantId = state.merchantId
+  try {
+    const res = await api(`/api/merchants/${merchantId}/split-sessions?status=paused`)
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    renderOpenSplitsReport(await res.json())
+  } catch (err) {
+    const empty = document.getElementById('open-splits-empty')
+    if (empty) { empty.hidden = false; empty.textContent = 'Failed to load: ' + err.message }
+    const table = document.getElementById('open-splits-table')
+    if (table) table.hidden = true
+  }
+}
+
+function renderOpenSplitsReport(data) {
+  const sessions = Array.isArray(data?.sessions) ? data.sessions : []
+  const tbody = document.getElementById('open-splits-tbody')
+  const table = document.getElementById('open-splits-table')
+  const empty = document.getElementById('open-splits-empty')
+  const badge = document.getElementById('open-splits-count')
+
+  if (badge) {
+    if (sessions.length > 0) { badge.hidden = false; badge.textContent = String(sessions.length) }
+    else                     { badge.hidden = true }
+  }
+
+  if (sessions.length === 0) {
+    table.hidden = true; empty.hidden = false
+    empty.textContent = 'No partial-payment orders.'
+    return
+  }
+  table.hidden = false; empty.hidden = true
+
+  const fmt = formatPrice
+  const rowsHtml = sessions.map((s) => {
+    // Server provides unpaidBaseCents directly — mirrors writeoff math
+    // including discount and service_charge. Trust the server.
+    const unpaidBase   = s.unpaidBaseCents ?? 0
+    const orderShortId = s.orderId.slice(-6)
+    const tableLabel   = s.order.tableLabel ? ' · ' + escHtml(s.order.tableLabel) : ''
+    const splitLabel   = s.splitMode === 'by_items' ? 'By Items'
+                       : s.splitMode === 'custom'   ? 'Custom'
+                       : 'Equal' + (s.expectedTotalLegs ? ' (' + s.expectedTotalLegs + '-way)' : '')
+
+    return '<tr data-order-id="' + escHtml(s.orderId) + '">' +
+      '<td>' + escHtml(orderShortId) + tableLabel + '</td>' +
+      '<td>' + escHtml(s.order.customerName ?? '') + '</td>' +
+      '<td>' + splitLabel + '</td>' +
+      '<td class="num">' + fmt(s.order.totalCents) + '</td>' +
+      '<td class="num">' + fmt(s.paidPreTipCents) + '</td>' +
+      '<td class="num">' + fmt(unpaidBase) + '</td>' +
+      '<td><button type="button" class="btn btn-secondary btn-sm os-writeoff-btn">Write off as discount</button></td>' +
+      '</tr>'
+  }).join('')
+
+  tbody.innerHTML = rowsHtml
+
+  tbody.querySelectorAll('.os-writeoff-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const tr      = e.target.closest('tr[data-order-id]')
+      const orderId = tr?.dataset?.orderId
+      if (!orderId) return
+
+      const sess = sessions.find((s) => s.orderId === orderId)
+      // Re-fetch session to detect any leg recorded between list-load and click.
+      // The list's unpaidBaseCents is correct as of fetch time; this prevents
+      // staff from confirming a stale amount.
+      let liveSess = sess
+      try {
+        const live = await api(
+          '/api/merchants/' + state.merchantId + '/orders/' + orderId + '/split-session'
+        )
+        if (live.ok) {
+          const body = await live.json()
+          // The single-session endpoint doesn't include the rolled-up paid
+          // totals; fall back to the list-time values for the preview.
+          liveSess = { ...sess, ...body }
+        } else if (live.status === 404) {
+          if (typeof showToast === 'function') showToast('Order is no longer paused — refreshing list', 'info')
+          await loadOpenSplitsReport()
+          return
+        }
+      } catch { /* fall through with stale data */ }
+
+      const unpaid = liveSess?.unpaidBaseCents ?? sess?.unpaidBaseCents ?? 0
+      const ok = window.confirm(
+        'Write off ' + formatPrice(unpaid) + ' as a discount and close this order?\n\n' +
+        'The order will be marked paid for ' + formatPrice(sess?.paidTotalCents ?? 0) + '.\n' +
+        'A manager PIN is required.\n\n' +
+        'This is permanent.'
+      )
+      if (!ok) return
+
+      const pin = window.prompt('Enter your manager PIN to confirm:')
+      if (!pin) return
+      if (!/^\d{4}$/.test(pin)) {
+        if (typeof showToast === 'function') showToast('PIN must be 4 digits', 'error')
+        return
+      }
+
+      btn.disabled = true
+      btn.textContent = 'Writing off…'
+      try {
+        const res = await api(
+          '/api/merchants/' + state.merchantId + '/orders/' + orderId + '/writeoff-unpaid',
+          {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ pin }),
+          },
+        )
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error || ('HTTP ' + res.status))
+        }
+        if (typeof showToast === 'function') showToast('Written off as discount', 'success')
+        await loadOpenSplitsReport()
+      } catch (err) {
+        btn.disabled = false
+        btn.textContent = 'Write off as discount'
+        if (typeof showToast === 'function') showToast('Write-off failed: ' + err.message, 'error')
+        else window.alert('Write-off failed: ' + err.message)
+      }
+    })
+  })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -11146,6 +12774,20 @@ function initReports() {
     reportsState.to   = to
     document.querySelectorAll('.reports-preset-btn').forEach((b) => b.classList.remove('active'))
     loadActiveReport()
+  })
+
+  // Shift detail modal close
+  const shiftsDetailModal = document.getElementById('shifts-detail-modal')
+  document.getElementById('shifts-detail-modal-close')?.addEventListener('click', () => {
+    shiftsDetailModal.hidden = true
+  })
+  shiftsDetailModal?.addEventListener('click', (e) => {
+    if (e.target === shiftsDetailModal) shiftsDetailModal.hidden = true
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && shiftsDetailModal && !shiftsDetailModal.hidden) {
+      shiftsDetailModal.hidden = true
+    }
   })
 
   // Auto-load when section becomes active
@@ -12104,8 +13746,18 @@ async function initOrderSSE() {
       }
     }
 
+    // Notify order-entry to release the table when an order reaches a terminal status
+    if (orderId && data.status &&
+        (data.status === 'paid' || data.status === 'cancelled' ||
+         data.status === 'completed' || data.status === 'picked_up')) {
+      window.onOrderTerminated?.(orderId)
+    }
+
     if (!orderId) { if (state.activeSection === 'orders') loadOrders(); return }
     if (state.activeSection !== 'orders') return
+
+    // Payments tab shows its own view — reload it rather than patching order cards
+    if (ordersState.activeTab === 'payments') { loadPayments(); return }
 
     const card = document.querySelector(`[data-order-id="${orderId}"]`)
     if (!card) {
@@ -12207,6 +13859,14 @@ async function initOrderSSE() {
     playNotificationSound()
     showGiftCardModal(data)
     if (state.activeSection === 'gift-cards') loadGiftCards(true)
+  })
+
+  es.addEventListener('advance_order_reminder', (e) => {
+    _sseLastEventAt = Date.now()
+    let data = {}
+    try { data = JSON.parse(e.data) } catch { /* ignore */ }
+    showAdvanceOrderReminder(data)
+    if (state.activeSection === 'orders' && ordersState.activeTab === 'future') loadAdvanceOrders()
   })
 
   es.onerror = () => {
@@ -12421,6 +14081,10 @@ async function loadFeedback(reset) {
         ? `<p class="feedback-item-contact">📬 ${escFb(item.contact)}</p>`
         : ''
 
+      const managerNoteHtml = item.managerNote
+        ? `<div class="feedback-item-manager-note"><span class="feedback-item-manager-note-label">🔒 Private note</span><br>${escFb(item.managerNote)}</div>`
+        : ''
+
       li.innerHTML = `
         <div class="feedback-item-header">
           <span class="feedback-item-stars" aria-label="${item.stars} out of 5 stars">${_starsHtml(item.stars)}</span>
@@ -12430,6 +14094,7 @@ async function loadFeedback(reset) {
         </div>
         ${dishHtml}
         ${commentHtml}
+        ${managerNoteHtml}
         ${contactHtml}
       `
       listEl.appendChild(li)
@@ -13018,3 +14683,1541 @@ document.getElementById('fog-hood-form')?.addEventListener('submit', async (e) =
     submitBtn.textContent = 'Log Hood Cleaning'
   }
 })
+
+// =============================================================================
+// SPECIAL INSTRUCTIONS — Ingredients, Aliases, AI Key
+// =============================================================================
+
+;(function () {
+  'use strict'
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let _ingredients  = []
+  let _aliases      = []
+  let _aiConfigured = false
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function fmtCentsSI(c) { return '$' + (c / 100).toFixed(2) }
+
+  function escSI(s) {
+    if (!s) return ''
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  }
+
+  function getMid() { return state.merchantId }
+
+  // ── AI Key ─────────────────────────────────────────────────────────────────
+
+  async function loadAiKeyStatus() {
+    try {
+      const res = await api('/api/merchants/' + getMid() + '/ai-key/status')
+      if (!res.ok) return
+      const data = await res.json()
+      _aiConfigured = data.configured
+      refreshAiKeyUI()
+    } catch (_e) { /* ignore */ }
+  }
+
+  function refreshAiKeyUI() {
+    const badge     = document.getElementById('ai-key-status-badge')
+    const removeBtn = document.getElementById('ai-key-remove-btn')
+    const input     = document.getElementById('ai-key-input')
+    if (badge) {
+      badge.textContent = _aiConfigured ? 'Configured' : 'Not set'
+      badge.className   = _aiConfigured
+        ? 'status-badge status-badge--green'
+        : 'status-badge status-badge--gray'
+    }
+    if (removeBtn) removeBtn.hidden = !_aiConfigured
+    if (input && _aiConfigured) input.placeholder = '(key already saved — enter new to replace)'
+  }
+
+  async function saveAiKey() {
+    const input = document.getElementById('ai-key-input')
+    const key   = input ? input.value.trim() : ''
+    if (!key) { showToast('Enter an API key first.', 'error'); return }
+    try {
+      const res = await api('/api/merchants/' + getMid() + '/ai-key', {
+        method: 'POST',
+        body: JSON.stringify({ apiKey: key }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      if (input) input.value = ''
+      _aiConfigured = true
+      refreshAiKeyUI()
+      showToast('AI key saved.')
+    } catch (err) {
+      showToast((err && err.message) || 'Failed to save key.', 'error')
+    }
+  }
+
+  async function removeAiKey() {
+    if (!confirm('Remove the AI key? Special instruction parsing will stop working.')) return
+    try {
+      const res = await api('/api/merchants/' + getMid() + '/ai-key', { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${res.status}`)
+      }
+      _aiConfigured = false
+      refreshAiKeyUI()
+      showToast('AI key removed.')
+    } catch (err) {
+      showToast((err && err.message) || 'Failed to remove key.', 'error')
+    }
+  }
+
+  // ── Extra Ingredients ──────────────────────────────────────────────────────
+
+  async function loadIngredients() {
+    try {
+      const res    = await api('/api/merchants/' + getMid() + '/ingredients')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data   = await res.json()
+      _ingredients = (data && data.ingredients) || []
+      renderIngredients()
+    } catch (err) {
+      const tbody = document.getElementById('ingr-tbody')
+      if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="table-empty">Error loading ingredients.</td></tr>'
+    }
+  }
+
+  const INGR_CATS = ['protein', 'vegetable', 'sauce', 'spice', 'dairy', 'other']
+
+  /** Swap a read row into an inline edit form with autosave on focus-leave. */
+  function startEditIngredient(id) {
+    const ingr = _ingredients.find(function (i) { return i.id === id })
+    if (!ingr) return
+    const tbody = document.getElementById('ingr-tbody')
+    if (!tbody) return
+    const tr = tbody.querySelector('tr[data-id="' + id + '"]')
+    if (!tr) return
+
+    // Prevent double-activation
+    if (tr.dataset.editing) return
+    tr.dataset.editing = '1'
+
+    tr.innerHTML =
+      '<td>' +
+        '<small class="text-muted">' + escSI(ingr.name) + '</small><br>' +
+        '<input class="form-control form-control-sm ingr-edit-display" value="' + escSI(ingr.display_name || '') +
+          '" placeholder="Display name" style="margin-top:4px">' +
+      '</td>' +
+      '<td>' +
+        '<select class="form-control form-control-sm ingr-edit-cat">' +
+          INGR_CATS.map(function (c) {
+            return '<option value="' + c + '"' + (c === ingr.category ? ' selected' : '') + '>' +
+              c.charAt(0).toUpperCase() + c.slice(1) + '</option>'
+          }).join('') +
+        '</select>' +
+      '</td>' +
+      '<td>' +
+        '<input type="number" class="form-control form-control-sm ingr-edit-price" value="' +
+          (ingr.price_cents / 100).toFixed(2) + '" min="0" step="0.01" style="width:90px">' +
+      '</td>' +
+      '<td>' + (ingr.is_available ? 'Yes' : 'No') + '</td>' +
+      '<td class="table-actions">' +
+        '<span class="text-muted" style="font-size:12px">Tab / click away to save</span>' +
+      '</td>'
+
+    var _saving = false
+    async function doAutoSave() {
+      if (_saving) return
+      _saving = true
+      const displayName = tr.querySelector('.ingr-edit-display').value.trim() || null
+      const category    = tr.querySelector('.ingr-edit-cat').value
+      const priceCents  = Math.round(parseFloat(tr.querySelector('.ingr-edit-price').value || '0') * 100)
+      try {
+        const res = await api('/api/merchants/' + getMid() + '/ingredients/' + id, {
+          method: 'PUT',
+          body: JSON.stringify({ displayName: displayName, category: category, priceCents: priceCents }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(function () { return {} })
+          throw new Error(err.error || 'HTTP ' + res.status)
+        }
+        await loadIngredients()
+        showToast('Ingredient updated.')
+      } catch (err) {
+        _saving = false
+        showToast((err && err.message) || 'Update failed.', 'error')
+      }
+    }
+
+    // Autosave when focus leaves the row entirely
+    tr.addEventListener('focusout', function (e) {
+      if (tr.contains(e.relatedTarget)) return
+      doAutoSave()
+    })
+
+    // Escape cancels without saving
+    tr.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') renderIngredients()
+    })
+
+    const displayInput = tr.querySelector('.ingr-edit-display')
+    if (displayInput) displayInput.focus()
+  }
+
+  function renderIngredients() {
+    const tbody = document.getElementById('ingr-tbody')
+    if (!tbody) return
+    if (!_ingredients.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No ingredients yet. Click + Add ingredient to create one.</td></tr>'
+      return
+    }
+    tbody.innerHTML = _ingredients.map(function (i) {
+      return '<tr data-id="' + escSI(i.id) + '">' +
+        '<td><strong>' + escSI(i.display_name || i.name) + '</strong><br><small class="text-muted">' + escSI(i.name) + '</small></td>' +
+        '<td>' + escSI(i.category) + '</td>' +
+        '<td>' + (i.price_cents === 0 ? 'Free' : fmtCentsSI(i.price_cents)) + '</td>' +
+        '<td><label class="toggle-label"><input type="checkbox" class="ingr-avail-toggle" data-id="' + escSI(i.id) + '" ' + (i.is_available ? 'checked' : '') + '> ' +
+          '<span>' + (i.is_available ? 'Yes' : 'No') + '</span></label></td>' +
+        '<td class="table-actions">' +
+          '<button class="btn btn-secondary btn-xs ingr-edit-btn" data-id="' + escSI(i.id) + '">Edit</button> ' +
+          '<button class="btn btn-danger btn-xs ingr-del-btn" data-id="' + escSI(i.id) + '" data-name="' + escSI(i.name) + '">Delete</button>' +
+        '</td>' +
+        '</tr>'
+    }).join('')
+
+    tbody.querySelectorAll('.ingr-edit-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { startEditIngredient(btn.dataset.id) })
+    })
+
+    tbody.querySelectorAll('.ingr-avail-toggle').forEach(function (cb) {
+      cb.addEventListener('change', async function () {
+        try {
+          const toggleRes = await api('/api/merchants/' + getMid() + '/ingredients/' + cb.dataset.id, {
+            method: 'PUT',
+            body: JSON.stringify({ isAvailable: cb.checked }),
+          })
+          if (!toggleRes.ok) throw new Error(`HTTP ${toggleRes.status}`)
+          const span = cb.nextElementSibling
+          if (span) span.textContent = cb.checked ? 'Yes' : 'No'
+        } catch (err) {
+          showToast((err && err.message) || 'Update failed.', 'error')
+          cb.checked = !cb.checked
+        }
+      })
+    })
+
+    tbody.querySelectorAll('.ingr-del-btn').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Delete ingredient "' + btn.dataset.name + '"?')) return
+        try {
+          const delRes = await api('/api/merchants/' + getMid() + '/ingredients/' + btn.dataset.id, { method: 'DELETE' })
+          if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`)
+          await loadIngredients()
+          populateAliasIngredientDropdown()
+          showToast('Ingredient deleted.')
+        } catch (err) {
+          showToast((err && err.message) || 'Delete failed.', 'error')
+        }
+      })
+    })
+  }
+
+  function showIngrAddForm(show) {
+    const form = document.getElementById('ingr-add-form')
+    if (form) form.hidden = !show
+    if (show) {
+      const el = document.getElementById('ingr-name-input')
+      if (el) el.focus()
+    }
+  }
+
+  async function saveIngredient() {
+    const nameEl     = document.getElementById('ingr-name-input')
+    const displayEl  = document.getElementById('ingr-display-input')
+    const categoryEl = document.getElementById('ingr-category-select')
+    const priceEl    = document.getElementById('ingr-price-input')
+
+    const name        = nameEl     ? nameEl.value.trim()     : ''
+    const displayName = displayEl  ? (displayEl.value.trim() || null) : null
+    const category    = categoryEl ? categoryEl.value        : 'other'
+    const priceCents  = priceEl    ? Math.round(parseFloat(priceEl.value || '0') * 100) : 0
+
+    if (!name) { showToast('Name is required.', 'error'); return }
+
+    try {
+      const saveRes = await api('/api/merchants/' + getMid() + '/ingredients', {
+        method: 'POST',
+        body: JSON.stringify({ name: name, displayName: displayName, category: category, priceCents: priceCents }),
+      })
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${saveRes.status}`)
+      }
+      showIngrAddForm(false)
+      if (nameEl)    nameEl.value    = ''
+      if (displayEl) displayEl.value = ''
+      if (priceEl)   priceEl.value   = '0.00'
+      await loadIngredients()
+      populateAliasIngredientDropdown()
+      showToast('Ingredient added.')
+    } catch (err) {
+      showToast((err && err.message) || 'Save failed.', 'error')
+    }
+  }
+
+  // ── Ingredient Aliases ─────────────────────────────────────────────────────
+
+  async function loadAliases() {
+    try {
+      const res = await api('/api/merchants/' + getMid() + '/ingredient-aliases')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      _aliases  = (data && data.aliases) || []
+      renderAliases()
+    } catch (_err) {
+      const tbody = document.getElementById('alias-tbody')
+      if (tbody) tbody.innerHTML = '<tr><td colspan="4" class="table-empty">Error loading aliases.</td></tr>'
+    }
+  }
+
+  function renderAliases() {
+    const tbody = document.getElementById('alias-tbody')
+    if (!tbody) return
+    if (!_aliases.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="table-empty">No aliases yet. Click + Add alias to create one.</td></tr>'
+      return
+    }
+    tbody.innerHTML = _aliases.map(function (a) {
+      return '<tr>' +
+        '<td><strong>' + escSI(a.alias_text) + '</strong></td>' +
+        '<td>' + (a.ingredient_name ? escSI(a.ingredient_name) : '<em class="text-muted">Not available</em>') + '</td>' +
+        '<td>' + (a.suggestion_text ? escSI(a.suggestion_text) : '—') + '</td>' +
+        '<td class="table-actions"><button class="btn btn-danger btn-xs alias-del-btn" data-id="' + escSI(a.id) + '" data-alias="' + escSI(a.alias_text) + '">Delete</button></td>' +
+        '</tr>'
+    }).join('')
+
+    tbody.querySelectorAll('.alias-del-btn').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('Delete alias "' + btn.dataset.alias + '"?')) return
+        try {
+          const delRes = await api('/api/merchants/' + getMid() + '/ingredient-aliases/' + btn.dataset.id, { method: 'DELETE' })
+          if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`)
+          await loadAliases()
+          showToast('Alias deleted.')
+        } catch (err) {
+          showToast((err && err.message) || 'Delete failed.', 'error')
+        }
+      })
+    })
+  }
+
+  function populateAliasIngredientDropdown() {
+    const sel = document.getElementById('alias-ingredient-select')
+    if (!sel) return
+    const current = sel.value
+    sel.innerHTML = '<option value="">— Not available —</option>' +
+      _ingredients.map(function (i) {
+        return '<option value="' + escSI(i.id) + '"' + (i.id === current ? ' selected' : '') + '>' + escSI(i.display_name || i.name) + '</option>'
+      }).join('')
+  }
+
+  function showAliasAddForm(show) {
+    const form = document.getElementById('alias-add-form')
+    if (form) form.hidden = !show
+    if (show) {
+      populateAliasIngredientDropdown()
+      const el = document.getElementById('alias-text-input')
+      if (el) el.focus()
+    }
+  }
+
+  async function saveAlias() {
+    const textEl       = document.getElementById('alias-text-input')
+    const ingrEl       = document.getElementById('alias-ingredient-select')
+    const suggEl       = document.getElementById('alias-suggestion-input')
+
+    const aliasText      = textEl ? textEl.value.trim() : ''
+    const ingredientId   = (ingrEl && ingrEl.value) ? ingrEl.value : null
+    const suggestionText = suggEl ? (suggEl.value.trim() || null) : null
+
+    if (!aliasText) { showToast('Alias text is required.', 'error'); return }
+
+    try {
+      const saveRes = await api('/api/merchants/' + getMid() + '/ingredient-aliases', {
+        method: 'POST',
+        body: JSON.stringify({ aliasText: aliasText, ingredientId: ingredientId, suggestionText: suggestionText }),
+      })
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({}))
+        throw new Error(err.error || `HTTP ${saveRes.status}`)
+      }
+      showAliasAddForm(false)
+      if (textEl) textEl.value = ''
+      if (suggEl) suggEl.value = ''
+      await loadAliases()
+      showToast('Alias added.')
+    } catch (err) {
+      showToast((err && err.message) || 'Save failed.', 'error')
+    }
+  }
+
+  // ── Instruction Activity Log ───────────────────────────────────────────────
+
+  const SIL_OUTCOME_LABELS = {
+    accepted:      { label: 'Accepted',      cls: 'status-badge--green'  },
+    no_charge:     { label: 'No charge',     cls: 'status-badge--blue'   },
+    unfulfillable: { label: 'Unfulfillable', cls: 'status-badge--orange' },
+    jailbreak:     { label: 'Jailbreak',     cls: 'status-badge--red'    },
+    too_long:      { label: 'Too long',      cls: 'status-badge--gray'   },
+    error:         { label: 'Error',         cls: 'status-badge--red'    },
+  }
+
+  function fmtSilTime(iso) {
+    try {
+      const d = new Date(iso + 'Z')
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    } catch (_) { return iso }
+  }
+
+  async function loadInstructionLog() {
+    const tbody = document.getElementById('sil-tbody')
+    if (!tbody) return
+    try {
+      const res = await api('/api/merchants/' + getMid() + '/instruction-log')
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      const data = await res.json()
+      const rows = (data && data.log) || []
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No activity in the last 3 days.</td></tr>'
+        return
+      }
+      tbody.innerHTML = rows.map(function (r) {
+        const meta   = SIL_OUTCOME_LABELS[r.outcome] || { label: r.outcome, cls: 'badge-gray' }
+        const charge = r.surcharge_cents > 0 ? '+$' + (r.surcharge_cents / 100).toFixed(2) : '—'
+        const orderId = r.order_id
+          ? '<span title="' + escSI(r.order_id) + '">' + escSI(r.order_id.slice(-6)) + '</span>'
+          : '—'
+        return '<tr>' +
+          '<td style="white-space:nowrap;font-size:12px">' + escSI(fmtSilTime(r.occurred_at)) + '</td>' +
+          '<td style="font-size:13px">' + escSI(r.instruction_text) + '</td>' +
+          '<td style="font-size:12px">' + (r.item_name ? escSI(r.item_name) : '<span class="text-muted">—</span>') + '</td>' +
+          '<td><span class="status-badge ' + meta.cls + '" style="font-size:11px">' + meta.label + '</span></td>' +
+          '<td style="font-size:13px">' + charge + '</td>' +
+          '<td style="font-size:12px;font-family:monospace">' + orderId + '</td>' +
+          '</tr>'
+      }).join('')
+    } catch (err) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="table-empty">Error loading log.</td></tr>'
+    }
+  }
+
+  // ── Entry point (called by showSection) ────────────────────────────────────
+
+  window.loadSpecialInstructions = async function () {
+    await Promise.all([loadAiKeyStatus(), loadIngredients(), loadAliases(), loadInstructionLog()])
+  }
+
+  // ── Wire buttons (once) ────────────────────────────────────────────────────
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var aiSave   = document.getElementById('ai-key-save-btn')
+    var aiRemove = document.getElementById('ai-key-remove-btn')
+    var ingrAdd  = document.getElementById('ingr-add-btn')
+    var ingrCancel = document.getElementById('ingr-cancel-btn')
+    var ingrSave   = document.getElementById('ingr-save-btn')
+    var aliasAdd   = document.getElementById('alias-add-btn')
+    var aliasCancel = document.getElementById('alias-cancel-btn')
+    var aliasSave   = document.getElementById('alias-save-btn')
+    var silRefresh = document.getElementById('sil-refresh-btn')
+
+    if (aiSave)    aiSave.addEventListener('click',    saveAiKey)
+    if (aiRemove)  aiRemove.addEventListener('click',  removeAiKey)
+    if (ingrAdd)   ingrAdd.addEventListener('click',   function () { showIngrAddForm(true) })
+    if (ingrCancel) ingrCancel.addEventListener('click', function () { showIngrAddForm(false) })
+    if (ingrSave)  ingrSave.addEventListener('click',  saveIngredient)
+    if (aliasAdd)  aliasAdd.addEventListener('click',  function () { showAliasAddForm(true) })
+    if (aliasCancel) aliasCancel.addEventListener('click', function () { showAliasAddForm(false) })
+    if (aliasSave) aliasSave.addEventListener('click', saveAlias)
+    if (silRefresh) silRefresh.addEventListener('click', loadInstructionLog)
+  })
+
+  // ── Voice: refresh OOS section when an ingredient is toggled via voice ──────
+  window.addEventListener('oos:ingredientToggled', async ({ detail }) => {
+    if (state.activeSection !== 'oos') return
+    await _oosLoadIngredients()
+    const ing = _oosIngredients.find((i) => i.id === detail.ingId)
+    if (ing) {
+      _oosSyncMenuState(
+        ing.items.map((i) => i.id),
+        ing.modifiers.map((m) => m.id),
+        detail.isOut ? 'out_today' : 'in_stock'
+      )
+    }
+    _oosRenderDishList(document.getElementById('oos-dish-q').value.trim())
+    _oosRenderModList(document.getElementById('oos-mod-q').value.trim())
+    updateOosBadge()
+  })
+
+// ============================================================================
+// 86'd / Out of Stock Management
+// Three ways to mark items OOS:
+//   1. Ingredient shortcuts — bulk-toggle all linked dishes + modifier options
+//   2. Dish search          — find and toggle individual menu items
+//   3. Modifier option search — find and toggle individual modifier options
+// ============================================================================
+
+  let _oosIngredients = []
+
+  /**
+   * Entry point called by showSection('oos').
+   * Idempotent event wiring (flag on section element), then loads data.
+   */
+  async function initOosSection() {
+    const role = state.currentEmployee?.role ?? null
+    const isMgr = !role || role === 'owner' || role === 'manager'
+
+    // Show manager-only controls
+    document.querySelectorAll('.oos-mgr-only').forEach((el) => { el.hidden = !isMgr })
+
+    // Wire static event handlers once
+    const section = document.getElementById('section-oos')
+    if (!section._oosWired) {
+      section._oosWired = true
+      _oosWireEvents()
+    }
+
+    // Load ingredients + ensure menu is available
+    await Promise.all([
+      _oosLoadIngredients(),
+      state.menu ? Promise.resolve() : loadMenu(),
+    ])
+    _oosRenderDishList('')
+    _oosRenderModList('')
+  }
+
+  window.initOosSection = initOosSection
+
+  function _oosWireEvents() {
+    document.getElementById('oos-add-ingr-btn').addEventListener('click', _oosShowAddIngrForm)
+
+    document.getElementById('oos-config-close').addEventListener('click', _oosCloseConfigModal)
+    document.getElementById('oos-config-backdrop').addEventListener('click', _oosCloseConfigModal)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !document.getElementById('oos-config-modal').hidden) {
+        _oosCloseConfigModal()
+      }
+    })
+
+    let _dishTimer = null
+    document.getElementById('oos-dish-q').addEventListener('input', (e) => {
+      clearTimeout(_dishTimer)
+      _dishTimer = setTimeout(() => _oosRenderDishList(e.target.value.trim()), 200)
+    })
+
+    let _modTimer = null
+    document.getElementById('oos-mod-q').addEventListener('input', (e) => {
+      clearTimeout(_modTimer)
+      _modTimer = setTimeout(() => _oosRenderModList(e.target.value.trim()), 200)
+    })
+  }
+
+  async function _oosLoadIngredients() {
+    const grid = document.getElementById('oos-ingr-grid')
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/oos/ingredients`)
+      if (!res.ok) {
+        // Suppress HTML error pages (e.g. 502 gateway pages) and oversized
+        // bodies so the dashboard renders a clean status line instead of
+        // dumping markup into the error card.
+        const body = await res.text()
+        const trimmed = body.trim()
+        const detail = (trimmed && trimmed.length <= 200 && !trimmed.startsWith('<'))
+          ? `: ${trimmed}`
+          : ''
+        throw new Error(`HTTP ${res.status}${detail}`)
+      }
+      _oosIngredients = await res.json()
+      window._voiceOosIngredients = _oosIngredients   // expose to voice.js
+      _oosRenderIngrGrid()
+    } catch (err) {
+      console.error('[OOS] load ingredients failed:', err)
+      if (grid) {
+        grid.innerHTML = `
+          <div class="oos-empty oos-empty--error">
+            Could not load ingredient shortcuts.
+            <br><span class="oos-empty-hint">${_oosEsc(String(err?.message || err))}</span>
+            <br><button class="btn btn-sm btn-secondary" id="oos-retry-btn" type="button">Retry</button>
+          </div>`
+        grid.querySelector('#oos-retry-btn')?.addEventListener('click', _oosLoadIngredients)
+      }
+    }
+  }
+
+  function _oosRenderIngrGrid() {
+    const grid = document.getElementById('oos-ingr-grid')
+    if (!grid) return
+
+    const role = state.currentEmployee?.role ?? null
+    const isMgr = !role || role === 'owner' || role === 'manager'
+
+    if (_oosIngredients.length === 0) {
+      grid.innerHTML = '<div class="oos-empty">No ingredient shortcuts yet.<br><span class="oos-empty-hint">Tap "+ Add" to create one.</span></div>'
+      return
+    }
+
+    grid.innerHTML = _oosIngredients.map((ing) => {
+      const ic = ing.items.length
+      const mc = ing.modifiers.length
+      const meta = (ic + mc) === 0
+        ? '<span class="oos-ingr-meta oos-ingr-meta--empty">Nothing linked yet</span>'
+        : `<span class="oos-ingr-meta">${[
+            ic > 0 ? `${ic} dish${ic !== 1 ? 'es' : ''}` : '',
+            mc > 0 ? `${mc} option${mc !== 1 ? 's' : ''}` : '',
+          ].filter(Boolean).join(' · ')}</span>`
+
+      return `
+        <div class="oos-ingr-card${ing.isOut ? ' oos-ingr-card--out' : ''}" data-ingr-id="${ing.id}">
+          <div class="oos-ingr-card-top">
+            <span class="oos-ingr-card-name">${_oosEsc(ing.name)}</span>
+            ${isMgr ? `<button class="oos-ingr-cfg-btn oos-mgr-only" data-ingr-id="${ing.id}" aria-label="Configure ${_oosEsc(ing.name)}">⚙</button>` : ''}
+          </div>
+          ${meta}
+          <button class="oos-ingr-toggle-btn${ing.isOut ? ' oos-ingr-toggle-btn--out' : ''}" data-ingr-id="${ing.id}">
+            ${ing.isOut ? '<span class="oos-dot oos-dot--out"></span>86\'d — tap to restore' : '<span class="oos-dot oos-dot--in"></span>Available — tap to 86'}
+          </button>
+        </div>`
+    }).join('')
+
+    grid.querySelectorAll('.oos-ingr-toggle-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        _oosToggleIngredient(btn.dataset.ingrId)
+      })
+    })
+
+    grid.querySelectorAll('.oos-ingr-cfg-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        _oosOpenConfigModal(btn.dataset.ingrId)
+      })
+    })
+  }
+
+  async function _oosToggleIngredient(ingId) {
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}/toggle`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+
+      // Update local state
+      const ing = _oosIngredients.find((i) => i.id === ingId)
+      if (ing) {
+        ing.isOut = data.isOut
+        _oosSyncMenuState(ing.items.map((i) => i.id), ing.modifiers.map((m) => m.id), data.stockStatus)
+      }
+
+      _oosRenderIngrGrid()
+      _oosRenderDishList(document.getElementById('oos-dish-q').value.trim())
+      _oosRenderModList(document.getElementById('oos-mod-q').value.trim())
+      updateOosBadge()
+    } catch (err) {
+      console.error('[OOS] toggle ingredient failed:', err)
+    }
+  }
+
+  /** Sync in-memory state.menu stock after a bulk ingredient toggle */
+  function _oosSyncMenuState(itemIds, modifierIds, stockStatus) {
+    if (!state.menu) return
+    const itemSet = new Set(itemIds)
+    const modSet  = new Set(modifierIds)
+    const allItems = [
+      ...(state.menu.uncategorizedItems ?? []),
+      ...(state.menu.categories ?? []).flatMap((c) => c.items ?? []),
+    ]
+    for (const item of allItems) {
+      if (itemSet.has(item.id)) item.stockStatus = stockStatus
+      for (const group of item.modifierGroups ?? []) {
+        for (const mod of group.modifiers ?? []) {
+          if (modSet.has(mod.id)) mod.stockStatus = stockStatus
+        }
+      }
+    }
+  }
+
+  function _oosAllDishes() {
+    if (!state.menu) return []
+    return [
+      ...(state.menu.uncategorizedItems ?? []),
+      ...(state.menu.categories ?? []).flatMap((c) => c.items ?? []),
+    ]
+  }
+
+  function _oosAllModifiers() {
+    if (!state.menu) return []
+    const seen = new Set()
+    const result = []
+    for (const item of _oosAllDishes()) {
+      for (const group of item.modifierGroups ?? []) {
+        for (const mod of group.modifiers ?? []) {
+          if (!seen.has(mod.id)) {
+            seen.add(mod.id)
+            result.push({ ...mod, groupName: group.name })
+          }
+        }
+      }
+    }
+    return result
+  }
+
+  const _OOS_STATUS_LABEL = { out_today: 'Out today', out_indefinitely: 'Out of stock' }
+
+  function _oosRenderDishList(query) {
+    const el = document.getElementById('oos-dish-list')
+    if (!el) return
+    const q = query.toLowerCase()
+    const all = _oosAllDishes()
+    const rows = q
+      ? all.filter((i) => i.name.toLowerCase().includes(q))
+      : all.filter((i) => i.stockStatus && i.stockStatus !== 'in_stock')
+
+    if (rows.length === 0) {
+      el.innerHTML = q
+        ? `<div class="oos-empty">No dishes match "${_oosEsc(query)}"</div>`
+        : '<div class="oos-empty">All dishes are available ✓</div>'
+      return
+    }
+
+    el.innerHTML = rows.map((item) => {
+      const isOut = item.stockStatus && item.stockStatus !== 'in_stock'
+      const label = isOut ? (_OOS_STATUS_LABEL[item.stockStatus] ?? item.stockStatus) : 'In stock'
+      return `
+        <div class="oos-item-row${isOut ? ' oos-item-row--out' : ''}">
+          <span class="oos-row-name">${_oosEsc(item.name)}</span>
+          <span class="oos-row-status ${isOut ? 'oos-row-status--out' : 'oos-row-status--in'}">${label}</span>
+          <button class="btn btn-sm ${isOut ? 'btn-secondary' : 'btn-danger'} oos-item-toggle"
+                  data-item-id="${item.id}" data-current="${item.stockStatus ?? 'in_stock'}">
+            ${isOut ? '↺ Restore' : '86 it'}
+          </button>
+        </div>`
+    }).join('')
+
+    el.querySelectorAll('.oos-item-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const next = btn.dataset.current !== 'in_stock' ? 'in_stock' : 'out_today'
+        _oosSetItemStock(btn.dataset.itemId, next)
+      })
+    })
+  }
+
+  function _oosRenderModList(query) {
+    const el = document.getElementById('oos-mod-list')
+    if (!el) return
+    const q = query.toLowerCase()
+    const all = _oosAllModifiers()
+    const rows = q
+      ? all.filter((m) => m.name.toLowerCase().includes(q) || m.groupName.toLowerCase().includes(q))
+      : all.filter((m) => m.stockStatus && m.stockStatus !== 'in_stock')
+
+    if (rows.length === 0) {
+      el.innerHTML = q
+        ? `<div class="oos-empty">No options match "${_oosEsc(query)}"</div>`
+        : '<div class="oos-empty">All modifier options are available ✓</div>'
+      return
+    }
+
+    el.innerHTML = rows.map((mod) => {
+      const isOut = mod.stockStatus && mod.stockStatus !== 'in_stock'
+      const label = isOut ? (_OOS_STATUS_LABEL[mod.stockStatus] ?? mod.stockStatus) : 'In stock'
+      return `
+        <div class="oos-item-row${isOut ? ' oos-item-row--out' : ''}">
+          <span class="oos-row-name">${_oosEsc(mod.name)} <span class="oos-row-group">(${_oosEsc(mod.groupName)})</span></span>
+          <span class="oos-row-status ${isOut ? 'oos-row-status--out' : 'oos-row-status--in'}">${label}</span>
+          <button class="btn btn-sm ${isOut ? 'btn-secondary' : 'btn-danger'} oos-mod-toggle"
+                  data-mod-id="${mod.id}" data-current="${mod.stockStatus ?? 'in_stock'}">
+            ${isOut ? '↺ Restore' : '86 it'}
+          </button>
+        </div>`
+    }).join('')
+
+    el.querySelectorAll('.oos-mod-toggle').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const next = btn.dataset.current !== 'in_stock' ? 'in_stock' : 'out_today'
+        _oosSetModStock(btn.dataset.modId, next)
+      })
+    })
+  }
+
+  async function _oosSetItemStock(itemId, stockStatus) {
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/oos/items/${itemId}/stock`, {
+        method: 'PATCH',
+        body: JSON.stringify({ stockStatus }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const item = _oosAllDishes().find((i) => i.id === itemId)
+      if (item) item.stockStatus = stockStatus
+      _oosRenderDishList(document.getElementById('oos-dish-q').value.trim())
+      updateOosBadge()
+    } catch (err) {
+      console.error('[OOS] set item stock failed:', err)
+    }
+  }
+
+  async function _oosSetModStock(modId, stockStatus) {
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/oos/modifiers/${modId}/stock`, {
+        method: 'PATCH',
+        body: JSON.stringify({ stockStatus }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      // Update in state.menu
+      for (const item of _oosAllDishes()) {
+        for (const group of item.modifierGroups ?? []) {
+          for (const mod of group.modifiers ?? []) {
+            if (mod.id === modId) mod.stockStatus = stockStatus
+          }
+        }
+      }
+      _oosRenderModList(document.getElementById('oos-mod-q').value.trim())
+      updateOosBadge()
+    } catch (err) {
+      console.error('[OOS] set mod stock failed:', err)
+    }
+  }
+
+  /** Minimal HTML-escape for user-generated strings in innerHTML */
+  function _oosEsc(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+
+  // ── Configure ingredient modal (manager/owner) ────────────────────────────
+
+  function _oosOpenConfigModal(ingId) {
+    const ing = _oosIngredients.find((i) => i.id === ingId)
+    if (!ing) return
+    document.getElementById('oos-config-title').textContent = `Configure — ${ing.name}`
+    _oosRenderConfigBody(ing)
+    document.getElementById('oos-config-modal').hidden = false
+    document.getElementById('oos-config-backdrop').hidden = false
+  }
+
+  function _oosCloseConfigModal() {
+    document.getElementById('oos-config-modal').hidden = true
+    document.getElementById('oos-config-backdrop').hidden = true
+  }
+
+  function _oosRenderConfigBody(ing) {
+    const body = document.getElementById('oos-config-body')
+    const allDishes = _oosAllDishes()
+    const allMods   = _oosAllModifiers()
+
+    const linkedItemRows = ing.items.map((li) =>
+      `<div class="oos-cfg-row">
+         <span>${_oosEsc(li.name)}</span>
+         <button class="btn btn-sm btn-danger" data-remove-item="${li.id}">Remove</button>
+       </div>`
+    ).join('') || '<div class="oos-cfg-empty">None linked yet</div>'
+
+    const linkedModRows = ing.modifiers.map((lm) =>
+      `<div class="oos-cfg-row">
+         <span>${_oosEsc(lm.name)} <span class="oos-row-group">(${_oosEsc(lm.groupName)})</span></span>
+         <button class="btn btn-sm btn-danger" data-remove-mod="${lm.id}">Remove</button>
+       </div>`
+    ).join('') || '<div class="oos-cfg-empty">None linked yet</div>'
+
+    body.innerHTML = `
+      <div class="oos-cfg-section">
+        <label class="oos-cfg-label">Name</label>
+        <div class="oos-cfg-rename-row">
+          <input type="text" class="form-input" id="oos-cfg-name" value="${_oosEsc(ing.name)}" maxlength="50">
+          <button class="btn btn-sm btn-primary" id="oos-cfg-rename-btn">Save name</button>
+        </div>
+      </div>
+
+      <div class="oos-cfg-section">
+        <label class="oos-cfg-label">Linked Dishes (${ing.items.length})</label>
+        <div id="oos-cfg-items" class="oos-cfg-list">${linkedItemRows}</div>
+        <input type="search" class="oos-search oos-cfg-search" id="oos-cfg-dish-q" placeholder="Search dishes to add…">
+        <div class="oos-cfg-results" id="oos-cfg-dish-results"></div>
+      </div>
+
+      <div class="oos-cfg-section">
+        <label class="oos-cfg-label">Linked Modifier Options (${ing.modifiers.length})</label>
+        <div id="oos-cfg-mods" class="oos-cfg-list">${linkedModRows}</div>
+        <input type="search" class="oos-search oos-cfg-search" id="oos-cfg-mod-q" placeholder="Search options to add…">
+        <div class="oos-cfg-results" id="oos-cfg-mod-results"></div>
+      </div>
+
+      <div class="oos-cfg-danger">
+        <button class="btn btn-sm btn-danger" id="oos-cfg-delete-btn">Delete this shortcut</button>
+      </div>`
+
+    const ingId = ing.id
+    const linkedItemIds = new Set(ing.items.map((i) => i.id))
+    const linkedModIds  = new Set(ing.modifiers.map((m) => m.id))
+
+    body.querySelector('#oos-cfg-rename-btn').addEventListener('click', async () => {
+      const name = body.querySelector('#oos-cfg-name').value.trim()
+      if (!name) return
+      const res = await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}`, {
+        method: 'PUT', body: JSON.stringify({ name }),
+      })
+      if (res.ok) {
+        await _oosLoadIngredients()
+        const updated = _oosIngredients.find((i) => i.id === ingId)
+        if (updated) {
+          document.getElementById('oos-config-title').textContent = `Configure — ${updated.name}`
+          _oosRenderConfigBody(updated)
+        }
+      }
+    })
+
+    body.querySelectorAll('[data-remove-item]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}/items/${btn.dataset.removeItem}`, { method: 'DELETE' })
+        await _oosLoadIngredients()
+        const updated = _oosIngredients.find((i) => i.id === ingId)
+        if (updated) _oosRenderConfigBody(updated)
+      })
+    })
+
+    body.querySelectorAll('[data-remove-mod]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}/modifiers/${btn.dataset.removeMod}`, { method: 'DELETE' })
+        await _oosLoadIngredients()
+        const updated = _oosIngredients.find((i) => i.id === ingId)
+        if (updated) _oosRenderConfigBody(updated)
+      })
+    })
+
+    // Dish search to add
+    let _dTimer = null
+    body.querySelector('#oos-cfg-dish-q').addEventListener('input', (e) => {
+      clearTimeout(_dTimer)
+      const q = e.target.value.trim()
+      const res = body.querySelector('#oos-cfg-dish-results')
+      if (!q) { res.innerHTML = ''; return }
+      _dTimer = setTimeout(() => {
+        const matches = allDishes
+          .filter((d) => d.name.toLowerCase().includes(q.toLowerCase()) && !linkedItemIds.has(d.id))
+          .slice(0, 8)
+        res.innerHTML = matches.map((d) =>
+          `<button class="oos-cfg-suggest" data-add-item="${d.id}">${_oosEsc(d.name)}</button>`
+        ).join('')
+        res.querySelectorAll('[data-add-item]').forEach((sb) => {
+          sb.addEventListener('click', async () => {
+            await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}/items`, {
+              method: 'POST', body: JSON.stringify({ itemId: sb.dataset.addItem }),
+            })
+            body.querySelector('#oos-cfg-dish-q').value = ''
+            res.innerHTML = ''
+            await _oosLoadIngredients()
+            const updated = _oosIngredients.find((i) => i.id === ingId)
+            if (updated) _oosRenderConfigBody(updated)
+          })
+        })
+      }, 200)
+    })
+
+    // Modifier search to add
+    let _mTimer = null
+    body.querySelector('#oos-cfg-mod-q').addEventListener('input', (e) => {
+      clearTimeout(_mTimer)
+      const q = e.target.value.trim()
+      const res = body.querySelector('#oos-cfg-mod-results')
+      if (!q) { res.innerHTML = ''; return }
+      _mTimer = setTimeout(() => {
+        const matches = allMods
+          .filter((m) =>
+            (m.name.toLowerCase().includes(q.toLowerCase()) || m.groupName.toLowerCase().includes(q.toLowerCase()))
+            && !linkedModIds.has(m.id)
+          )
+          .slice(0, 8)
+        res.innerHTML = matches.map((m) =>
+          `<button class="oos-cfg-suggest" data-add-mod="${m.id}">${_oosEsc(m.name)} <span class="oos-row-group">(${_oosEsc(m.groupName)})</span></button>`
+        ).join('')
+        res.querySelectorAll('[data-add-mod]').forEach((sb) => {
+          sb.addEventListener('click', async () => {
+            await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}/modifiers`, {
+              method: 'POST', body: JSON.stringify({ modifierId: sb.dataset.addMod }),
+            })
+            body.querySelector('#oos-cfg-mod-q').value = ''
+            res.innerHTML = ''
+            await _oosLoadIngredients()
+            const updated = _oosIngredients.find((i) => i.id === ingId)
+            if (updated) _oosRenderConfigBody(updated)
+          })
+        })
+      }, 200)
+    })
+
+    body.querySelector('#oos-cfg-delete-btn').addEventListener('click', async () => {
+      if (!confirm(`Delete "${ing.name}" shortcut?`)) return
+      await api(`/api/merchants/${state.merchantId}/oos/ingredients/${ingId}`, { method: 'DELETE' })
+      await _oosLoadIngredients()
+      _oosCloseConfigModal()
+    })
+  }
+
+  // ── Add ingredient inline form ────────────────────────────────────────────
+
+  function _oosShowAddIngrForm() {
+    const grid = document.getElementById('oos-ingr-grid')
+    if (grid.querySelector('.oos-add-form')) return   // already open
+
+    const form = document.createElement('div')
+    form.className = 'oos-add-form'
+    form.innerHTML = `
+      <input type="text" class="form-input" id="oos-add-name" placeholder="Ingredient name (e.g. Avocado)" maxlength="50" autofocus>
+      <div class="oos-add-form-btns">
+        <button class="btn btn-sm btn-primary" id="oos-add-save">Add</button>
+        <button class="btn btn-sm btn-ghost-outline" id="oos-add-cancel">Cancel</button>
+      </div>`
+    grid.prepend(form)
+    form.querySelector('#oos-add-name').focus()
+
+    form.querySelector('#oos-add-cancel').addEventListener('click', () => form.remove())
+    form.querySelector('#oos-add-save').addEventListener('click', async () => {
+      const name = form.querySelector('#oos-add-name').value.trim()
+      if (!name) return
+      const res = await api(`/api/merchants/${state.merchantId}/oos/ingredients`, {
+        method: 'POST', body: JSON.stringify({ name }),
+      })
+      if (res.ok) {
+        form.remove()
+        await _oosLoadIngredients()
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed' }))
+        showToast(err.error || 'Failed to create ingredient', 'error')
+      }
+    })
+    form.querySelector('#oos-add-name').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') form.querySelector('#oos-add-save').click()
+      if (e.key === 'Escape') form.remove()
+    })
+  }
+
+  // ── Manual Order modal ────────────────────────────────────────────────────
+  ;(function initManualOrderModal() {
+    const modal    = document.getElementById('manual-order-modal')
+    const backdrop = document.getElementById('manual-order-backdrop')
+    const openBtn  = document.getElementById('manual-order-btn')
+    const closeBtn = document.getElementById('mo-close-btn')
+    const cancelBtn= document.getElementById('mo-cancel-btn')
+    const saveBtn  = document.getElementById('mo-save-btn')
+    const statusMsg= document.getElementById('mo-status-msg')
+
+    const fSubtotal = () => document.getElementById('mo-subtotal')
+    const fDiscount = () => document.getElementById('mo-discount')
+    const fTax      = () => document.getElementById('mo-tax')
+    const fTip      = () => document.getElementById('mo-tip')
+    const fTotal    = () => document.getElementById('mo-total')
+
+    function parseDollars(id) {
+      return Math.round((parseFloat(document.getElementById(id)?.value || '0') || 0) * 100)
+    }
+
+    function recalc() {
+      const taxRate      = state.profile?.taxRate ?? 0
+      const subtotal     = parseDollars('mo-subtotal')
+      const discount     = parseDollars('mo-discount')
+      const tip          = parseDollars('mo-tip')
+      const taxable      = Math.max(0, subtotal - discount)
+      const tax          = Math.round(taxable * taxRate)
+      const total        = taxable + tax + tip
+      fTax().value   = (tax   / 100).toFixed(2)
+      fTotal().value = (total / 100).toFixed(2)
+    }
+
+    function openModal() {
+      document.getElementById('mo-customer-name').value  = ''
+      document.getElementById('mo-customer-email').value = ''
+      document.getElementById('mo-notes').value          = ''
+      document.getElementById('mo-subtotal').value       = ''
+      document.getElementById('mo-discount').value       = ''
+      document.getElementById('mo-tip').value            = ''
+      document.getElementById('mo-transfer-id').value   = ''
+      fTax().value = ''
+      fTotal().value = ''
+      statusMsg.hidden = true
+      saveBtn.disabled = false
+      modal.hidden    = false
+      backdrop.hidden = false
+      document.getElementById('mo-subtotal').focus()
+    }
+
+    function closeModal() {
+      modal.hidden    = true
+      backdrop.hidden = true
+    }
+
+    function showStatus(msg, isError) {
+      statusMsg.textContent = msg
+      statusMsg.className   = 'mo-status-msg' + (isError ? ' mo-status-error' : ' mo-status-ok')
+      statusMsg.hidden      = false
+    }
+
+    openBtn?.addEventListener('click', openModal)
+    closeBtn?.addEventListener('click', closeModal)
+    cancelBtn?.addEventListener('click', closeModal)
+    backdrop?.addEventListener('click', closeModal)
+
+    modal?.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal() })
+
+    document.getElementById('mo-subtotal')?.addEventListener('input', recalc)
+    document.getElementById('mo-discount')?.addEventListener('input', recalc)
+    document.getElementById('mo-tip')?.addEventListener('input', recalc)
+
+    saveBtn?.addEventListener('click', async () => {
+      const subtotalCents  = parseDollars('mo-subtotal')
+      if (subtotalCents <= 0) { showStatus('Subtotal is required.', true); return }
+
+      const discountCents  = parseDollars('mo-discount')
+      if (discountCents >= subtotalCents) { showStatus('Discount must be less than subtotal.', true); return }
+
+      saveBtn.disabled = true
+      saveBtn.textContent = 'Saving…'
+      statusMsg.hidden = true
+
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}/orders/manual`, {
+          method: 'POST',
+          body: JSON.stringify({
+            customerName:    document.getElementById('mo-customer-name').value.trim() || undefined,
+            customerEmail:   document.getElementById('mo-customer-email').value.trim() || undefined,
+            notes:           document.getElementById('mo-notes').value.trim() || undefined,
+            subtotalCents,
+            discountCents:   discountCents || undefined,
+            tipCents:        parseDollars('mo-tip') || undefined,
+            finixTransferId: document.getElementById('mo-transfer-id').value.trim() || undefined,
+          }),
+        })
+        const data = await res.json()
+
+        if (res.status === 409) {
+          showStatus(`This transfer ID is already linked to an existing order (${data.orderId}).`, true)
+          saveBtn.disabled = false
+          saveBtn.textContent = 'Save Order'
+          return
+        }
+        if (!res.ok) {
+          showStatus(data.error || `Error ${res.status}`, true)
+          saveBtn.disabled = false
+          saveBtn.textContent = 'Save Order'
+          return
+        }
+
+        const label = data.reconciled ? 'Order reconciled with payment.' : 'Order saved.'
+        showStatus(`✓ ${label}`, false)
+        saveBtn.textContent = 'Save Order'
+        await loadOrders()
+        setTimeout(closeModal, 1200)
+      } catch (err) {
+        showStatus('Network error — please try again.', true)
+        saveBtn.disabled = false
+        saveBtn.textContent = 'Save Order'
+      }
+    })
+  })()
+
+})()
+
+// ---------------------------------------------------------------------------
+// Advance Orders (Future tab)
+// ---------------------------------------------------------------------------
+
+/** @type {Array} cached advance orders for the current session */
+let _aoOrders = []
+let _aoReminderCurrentId = null
+
+async function loadAdvanceOrders() {
+  if (!state.merchantId) return
+
+  const loading = document.getElementById('future-orders-loading')
+  const empty   = document.getElementById('future-orders-empty')
+  const list    = document.getElementById('future-orders-list')
+  loading.hidden = false
+  empty.hidden   = true
+  list.hidden    = true
+
+  try {
+    const res = await api(`/api/merchants/${state.merchantId}/advance-orders`)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Server error ${res.status}`)
+    }
+    const data = await res.json()
+    _aoOrders = data.orders || []
+    loading.hidden = true
+    if (_aoOrders.length === 0) {
+      empty.hidden = false
+    } else {
+      list.hidden = false
+      list.innerHTML = _aoOrders.map(buildAdvanceOrderCard).join('')
+    }
+  } catch (err) {
+    loading.hidden = true
+    empty.hidden = false
+    showToast('Failed to load advance orders: ' + (err.message || 'unknown error'), 'error')
+  }
+}
+
+function buildAdvanceOrderCard(ao) {
+  const scheduled = new Date(
+    ao.scheduledFor.endsWith('Z') || ao.scheduledFor.includes('+')
+      ? ao.scheduledFor : ao.scheduledFor + 'Z'
+  )
+  const dateLabel = scheduled.toLocaleString([], {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  })
+
+  const statusClass = ao.status === 'cancelled' ? 'cancelled' :
+                      ao.status === 'ready'      ? 'paid'       : 'received'
+  const statusLabel = ao.status === 'cancelled' ? 'Cancelled' :
+                      ao.status === 'ready'      ? 'Ready'      : 'Pending'
+
+  const itemsHtml = (ao.items || []).map((item) =>
+    `<li class="future-order-item">${esc(item.qty > 1 ? `${item.qty}× ` : '')}${esc(item.description)}</li>`
+  ).join('')
+
+  const notesHtml = ao.notes
+    ? `<p class="future-order-notes">${esc(ao.notes)}</p>` : ''
+
+  const phone = ao.customerPhone
+    ? ` <span class="future-order-phone">${esc(ao.customerPhone)}</span>` : ''
+
+  const isCancelled = ao.status === 'cancelled'
+  const readyBtn = ao.status === 'pending'
+    ? `<button type="button" class="btn btn-sm btn-success ao-ready-btn"   data-id="${esc(ao.id)}">Mark Ready</button>`
+    : `<button type="button" class="btn btn-sm btn-ghost   ao-pending-btn" data-id="${esc(ao.id)}">Mark Pending</button>`
+
+  const actionsHtml = isCancelled ? '' :
+    `<div class="future-order-actions">
+      <button type="button" class="btn btn-sm btn-ghost   ao-edit-btn"   data-id="${esc(ao.id)}">Edit</button>
+      <button type="button" class="btn btn-sm btn-primary ao-print-btn"  data-id="${esc(ao.id)}">Print Ticket</button>
+      ${readyBtn}
+      <button type="button" class="btn btn-sm btn-danger  ao-cancel-btn" data-id="${esc(ao.id)}">Cancel</button>
+    </div>`
+
+  return `
+    <div class="future-order-card${isCancelled ? ' cancelled' : ''}" data-ao-id="${esc(ao.id)}">
+      <div class="future-order-scheduled-row">
+        <svg class="future-order-clock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        <span class="future-order-scheduled-label">${esc(dateLabel)}</span>
+        <span class="order-status ${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="future-order-card-header">
+        <div class="future-order-customer"><strong>${esc(ao.customerName)}</strong>${phone}</div>
+      </div>
+      <ul class="future-order-items">${itemsHtml}</ul>
+      ${notesHtml}
+      ${actionsHtml}
+    </div>`
+}
+
+function buildAoItemRow(item, idx) {
+  return `<div class="ao-item-row" data-idx="${idx}">
+    <input type="number" class="input ao-item-qty" value="${item.qty || 1}" min="1" max="99">
+    <input type="text"   class="input ao-item-desc" value="${esc(item.description || '')}" placeholder="Description">
+    <button type="button" class="btn btn-sm btn-ghost ao-item-remove-btn" aria-label="Remove">×</button>
+  </div>`
+}
+
+function _collectAoItems() {
+  return Array.from(document.querySelectorAll('#ao-items-list .ao-item-row')).map((row) => ({
+    qty: parseInt(row.querySelector('.ao-item-qty').value, 10) || 1,
+    description: row.querySelector('.ao-item-desc').value.trim(),
+  })).filter((item) => item.description)
+}
+
+function openAoPanel(ao = null) {
+  const errDiv = document.getElementById('ao-panel-error')
+  errDiv.hidden = true
+  errDiv.textContent = ''
+
+  document.getElementById('ao-panel-id').value      = ao ? ao.id       : ''
+  document.getElementById('ao-panel-title').textContent = ao ? 'Edit Advance Order' : 'New Advance Order'
+  document.getElementById('ao-customer-name').value  = ao ? ao.customerName       : ''
+  document.getElementById('ao-customer-phone').value = ao ? (ao.customerPhone || '') : ''
+  document.getElementById('ao-notes').value          = ao ? (ao.notes || '')      : ''
+
+  if (ao) {
+    const scheduled = new Date(
+      ao.scheduledFor.endsWith('Z') || ao.scheduledFor.includes('+')
+        ? ao.scheduledFor : ao.scheduledFor + 'Z'
+    )
+    document.getElementById('ao-scheduled-date').value = scheduled.toLocaleDateString('sv-SE')
+    document.getElementById('ao-scheduled-time').value = scheduled.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    document.getElementById('ao-items-list').innerHTML = (ao.items || []).map(buildAoItemRow).join('')
+  } else {
+    document.getElementById('ao-scheduled-date').value = ''
+    document.getElementById('ao-scheduled-time').value = ''
+    document.getElementById('ao-items-list').innerHTML = buildAoItemRow({ qty: 1, description: '' }, 0)
+  }
+
+  document.getElementById('ao-panel').hidden    = false
+  document.getElementById('ao-panel-backdrop').hidden = false
+  document.getElementById('ao-customer-name').focus()
+}
+
+function closeAoPanel() {
+  document.getElementById('ao-panel').hidden          = true
+  document.getElementById('ao-panel-backdrop').hidden = true
+}
+
+async function saveAoPanel() {
+  const errDiv  = document.getElementById('ao-panel-error')
+  const aoId    = document.getElementById('ao-panel-id').value.trim()
+  const name    = document.getElementById('ao-customer-name').value.trim()
+  const phone   = document.getElementById('ao-customer-phone').value.trim()
+  const dateStr = document.getElementById('ao-scheduled-date').value
+  const timeStr = document.getElementById('ao-scheduled-time').value
+  const notes   = document.getElementById('ao-notes').value.trim()
+  const items   = _collectAoItems()
+
+  errDiv.hidden = true
+  if (!name)            { errDiv.textContent = 'Customer name is required.'; errDiv.hidden = false; return }
+  if (!dateStr)         { errDiv.textContent = 'Date is required.'; errDiv.hidden = false; return }
+  if (!timeStr)         { errDiv.textContent = 'Time is required.'; errDiv.hidden = false; return }
+  if (!items.length)    { errDiv.textContent = 'At least one item is required.'; errDiv.hidden = false; return }
+
+  // Parse as local time and convert to UTC so the server stores an unambiguous timestamp
+  const localDt = new Date(`${dateStr}T${timeStr}:00`)
+  if (isNaN(localDt.getTime())) {
+    errDiv.textContent = 'Invalid date or time.'
+    errDiv.hidden = false
+    return
+  }
+  const scheduledFor = localDt.toISOString()   // e.g. "2026-04-24T23:00:00.000Z"
+  const body = { customerName: name, scheduledFor, items }
+  if (phone) body.customerPhone = phone
+  if (notes) body.notes = notes
+
+  const saveBtn = document.getElementById('ao-panel-save-btn')
+  saveBtn.disabled = true
+  try {
+    const url    = aoId
+      ? `/api/merchants/${state.merchantId}/advance-orders/${aoId}`
+      : `/api/merchants/${state.merchantId}/advance-orders`
+    const method = aoId ? 'PATCH' : 'POST'
+    const res    = await api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d.error || 'Failed to save')
+    }
+    closeAoPanel()
+    await loadAdvanceOrders()
+  } catch (err) {
+    errDiv.textContent = err.message || 'Failed to save order'
+    errDiv.hidden = false
+  } finally {
+    saveBtn.disabled = false
+  }
+}
+
+function showAdvanceOrderReminder(data) {
+  _aoReminderCurrentId = data.aoId || null
+  const mark  = data.mark === 'day' ? 'Today' : '24-Hour'
+  const name  = data.customerName   ? esc(data.customerName)   : 'Unknown'
+  const phone = data.customerPhone  ? `<br>Phone: ${esc(data.customerPhone)}` : ''
+  const time  = data.scheduledLabel ? esc(data.scheduledLabel) : ''
+  document.getElementById('ao-reminder-msg').innerHTML =
+    `<strong>${mark} Reminder</strong><br>Customer: ${name}${phone}<br>Scheduled: ${time}`
+  document.getElementById('ao-reminder-modal').hidden          = false
+  document.getElementById('ao-reminder-modal-backdrop').hidden = false
+  playNotificationSound()
+}
+
+function hideAdvanceOrderReminder() {
+  document.getElementById('ao-reminder-modal').hidden          = true
+  document.getElementById('ao-reminder-modal-backdrop').hidden = true
+  _aoReminderCurrentId = null
+}
+
+function initAdvanceOrders() {
+  document.getElementById('future-order-new-btn').addEventListener('click', () => openAoPanel())
+  document.getElementById('ao-panel-close').addEventListener('click', closeAoPanel)
+  document.getElementById('ao-panel-cancel-btn').addEventListener('click', closeAoPanel)
+  document.getElementById('ao-panel-backdrop').addEventListener('click', closeAoPanel)
+  document.getElementById('ao-panel-save-btn').addEventListener('click', saveAoPanel)
+
+  document.getElementById('ao-add-item-btn').addEventListener('click', () => {
+    const list = document.getElementById('ao-items-list')
+    const idx  = list.querySelectorAll('.ao-item-row').length
+    list.insertAdjacentHTML('beforeend', buildAoItemRow({ qty: 1, description: '' }, idx))
+  })
+
+  document.getElementById('ao-items-list').addEventListener('click', (e) => {
+    if (!e.target.classList.contains('ao-item-remove-btn')) return
+    const list = document.getElementById('ao-items-list')
+    if (list.querySelectorAll('.ao-item-row').length <= 1) return
+    e.target.closest('.ao-item-row')?.remove()
+  })
+
+  document.getElementById('future-orders-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-id]')
+    if (!btn) return
+    const aoId = btn.dataset.id
+
+    if (btn.classList.contains('ao-edit-btn')) {
+      const ao = _aoOrders.find((o) => o.id === aoId)
+      if (ao) openAoPanel(ao)
+      return
+    }
+
+    if (btn.classList.contains('ao-print-btn')) {
+      btn.disabled = true
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}/advance-orders/${aoId}/print`, { method: 'POST' })
+        if (!res.ok) throw new Error('Print failed')
+        showToast('Ticket sent to printer', 'success')
+      } catch (err) {
+        showToast(err.message || 'Print failed', 'error')
+      } finally { btn.disabled = false }
+      return
+    }
+
+    if (btn.classList.contains('ao-ready-btn') || btn.classList.contains('ao-pending-btn')) {
+      const status = btn.classList.contains('ao-ready-btn') ? 'ready' : 'pending'
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}/advance-orders/${aoId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        })
+        if (!res.ok) throw new Error('Update failed')
+        await loadAdvanceOrders()
+      } catch (err) { showToast(err.message || 'Update failed', 'error') }
+      return
+    }
+
+    if (btn.classList.contains('ao-cancel-btn')) {
+      if (!confirm('Cancel this advance order?')) return
+      try {
+        const res = await api(`/api/merchants/${state.merchantId}/advance-orders/${aoId}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Cancel failed')
+        await loadAdvanceOrders()
+      } catch (err) { showToast(err.message || 'Cancel failed', 'error') }
+      return
+    }
+  })
+
+  // Reminder modal
+  document.getElementById('ao-reminder-dismiss-btn').addEventListener('click', hideAdvanceOrderReminder)
+  document.getElementById('ao-reminder-close-btn').addEventListener('click', hideAdvanceOrderReminder)
+  document.getElementById('ao-reminder-modal-backdrop').addEventListener('click', hideAdvanceOrderReminder)
+  document.getElementById('ao-reminder-print-btn').addEventListener('click', async () => {
+    if (!_aoReminderCurrentId) return
+    const btn = document.getElementById('ao-reminder-print-btn')
+    btn.disabled = true
+    try {
+      const res = await api(`/api/merchants/${state.merchantId}/advance-orders/${_aoReminderCurrentId}/print`, { method: 'POST' })
+      if (!res.ok) throw new Error('Print failed')
+      showToast('Ticket sent to printer', 'success')
+      hideAdvanceOrderReminder()
+    } catch (err) {
+      showToast(err.message || 'Print failed', 'error')
+    } finally { btn.disabled = false }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Auto-Sync — keeps two tablets in sync without a full page reload
+// ---------------------------------------------------------------------------
+
+/** Timestamp of the last observed user interaction (ms). */
+let _lastUserActivityAt = 0
+
+/**
+ * How long the user must be idle before a background sync is allowed.
+ * 8 s covers a brief pause between taps while still catching up quickly.
+ */
+const SYNC_IDLE_MS = 8_000
+
+/** Returns true when the user has an edit panel open. */
+function _isUserEditing() {
+  return !!(
+    state.editingItem ||
+    state.editingGroup ||
+    !document.getElementById('item-panel')?.hidden ||
+    !document.getElementById('modifier-panel')?.hidden ||
+    !document.getElementById('new-order-overlay')?.hidden
+  )
+}
+
+/** Returns true when the user has interacted recently (scroll, tap, type, click). */
+function _isUserActive() {
+  return Date.now() - _lastUserActivityAt < SYNC_IDLE_MS
+}
+
+/** Refresh data for whichever section is currently visible. */
+async function _syncTick() {
+  if (document.hidden) return
+  if (_isUserEditing()) return
+  if (_isUserActive()) return      // user is scrolling / tapping — don't disrupt
+
+  const s = state.activeSection
+  if (s === 'orders' || s === 'payments') {
+    await loadOrders()
+  } else if (s === 'menu' || s === 'modifiers' || s === 'order' || s === 'oos' || s === 'special-instructions') {
+    await loadMenu()
+  } else if (s === 'reservations') {
+    await Promise.all([loadReservations(), loadResUpcoming()])
+  }
+  // profile, employees, reports — changes are rare and non-critical for tablet sync
+}
+
+/**
+ * Adaptive sync interval:
+ *   orders / payments — 60 s  (SSE covers real-time; sync is a safety net)
+ *   menu / reservations / etc — 12 s  (no SSE; two tablets need fast catch-up)
+ * Both are subject to the idle guard — ticks that fire while the user is active
+ * are silently skipped and the timer reschedules normally.
+ */
+function _syncDelay() {
+  const s = state.activeSection
+  return (s === 'orders' || s === 'payments') ? 60_000 : 12_000
+}
+
+let _syncTimer = null
+
+function _scheduleSyncTick() {
+  _syncTimer = setTimeout(async () => {
+    await _syncTick()
+    _scheduleSyncTick()
+  }, _syncDelay())
+}
+
+/**
+ * Start the adaptive auto-sync and fire an immediate sync when the
+ * tablet screen wakes or the tab regains focus.
+ */
+function startAutoSync() {
+  // Track user activity to gate background syncs
+  const _markActive = () => { _lastUserActivityAt = Date.now() }
+  document.addEventListener('pointerdown', _markActive, { passive: true })
+  document.addEventListener('pointermove', _markActive, { passive: true })
+  document.addEventListener('keydown',     _markActive, { passive: true })
+  document.addEventListener('scroll',      _markActive, { passive: true, capture: true })
+  document.addEventListener('touchstart',  _markActive, { passive: true })
+
+  _scheduleSyncTick()
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Cancel the pending tick and run immediately (idle guard still applies);
+      // reschedule after.
+      clearTimeout(_syncTimer)
+      _syncTick().then(_scheduleSyncTick)
+    }
+  })
+}
+

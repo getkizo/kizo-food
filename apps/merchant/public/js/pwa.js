@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PWA runtime: service worker, push notifications, wake lock, network monitor.
  * Loaded as a separate script after dashboard.js.
  *

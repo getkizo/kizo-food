@@ -1,9 +1,10 @@
-/**
+﻿/**
  * OAuth authentication routes
  * Handles Google, Apple ID, and Facebook social login
  */
 
 import { Hono } from 'hono'
+import { createHash } from 'node:crypto'
 import { getDatabase } from '../db/connection'
 import { generateId } from '../utils/id'
 import { createAccessToken, createRefreshToken } from '../utils/jwt'
@@ -63,6 +64,23 @@ warnIfLocalhostRedirect('Apple',    APPLE_CLIENT_SECRET,   APPLE_REDIRECT_URI)
 warnIfLocalhostRedirect('Facebook', FACEBOOK_APP_SECRET,   FACEBOOK_REDIRECT_URI)
 
 /**
+ * Guard called at OAuth flow initiation time.
+ * Returns a 500 JSON response if the redirect URI still points to localhost in production,
+ * preventing a silent redirect to an unreachable endpoint (HV-02).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Hono context type varies by router; using any avoids coupling this helper to a specific Hono generic
+function localhostRedirectGuard(c: any, provider: string, uri: string): Response | null {
+  if (process.env.NODE_ENV === 'production' && uri.includes('localhost')) {
+    console.error(`[oauth] ${provider} OAuth initiation blocked: redirect URI points to localhost in production. Set ${provider.toUpperCase()}_REDIRECT_URI.`)
+    return c.json({
+      error: 'OAuth misconfiguration',
+      message: `${provider} redirect URI is set to localhost. Set the ${provider.toUpperCase()}_REDIRECT_URI environment variable to the production callback URL.`,
+    }, 500) as Response
+  }
+  return null
+}
+
+/**
  * Check if OAuth provider is configured
  * In mock mode, all providers are considered configured
  */
@@ -101,12 +119,17 @@ if (MOCK_OAUTH_ENABLED) {
 
 /**
  * GET /api/auth/oauth/google
- * Initiate Google OAuth flow
+ * Initiate Google OAuth flow.
+ *
+ * Accepts an optional `invite_token` query parameter for the manager invite flow.
+ * When present the token is validated against `manager_invites`, and the invite
+ * context (email + merchantId) is stored alongside the OAuth state so the callback
+ * can complete the invite acceptance after Google returns.
  */
 oauth.get('/api/auth/oauth/google', (c) => {
   // Skip to mock if enabled (mock routes will handle it)
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   if (!isProviderConfigured('google')) {
@@ -117,9 +140,34 @@ oauth.get('/api/auth/oauth/google', (c) => {
     }, 503)
   }
 
+  const googleGuardErr = localhostRedirectGuard(c, 'Google', GOOGLE_REDIRECT_URI)
+  if (googleGuardErr) return googleGuardErr
+
+  // Manager invite flow: validate invite_token if provided
+  let inviteContext: InviteContext | undefined
+  const rawInviteToken = c.req.query('invite_token')
+  if (rawInviteToken) {
+    const tokenHash = createHash('sha256').update(rawInviteToken).digest('hex')
+    const db = getDatabase()
+    const invite = db.query<{
+      token_hash: string; email: string; merchant_id: string
+    }, [string]>(
+      `SELECT token_hash, email, merchant_id
+         FROM manager_invites
+        WHERE token_hash = ? AND expires_at > datetime('now')`,
+    ).get(tokenHash)
+
+    if (!invite) {
+      return c.redirect('/manager-app/accept?error=expired_invite')
+    }
+    inviteContext = { tokenHash, email: invite.email, merchantId: invite.merchant_id }
+  }
+
   const scopes = ['openid', 'profile', 'email']
   const state = generateSecureState()
-  storeOAuthState(state)
+  const rawNext = c.req.query('next')
+  const next = rawNext && ALLOWED_NEXT_PATHS.includes(rawNext) ? rawNext : undefined
+  storeOAuthState(state, inviteContext, next)
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
   authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID)
@@ -148,7 +196,7 @@ oauth.get('/api/auth/oauth/google', (c) => {
  */
 oauth.get('/api/auth/oauth/google/callback', async (c) => {
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   const code = c.req.query('code')
@@ -159,8 +207,9 @@ oauth.get('/api/auth/oauth/google/callback', async (c) => {
     return c.redirect(`/setup?error=${encodeURIComponent(error || 'access_denied')}`)
   }
 
-  // M-01: Validate state to prevent CSRF on OAuth callback
-  if (!validateOAuthState(state)) {
+  // M-01: Validate state to prevent CSRF on OAuth callback (consume also retrieves invite context and next)
+  const { valid: stateValid, inviteContext, next } = consumeOAuthState(state)
+  if (!stateValid) {
     return c.redirect('/setup?error=invalid_state')
   }
 
@@ -184,7 +233,8 @@ oauth.get('/api/auth/oauth/google/callback', async (c) => {
       return c.redirect('/setup?error=token_exchange_failed')
     }
 
-    const googleTokens = await tokenResponse.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const googleTokens = await tokenResponse.json() as any
 
     // 2. Fetch user profile
     const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -195,9 +245,78 @@ oauth.get('/api/auth/oauth/google/callback', async (c) => {
       return c.redirect('/setup?error=userinfo_failed')
     }
 
-    const userInfo = await userInfoResponse.json()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const userInfo = await userInfoResponse.json() as any
 
-    // 3. Find or create user
+    // 3a. Manager invite path — create manager user and redirect to manager app
+    if (inviteContext) {
+      if (userInfo.email?.toLowerCase() !== inviteContext.email.toLowerCase()) {
+        return c.redirect(
+          `/manager-app/accept?error=email_mismatch&expected=${encodeURIComponent(inviteContext.email)}`,
+        )
+      }
+
+      const db = getDatabase()
+
+      // Verify invite is still valid (not consumed by a concurrent request)
+      const invite = db.query<{ id: string }, [string]>(
+        `SELECT id FROM manager_invites WHERE token_hash = ? AND expires_at > datetime('now')`,
+      ).get(inviteContext.tokenHash)
+      if (!invite) {
+        return c.redirect('/manager-app/accept?error=expired_invite')
+      }
+
+      // Find or create the manager user
+      let managerId: string
+      const existingUser = db.query<{ id: string; is_active: number }, [string]>(
+        `SELECT id, is_active FROM users WHERE email = ?`,
+      ).get(inviteContext.email.toLowerCase())
+
+      if (existingUser) {
+        // Re-activate and upgrade to manager role for this merchant
+        db.run(
+          `UPDATE users SET role = 'manager', merchant_id = ?, is_active = 1,
+                           updated_at = datetime('now')
+           WHERE id = ?`,
+          [inviteContext.merchantId, existingUser.id],
+        )
+        managerId = existingUser.id
+      } else {
+        managerId = generateId('u')
+        db.run(
+          `INSERT INTO users (id, merchant_id, email, full_name, role, is_active,
+                              oauth_provider, oauth_provider_id)
+           VALUES (?, ?, ?, ?, 'manager', 1, 'google', ?)`,
+          [managerId, inviteContext.merchantId, inviteContext.email.toLowerCase(),
+           userInfo.name ?? inviteContext.email, userInfo.id],
+        )
+      }
+
+      // Link / update OAuth account
+      createOAuthAccount(managerId, {
+        provider: 'google',
+        providerId: userInfo.id,
+        email: inviteContext.email.toLowerCase(),
+        profileData: { picture: userInfo.picture, locale: userInfo.locale },
+        accessToken: googleTokens.access_token,
+        refreshToken: googleTokens.refresh_token ?? null,
+        expiresIn: googleTokens.expires_in ?? 3600,
+      })
+
+      // I-1: Consume the invite row
+      db.run(`DELETE FROM manager_invites WHERE token_hash = ?`, [inviteContext.tokenHash])
+
+      // Issue session tokens and redirect to manager app
+      assertValidRole('manager')
+      const accessToken  = createAccessToken(managerId, inviteContext.merchantId, 'manager')
+      const refreshToken = createRefreshToken(managerId, inviteContext.merchantId, 'manager')
+      const sessionResult = { existingUser: !!existingUser, tokens: { accessToken, refreshToken },
+        user: { id: managerId, email: inviteContext.email, fullName: userInfo.name ?? '', merchantId: inviteContext.merchantId } }
+      const sessionToken = storeOAuthSession(sessionResult)
+      return c.redirect(`/manager-app/?session=${sessionToken}`)
+    }
+
+    // 3b. Standard path — find or create user
     const result = await findOrCreateOAuthUser({
       provider: 'google',
       providerId: userInfo.id,
@@ -212,7 +331,10 @@ oauth.get('/api/auth/oauth/google/callback', async (c) => {
     // 4. Store result in short-lived session row, redirect with opaque token
     const sessionToken = storeOAuthSession(result)
 
-    if (result.existingUser) {
+    if (next) {
+      // Non-dashboard flow (e.g. manager app) — redirect back to the requesting page
+      return c.redirect(`${next}?session=${sessionToken}`)
+    } else if (result.existingUser) {
       return c.redirect(`/setup?session=${sessionToken}`)
     } else {
       return c.redirect(`/setup?session=${sessionToken}&onboard=1`)
@@ -230,7 +352,9 @@ oauth.get('/api/auth/oauth/google/callback', async (c) => {
  */
 oauth.post('/api/auth/oauth/session', async (c) => {
   try {
-    const { token } = await c.req.json()
+    let body: { token?: string }
+    try { body = await c.req.json() } catch { return c.json({ error: 'Invalid request body' }, 400) }
+    const { token } = body
     if (!token) return c.json({ error: 'Missing token' }, 400)
 
     const result = redeemOAuthSession(token)
@@ -248,7 +372,7 @@ oauth.post('/api/auth/oauth/session', async (c) => {
  */
 oauth.get('/api/auth/oauth/apple', (c) => {
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   if (!isProviderConfigured('apple')) {
@@ -258,6 +382,9 @@ oauth.get('/api/auth/oauth/apple', (c) => {
       docs: '/docs/OAUTH-SETUP.md#apple-oauth-setup',
     }, 503)
   }
+
+  const appleGuardErr = localhostRedirectGuard(c, 'Apple', APPLE_REDIRECT_URI)
+  if (appleGuardErr) return appleGuardErr
 
   const scopes = ['name', 'email']
   const state = generateSecureState()
@@ -280,7 +407,7 @@ oauth.get('/api/auth/oauth/apple', (c) => {
  */
 oauth.post('/api/auth/oauth/apple/callback', async (c) => {
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   try {
@@ -312,7 +439,7 @@ oauth.post('/api/auth/oauth/apple/callback', async (c) => {
       throw new Error('Failed to exchange code for tokens')
     }
 
-    const tokens = await tokenResponse.json()
+    const tokens = await tokenResponse.json() as Record<string, any>
 
     // Decode ID token to get user info
     const idToken = tokens.id_token
@@ -349,7 +476,7 @@ oauth.post('/api/auth/oauth/apple/callback', async (c) => {
  */
 oauth.get('/api/auth/oauth/facebook', (c) => {
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   if (!isProviderConfigured('facebook')) {
@@ -359,6 +486,9 @@ oauth.get('/api/auth/oauth/facebook', (c) => {
       docs: '/docs/OAUTH-SETUP.md#facebook-oauth-setup',
     }, 503)
   }
+
+  const facebookGuardErr = localhostRedirectGuard(c, 'Facebook', FACEBOOK_REDIRECT_URI)
+  if (facebookGuardErr) return facebookGuardErr
 
   const scopes = ['email', 'public_profile']
   const state = generateSecureState()
@@ -379,7 +509,7 @@ oauth.get('/api/auth/oauth/facebook', (c) => {
  */
 oauth.post('/api/auth/oauth/facebook/callback', async (c) => {
   if (MOCK_OAUTH_ENABLED) {
-    return c.next()
+    return (c as any).next()
   }
 
   try {
@@ -407,7 +537,7 @@ oauth.post('/api/auth/oauth/facebook/callback', async (c) => {
       throw new Error('Failed to exchange code for token')
     }
 
-    const tokens = await tokenResponse.json()
+    const tokens = await tokenResponse.json() as Record<string, any>
 
     // Get user info
     const userInfoUrl = new URL('https://graph.facebook.com/me')
@@ -420,7 +550,7 @@ oauth.post('/api/auth/oauth/facebook/callback', async (c) => {
       throw new Error('Failed to fetch user info')
     }
 
-    const userInfo = await userInfoResponse.json()
+    const userInfo = await userInfoResponse.json() as Record<string, any>
 
     // Find or create user
     const result = await findOrCreateOAuthUser({
@@ -444,65 +574,107 @@ oauth.post('/api/auth/oauth/facebook/callback', async (c) => {
 
 // ---------------------------------------------------------------------------
 // OAuth state store — M-01 CSRF protection
-// Short-lived (5 min), single-use. Maps state → true.
+// Short-lived (5 min), single-use. Maps state → { expiresAt, inviteContext? }.
+// The optional inviteContext carries pending manager invite data across the
+// OAuth redirect so the callback can complete the invite flow.
 // ---------------------------------------------------------------------------
 
-const oauthStateStore = new Map<string, number>() // state → expiresAt
-const STATE_TTL_MS = 5 * 60_000 // 5 minutes
+interface InviteContext {
+  tokenHash: string
+  email: string
+  merchantId: string
+}
 
-function storeOAuthState(state: string): void {
-  oauthStateStore.set(state, Date.now() + STATE_TTL_MS)
-  // Prune expired entries
-  for (const [k, exp] of oauthStateStore) {
-    if (exp < Date.now()) oauthStateStore.delete(k)
-  }
+interface OAuthStateEntry {
+  inviteContext?: InviteContext
+  next?: string
+}
+
+/** Allowed post-OAuth return paths (open-redirect guard). */
+const ALLOWED_NEXT_PATHS = ['/manager-app/', '/manager-app']
+
+/** Ensure both OAuth tables exist — called inline so they survive before any migration runs. */
+function ensureOAuthTables(db: ReturnType<typeof getDatabase>): void {
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS oauth_states (
+       key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at TEXT NOT NULL
+     );
+     CREATE TABLE IF NOT EXISTS oauth_sessions (
+       key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at TEXT NOT NULL
+     );`,
+  )
+}
+
+function storeOAuthState(state: string, inviteContext?: InviteContext, next?: string): void {
+  const db = getDatabase()
+  ensureOAuthTables(db)
+  const value = JSON.stringify({ inviteContext, next })
+  // expires_at set via SQLite datetime so format matches datetime('now') comparisons
+  db.run(
+    `INSERT OR REPLACE INTO oauth_states (key, value, expires_at)
+     VALUES (?, ?, datetime('now', '+300 seconds'))`,
+    [state, value],
+  )
+  db.run(`DELETE FROM oauth_states WHERE expires_at <= datetime('now')`)
 }
 
 function validateOAuthState(state: string | undefined): boolean {
   if (!state) return false
-  const exp = oauthStateStore.get(state)
-  if (!exp || exp < Date.now()) return false
-  oauthStateStore.delete(state) // single-use
+  const db = getDatabase()
+  ensureOAuthTables(db)
+  const row = db.query<{ key: string }, [string]>(
+    `SELECT key FROM oauth_states WHERE key = ? AND expires_at > datetime('now')`,
+  ).get(state)
+  if (!row) return false
+  db.run(`DELETE FROM oauth_states WHERE key = ?`, [state])
   return true
 }
 
+/** Consume (validate + delete) a state and return its invite context and next path, if any. */
+function consumeOAuthState(state: string | undefined): { valid: boolean; inviteContext?: InviteContext; next?: string } {
+  if (!state) return { valid: false }
+  const db = getDatabase()
+  ensureOAuthTables(db)
+  const row = db.query<{ value: string }, [string]>(
+    `SELECT value FROM oauth_states WHERE key = ? AND expires_at > datetime('now')`,
+  ).get(state)
+  if (!row) return { valid: false }
+  db.run(`DELETE FROM oauth_states WHERE key = ?`, [state])
+  const entry: OAuthStateEntry = JSON.parse(row.value)
+  return { valid: true, inviteContext: entry.inviteContext, next: entry.next }
+}
+
 // ---------------------------------------------------------------------------
-// OAuth session store — short-lived in-memory (single process, single node)
-// Stores result of findOrCreateOAuthUser for 60s; redeemed once by the browser.
+// OAuth session store — SQLite-backed so tokens survive server restarts.
+// Stores result of findOrCreateOAuthUser for 60 s; redeemed once by the browser.
 // ---------------------------------------------------------------------------
 
 type OAuthSessionResult = Awaited<ReturnType<typeof findOrCreateOAuthUser>>
 
-interface OAuthSessionEntry {
-  result: OAuthSessionResult
-  expiresAt: number
-}
-
-const oauthSessionStore = new Map<string, OAuthSessionEntry>()
-
 function storeOAuthSession(result: OAuthSessionResult): string {
-  // Generate 32-byte opaque token
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   const token = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-
-  oauthSessionStore.set(token, {
-    result,
-    expiresAt: Date.now() + 60_000,  // 60 seconds
-  })
-
-  // Prune stale entries (keep the Map from growing unbounded on a busy server)
-  for (const [k, v] of oauthSessionStore) {
-    if (v.expiresAt < Date.now()) oauthSessionStore.delete(k)
-  }
-
+  const db = getDatabase()
+  ensureOAuthTables(db)
+  db.run(
+    `INSERT OR REPLACE INTO oauth_sessions (key, value, expires_at)
+     VALUES (?, ?, datetime('now', '+60 seconds'))`,
+    [token, JSON.stringify(result)],
+  )
+  db.run(`DELETE FROM oauth_sessions WHERE expires_at <= datetime('now')`)
   return token
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function redeemOAuthSession(token: string): any | null {
-  const entry = oauthSessionStore.get(token)
-  if (!entry || entry.expiresAt < Date.now()) return null
-  oauthSessionStore.delete(token)  // single-use
-  return entry.result
+  const db = getDatabase()
+  ensureOAuthTables(db)
+  const row = db.query<{ value: string }, [string]>(
+    `SELECT value FROM oauth_sessions WHERE key = ? AND expires_at > datetime('now')`,
+  ).get(token)
+  if (!row) return null
+  db.run(`DELETE FROM oauth_sessions WHERE key = ?`, [token])
+  return JSON.parse(row.value)
 }
 
 /**

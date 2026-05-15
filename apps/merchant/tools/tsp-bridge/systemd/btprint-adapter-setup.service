@@ -1,0 +1,13 @@
+﻿[Unit]
+Description=Configure bluetooth adapter for btprint
+After=bluetooth.service
+Requires=bluetooth.service
+Before=btprint-listener.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/btprint/bin/setup-adapter.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

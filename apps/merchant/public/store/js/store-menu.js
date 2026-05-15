@@ -1,4 +1,4 @@
-/**
+﻿/**
  * store-menu.js — Menu rendering + category hours filtering
  *
  * Exposes: window.StoreMenu = { render }
@@ -146,10 +146,47 @@
    * @param {object} profile  merchant profile from /api/store/profile
    * @returns {{ isOpen: boolean, nextOpenLabel: string|null }}
    */
+  /**
+   * Returns true if the given YYYY-MM-DD date string falls within any scheduled closure.
+   * @param {string} isoDate  e.g. '2026-04-05'
+   * @param {Array}  closures array of { startDate, endDate } from profile.scheduledClosures
+   */
+  function isDateClosed(isoDate, closures) {
+    if (!closures?.length) return false
+    return closures.some((c) => isoDate >= c.startDate && isoDate <= c.endDate)
+  }
+
   function getStoreOpenStatus(profile) {
     if (!profile?.businessHours?.length) return { isOpen: true, nextOpenLabel: null }
 
     const now = getMerchantNow(profile.timezone)
+
+    // Build today's YYYY-MM-DD in the merchant's timezone
+    const todayLocal = new Date().toLocaleDateString('sv', { timeZone: profile.timezone || 'UTC' })
+
+    // Check scheduled closure for today
+    if (isDateClosed(todayLocal, profile.scheduledClosures)) {
+      // Find next non-closed opening day
+      const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+      for (let daysAhead = 1; daysAhead <= 14; daysAhead++) {
+        const targetDate = new Date()
+        targetDate.setDate(targetDate.getDate() + daysAhead)
+        const targetIso = targetDate.toLocaleDateString('sv', { timeZone: profile.timezone || 'UTC' })
+        if (isDateClosed(targetIso, profile.scheduledClosures)) continue
+        const targetDay = targetDate.getDay()
+        const daySlots  = profile.businessHours
+          .filter((h) => h.dayOfWeek === targetDay && !h.isClosed)
+          .sort((a, b) => a.openTime.localeCompare(b.openTime))
+        if (!daySlots.length) continue
+        const [oh, om] = daySlots[0].openTime.split(':').map(Number)
+        const d = new Date()
+        d.setHours(oh, om, 0, 0)
+        const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+        const label = daysAhead === 1 ? `tomorrow at ${timeStr}` : `${DAY_NAMES[targetDay]} at ${timeStr}`
+        return { isOpen: false, nextOpenLabel: label }
+      }
+      return { isOpen: false, nextOpenLabel: null }
+    }
 
     // Check whether we fall inside any open slot today
     const todaySlots = profile.businessHours.filter((h) => h.dayOfWeek === now.day && !h.isClosed)
@@ -164,6 +201,11 @@
     // Find next future opening — scan up to 7 days ahead (including later today)
     const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     for (let daysAhead = 0; daysAhead <= 7; daysAhead++) {
+      const targetDate = new Date()
+      targetDate.setDate(targetDate.getDate() + daysAhead)
+      const targetIso = targetDate.toLocaleDateString('sv', { timeZone: profile.timezone || 'UTC' })
+      if (daysAhead > 0 && isDateClosed(targetIso, profile.scheduledClosures)) continue
+
       const targetDay = (now.day + daysAhead) % 7
       const daySlots  = profile.businessHours
         .filter((h) => h.dayOfWeek === targetDay && !h.isClosed)
@@ -288,12 +330,21 @@
     }
     if (emptyMsg) emptyMsg.hidden = true
 
-    // Category pills
+    // Category pills — no inline onclick (CSP disallows inline handlers)
     nav.innerHTML = visible.map((cat) => `
-      <button class="category-pill" data-cat="${cat.id}" onclick="StoreMenu.scrollToCategory('${cat.id}')">
+      <button class="category-pill" data-cat="${cat.id}">
         ${escHtml(cat.name)}
       </button>
     `).join('')
+
+    // Wire via event delegation (registered once per render, idempotent guard below)
+    if (!nav._pillsWired) {
+      nav._pillsWired = true
+      nav.addEventListener('click', (e) => {
+        const pill = e.target.closest('.category-pill')
+        if (pill?.dataset.cat) scrollToCategory(pill.dataset.cat)
+      })
+    }
 
     // Menu sections
     const sections = visible.map((cat) => `
@@ -313,12 +364,13 @@
       const activate = () => {
         const itemId = card.dataset.itemId
         let found = null
+        let foundCat = null
         for (const cat of menu) {
           if (cat.id === '__popular__') continue
-          found = cat.items.find((i) => i.id === itemId)
-          if (found) break
+          const match = cat.items.find((i) => i.id === itemId)
+          if (match) { found = match; foundCat = cat; break }
         }
-        if (found) onItemClick(found)
+        if (found) onItemClick({ ...found, categoryName: foundCat.name })
       }
       card.addEventListener('click', activate)
       card.addEventListener('keydown', (e) => {
@@ -345,6 +397,43 @@
     urls.forEach((url) => fetch(url).catch(() => {}))
   }
 
+  const _VESSEL_SVG = {
+    glass: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h8l-2.5 8a3.5 3.5 0 01-3 0L8 3z"/><line x1="12" y1="14" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>`,
+    bottle: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3h4v2.5l2.5 4V19a1 1 0 01-1 1H8.5a1 1 0 01-1-1V9.5L10 5.5V3z"/></svg>`,
+    carafe: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3h4v2l1 2c1 2 2 3 2 5v8a1 1 0 01-1 1H7a1 1 0 01-1-1v-8c0-2 1-3 2-5l1-2V3z"/><path d="M15 7h2a1 1 0 011 1v1"/></svg>`,
+  }
+
+  function _getDrinkMeta(name) {
+    const n = name.toLowerCase()
+    let vessel = null
+    if (n.includes('carafe'))       vessel = 'carafe'
+    else if (n.includes('bottle'))  vessel = 'bottle'
+    else if (n.includes('glass'))   vessel = 'glass'
+
+    let brand = null
+    if (n.includes('space dust'))   brand = 'space-dust'
+    else if (n.includes('singha'))  brand = 'singha'
+    else if (n.includes('sapporo')) brand = 'sapporo'
+    else if (n.includes('heineken'))brand = 'heineken'
+
+    return { vessel, brand }
+  }
+
+  const _VESSEL_LABEL = { glass: 'Glass', bottle: 'Bottle', carafe: 'Carafe' }
+  const _BRAND_LABEL  = { singha: 'Singha', sapporo: 'Sapporo', heineken: 'Heineken', 'space-dust': 'Space Dust' }
+
+  function _drinkMetaBadges(item) {
+    const { vessel, brand } = _getDrinkMeta(item.name)
+    if (!vessel && !brand) return ''
+    const vesselHtml = vessel
+      ? `<span class="vessel-badge" aria-label="${_VESSEL_LABEL[vessel]}">${_VESSEL_SVG[vessel]}${_VESSEL_LABEL[vessel]}</span>`
+      : ''
+    const brandHtml = brand
+      ? `<span class="brand-badge ${brand}" aria-label="${_BRAND_LABEL[brand]}">${_BRAND_LABEL[brand]}</span>`
+      : ''
+    return `<div class="drink-meta">${vesselHtml}${brandHtml}</div>`
+  }
+
   function renderItemCard(item) {
     const likedRank = _topDishesMap.get(item.name.toLowerCase())
     const mostLikedBadge = likedRank
@@ -367,6 +456,7 @@
         ${photo}
         <div class="item-card-body">
           <p class="item-name">${escHtml(item.name)}</p>
+          ${_drinkMetaBadges(item)}
           <p class="item-price">${formatCents(item.priceCents)}</p>
           ${item.description ? `<p class="item-desc">${escHtml(item.description)}</p>` : ''}
           ${tags ? `<div class="dietary-tags">${tags}</div>` : ''}
@@ -417,7 +507,13 @@
 
   function scrollToCategory(catId) {
     const el = document.getElementById(`cat-${catId}`)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (!el) return
+    // Measure the actual bottom of the sticky category nav so the section heading
+    // appears just below it, accounting for the active-order bar height dynamically.
+    const navEl = document.getElementById('category-nav')
+    const navBottom = navEl ? navEl.getBoundingClientRect().bottom : 0
+    const elTop = el.getBoundingClientRect().top
+    window.scrollBy({ top: elTop - navBottom, behavior: 'smooth' })
   }
 
   // ---------------------------------------------------------------------------

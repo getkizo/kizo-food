@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Voice Commands — Web Speech API
  *
  * Allows staff to mark menu items in/out of stock with their voice.
@@ -237,6 +237,26 @@
       const action = parseStockAction(transcript)
       if (!action) continue
 
+      // ── Ingredient shortcuts take priority over individual item names ──────
+      const ingrs = window._voiceOosIngredients || []
+      if (ingrs.length > 0) {
+        const t = normStr(transcript)
+        const matchedIngr = ingrs
+          .filter((ing) => t.includes(normStr(ing.name)))
+          .sort((a, b) => b.name.length - a.name.length)
+        if (matchedIngr.length > 0) {
+          const ing = matchedIngr[0]
+          const targetOut = action !== 'in_stock'
+          if (ing.isOut === targetOut) {
+            showFeedback(`"${ing.name}" already ${targetOut ? '86\'d' : 'available'}`, 'info')
+          } else {
+            showFeedback(`"${ing.name}" → ${targetOut ? '86\'d' : 'Available'}`, 'success')
+            await _toggleIngredientVoice(ing.id)
+          }
+          return
+        }
+      }
+
       const matched = matchItems(transcript)
       if (matched.length === 0) continue
 
@@ -260,6 +280,29 @@
 
     // No transcript matched
     showFeedback(`Not understood: "${transcripts[0]}"`, 'warn')
+  }
+
+  /** Toggle an ingredient shortcut via the OOS API and notify dashboard.js */
+  async function _toggleIngredientVoice(ingId) {
+    const token = window.authToken
+    const merchantId = window.merchantId
+    if (!token || !merchantId) return
+
+    const res = await fetch(`/api/merchants/${merchantId}/oos/ingredients/${ingId}/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    })
+    if (res.ok) {
+      const data = await res.json()
+      // Update local cache
+      const ingrs = window._voiceOosIngredients || []
+      const ing = ingrs.find((i) => i.id === ingId)
+      if (ing) ing.isOut = data.isOut
+      // Notify dashboard.js OOS section if it is active
+      window.dispatchEvent(new CustomEvent('oos:ingredientToggled', { detail: { ingId, isOut: data.isOut } }))
+    } else {
+      showFeedback('Failed to toggle ingredient', 'error')
+    }
   }
 
   async function updateOrderReady(pickupCode) {

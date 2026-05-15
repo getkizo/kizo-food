@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Auto-reset "Out Today" service
  *
  * Menu items and modifiers marked as `out_today` are reset to `in_stock`

@@ -1,5 +1,5 @@
-/**
- * Kizo Register — Service Worker
+﻿/**
+ * Kizo Merchant — Service Worker
  *
  * Responsibilities:
  *   1. Cache app shell for resilience on spotty connections
@@ -164,7 +164,7 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data.json()
   } catch {
-    data = { title: 'Kizo Register', body: event.data.text() }
+    data = { title: 'Kizo Merchant', body: event.data.text() }
   }
 
   const options = {

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * system-monitor.ts — Background OS & process sampler + error ring buffer.
  *
  * Starts automatically when this module is first imported.

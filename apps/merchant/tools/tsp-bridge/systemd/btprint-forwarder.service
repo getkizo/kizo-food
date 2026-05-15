@@ -1,0 +1,16 @@
+﻿[Unit]
+Description=btprint network forwarder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=btprint
+Environment=BTPRINT_PRINTER_HOST=192.168.1.100
+Environment=BTPRINT_PRINTER_PORT=9100
+ExecStart=/opt/btprint/venv/bin/python /opt/btprint/src/net_forwarder.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

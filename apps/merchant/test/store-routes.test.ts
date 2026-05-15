@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Store route negative tests
  *
  * Covers high-value edge cases and security guards:
@@ -10,12 +10,15 @@
  *   TC-N18 — Item creation with categoryId from another merchant returns 404
  */
 
-import { test, expect, beforeAll, describe } from 'bun:test'
+import { test, expect, beforeAll, afterEach, describe } from 'bun:test'
 import { app } from '../src/server'
 import { getDatabase, closeDatabase } from '../src/db/connection'
 import { migrate } from '../src/db/migrate'
 import { initializeMasterKey } from '../src/crypto/master-key'
 import { invalidateApplianceMerchantCache } from '../src/routes/store'
+import { storeAPIKey } from '../src/crypto/api-keys'
+import { setAnthropicFactory, parseInstruction } from '../src/services/instruction-parser'
+import { generateId } from '../src/utils/id'
 
 // Shared state populated in beforeAll
 let ownerToken  = ''
@@ -402,5 +405,245 @@ describe('Store Orders - scheduled pickup', () => {
       .query<{ pickup_time: string | null }, [string]>('SELECT pickup_time FROM orders WHERE id = ?')
       .get(orderId)
     expect(row?.pickup_time).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A-2 — pending_payment should be reported as cancellable in GET /status
+// ---------------------------------------------------------------------------
+
+describe('Store Orders - cancellable flag for pending_payment (A-2)', () => {
+  /**
+   * Helper: place an order (arrives as 'received' in no-payment-provider test env),
+   * then backdoor the status + pickup_time so we can test the exact path.
+   */
+  async function placeAndPatch(opts: { minutesUntilPickup: number }): Promise<string> {
+    const orderRes = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ customerName: 'Pending Payer', items: [{ itemId: testItemId }] }),
+    }))
+    expect(orderRes.status).toBe(201)
+    const { orderId } = await orderRes.json()
+
+    const db = getDatabase()
+    const pickupTime = new Date(Date.now() + opts.minutesUntilPickup * 60_000).toISOString()
+    db.run(
+      `UPDATE orders SET status = 'pending_payment', pickup_time = ? WHERE id = ?`,
+      [pickupTime, orderId],
+    )
+    return orderId
+  }
+
+  test('pending_payment with pickup 2 h away: cancellable=true, cancelDeadline set', async () => {
+    // prep_time default = 20 min; 2 h away → deadline is 100 min from now → still cancellable
+    const orderId = await placeAndPatch({ minutesUntilPickup: 120 })
+
+    const res  = await app.fetch(new Request(`http://localhost:3000/api/store/orders/${orderId}/status`))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { cancellable: boolean; cancelDeadline: string | null }
+
+    expect(body.cancellable).toBe(true)
+    expect(body.cancelDeadline).not.toBeNull()
+  })
+
+  test('pending_payment past prep deadline: cancellable=false, cancelDeadline still returned', async () => {
+    // pickup in 10 min; prep_time = 20 min → deadline was -10 min ago → not cancellable
+    const orderId = await placeAndPatch({ minutesUntilPickup: 10 })
+
+    const res  = await app.fetch(new Request(`http://localhost:3000/api/store/orders/${orderId}/status`))
+    expect(res.status).toBe(200)
+    const body = await res.json() as { cancellable: boolean; cancelDeadline: string | null }
+
+    expect(body.cancellable).toBe(false)
+    expect(body.cancelDeadline).not.toBeNull()   // deadline IS computed, it's just in the past
+  })
+
+  test('pending_payment order within window can be cancelled via POST /cancel', async () => {
+    const orderId = await placeAndPatch({ minutesUntilPickup: 120 })
+
+    const cancelRes = await app.fetch(
+      new Request(`http://localhost:3000/api/store/orders/${orderId}/cancel`, { method: 'POST' })
+    )
+    expect(cancelRes.status).toBe(200)
+
+    const db  = getDatabase()
+    const row = db
+      .query<{ status: string }, [string]>('SELECT status FROM orders WHERE id = ?')
+      .get(orderId)
+    expect(row?.status).toBe('cancelled')
+  })
+})
+
+// Reset Anthropic mock after tests that set it
+afterEach(() => {
+  setAnthropicFactory(null)
+})
+
+// ---------------------------------------------------------------------------
+// Online orders paused
+// ---------------------------------------------------------------------------
+
+describe('Store Orders - online_orders_paused_until', () => {
+  test('503 when online_orders_paused_until is in the future', async () => {
+    const db = getDatabase()
+    const future = new Date(Date.now() + 2 * 3_600_000).toISOString()
+    db.run(`UPDATE merchants SET online_orders_paused_until = ? WHERE id = ?`, [future, merchantId])
+    invalidateApplianceMerchantCache()
+
+    try {
+      const res = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ customerName: 'Paused Customer', items: [{ itemId: testItemId }] }),
+      }))
+      expect(res.status).toBe(503)
+      const body = await res.json()
+      expect(body.error).toContain('paused')
+    } finally {
+      db.run(`UPDATE merchants SET online_orders_paused_until = NULL WHERE id = ?`, [merchantId])
+      invalidateApplianceMerchantCache()
+    }
+  })
+
+  test('order succeeds when online_orders_paused_until is in the past', async () => {
+    const db = getDatabase()
+    const past = new Date(Date.now() - 3_600_000).toISOString()
+    db.run(`UPDATE merchants SET online_orders_paused_until = ? WHERE id = ?`, [past, merchantId])
+    invalidateApplianceMerchantCache()
+
+    try {
+      const res = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ customerName: 'Past Pause Customer', items: [{ itemId: testItemId }] }),
+      }))
+      expect(res.status).toBe(201)
+    } finally {
+      db.run(`UPDATE merchants SET online_orders_paused_until = NULL WHERE id = ?`, [merchantId])
+      invalidateApplianceMerchantCache()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Instruction token
+// ---------------------------------------------------------------------------
+
+describe('Store Orders - instruction token', () => {
+  let shrimpIngredientId = ''
+
+  beforeAll(async () => {
+    await storeAPIKey(merchantId, 'ai', 'anthropic', 'sk-ant-test-key')
+
+    const db = getDatabase()
+    shrimpIngredientId = generateId('ingr')
+    db.run(
+      `INSERT OR IGNORE INTO extra_ingredients (id, merchant_id, name, display_name, category, price_cents, is_available)
+       VALUES (?, ?, 'shrimp-token-test', 'Shrimp', 'protein', 600, 1)`,
+      [shrimpIngredientId, merchantId],
+    )
+  })
+
+  test('unknown instruction token → 400 instruction_token_expired', async () => {
+    const res = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerName: 'Token Customer',
+        items: [{ itemId: testItemId, instructionToken: 'totally_fake_token_abc123' }],
+      }),
+    }))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toBe('instruction_token_expired')
+  })
+
+  test('valid instruction token → surchargeCents added to order total', async () => {
+    setAnthropicFactory((_key: string) => ({
+      messages: {
+        create: async () => ({
+          content: [{ type: 'text', text: JSON.stringify({
+            type: 'add',
+            operations: [{ op: 'add', ingredient: 'shrimp-token-test' }],
+          }) }],
+        }),
+      },
+    }) as never)
+
+    const tokenResult = await parseInstruction(merchantId, 'add shrimp', testItemId)
+    expect(tokenResult.outcome).toBe('surcharge')
+    expect(tokenResult.surchargeCents).toBe(600)
+    expect(tokenResult.token).not.toBeNull()
+
+    const db = getDatabase()
+    const item = db.query<{ price_cents: number }, [string]>(
+      'SELECT price_cents FROM menu_items WHERE id = ?',
+    ).get(testItemId)!
+    const merchant = db.query<{ tax_rate: number }, []>('SELECT tax_rate FROM merchants LIMIT 1').get()!
+    const expectedSubtotal = item.price_cents + 600
+    const expectedTax      = Math.round(expectedSubtotal * merchant.tax_rate)
+    const expectedTotal    = expectedSubtotal + expectedTax
+
+    const res = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerName: 'Surcharge Customer',
+        items: [{ itemId: testItemId, instructionToken: tokenResult.token }],
+      }),
+    }))
+    expect(res.status).toBe(201)
+    const { orderId } = await res.json()
+
+    const row = db.query<{
+      total_cents: number
+      special_instruction_surcharge_cents: number
+    }, [string]>(
+      'SELECT total_cents, special_instruction_surcharge_cents FROM orders WHERE id = ?',
+    ).get(orderId)!
+    expect(row.special_instruction_surcharge_cents).toBe(600)
+    expect(row.total_cents).toBe(expectedTotal)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Happy path totals
+// ---------------------------------------------------------------------------
+
+describe('Store Orders - subtotal + tax + tip totals', () => {
+  test('subtotal, tax, and tip are computed correctly', async () => {
+    const db       = getDatabase()
+    const merchant = db.query<{ tax_rate: number }, []>('SELECT tax_rate FROM merchants LIMIT 1').get()!
+    const item     = db.query<{ price_cents: number }, [string]>(
+      'SELECT price_cents FROM menu_items WHERE id = ?',
+    ).get(testItemId)!
+    const tipCents      = 200
+    const subtotal      = item.price_cents
+    const expectedTax   = Math.round(subtotal * merchant.tax_rate)
+    const expectedTotal = subtotal + expectedTax + tipCents
+
+    const res = await app.fetch(new Request('http://localhost:3000/api/store/orders', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        customerName: 'Total Test Customer',
+        items:        [{ itemId: testItemId }],
+        tipCents,
+      }),
+    }))
+    expect(res.status).toBe(201)
+    const { orderId } = await res.json()
+
+    const row = db.query<{
+      subtotal_cents: number
+      tax_cents: number
+      total_cents: number
+    }, [string]>(
+      'SELECT subtotal_cents, tax_cents, total_cents FROM orders WHERE id = ?',
+    ).get(orderId)!
+    expect(row.subtotal_cents).toBe(subtotal)
+    expect(row.tax_cents).toBe(expectedTax)
+    expect(row.total_cents).toBe(expectedTotal)
   })
 })

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dashboard refund route tests
  *
  * Tests POST /api/merchants/:id/orders/:orderId/refunds and
@@ -323,6 +323,24 @@ describe('POST /api/merchants/:id/orders/:orderId/refunds — validation', () =>
       }
     ))
     expect(res.status).toBe(401)
+  })
+})
+
+// ── POST refunds — cash order with finix_refund_mode=api ─────────────────────
+
+describe('POST /api/merchants/:id/orders/:orderId/refunds — cash + api mode', () => {
+  test('cash order is never processor-refunded even when finix_refund_mode=api', async () => {
+    const db = getDatabase()
+    db.run(`UPDATE merchants SET finix_refund_mode = 'api' WHERE id = ?`, [merchantId])
+
+    const orderId = insertOrder({ paymentMethod: 'cash', paidAmountCents: 900 })
+    const res = await postRefund(orderId, { type: 'full' })
+    expect(res.status).toBe(201)
+    const body = await res.json() as { refund: Record<string, unknown> }
+    // Cash orders never trigger processor API regardless of finix_refund_mode
+    expect(body.refund.processorRefunded).toBe(false)
+
+    db.run(`UPDATE merchants SET finix_refund_mode = 'local' WHERE id = ?`, [merchantId])
   })
 })
 

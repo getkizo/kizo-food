@@ -1,0 +1,13 @@
+﻿[Unit]
+Description=btprint pairing agent
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/opt/btprint/venv/bin/python /opt/btprint/src/pairing_agent.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

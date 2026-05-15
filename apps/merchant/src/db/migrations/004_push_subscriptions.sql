@@ -1,4 +1,4 @@
--- Migration 004: Push notification subscriptions
+﻿-- Migration 004: Push notification subscriptions
 -- Stores Web Push subscriptions per device (one row per tablet/browser)
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (

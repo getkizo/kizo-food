@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ID generation utilities
  * Generates unique IDs with prefixes for different entity types
  */

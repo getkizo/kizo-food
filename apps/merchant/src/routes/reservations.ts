@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Reservation routes
  *
  * Public endpoints (customer-facing, no auth):
@@ -8,6 +8,7 @@
  *   DELETE /api/store/reservations/:id?code=XXX      — customer self-cancel
  *
  * Authenticated endpoints (staff/manager):
+ *   PATCH  /api/merchants/:id/reservations/busy        — set/clear busy (walk-in only) mode
  *   GET    /api/merchants/:id/reservations?date=YYYY-MM-DD
  *   GET    /api/merchants/:id/reservations/upcoming
  *   PATCH  /api/merchants/:id/reservations/:resId
@@ -43,6 +44,7 @@ interface TableObj {
   id: string
   label: string
   seats?: number
+  noReservations?: boolean
 }
 
 interface RoomObj {
@@ -74,6 +76,7 @@ interface MerchantConfig {
   reservation_advance_days: number
   reservation_max_party_size: number
   reservation_start_time: string | null
+  reservation_busy_until: string | null
   address: string | null
   phone_number: string | null
   receipt_email_from: string | null
@@ -133,11 +136,19 @@ function parseLayout(json: string | null): TableLayout | null {
   try { return JSON.parse(json) as TableLayout } catch { return null }
 }
 
-/** Get all tables across all rooms, with seats defaulting to 2 */
+/**
+ * Get all reservable tables across all rooms, with seats defaulting to 2.
+ * Tables with `noReservations: true` are excluded — they are walk-in only
+ * and must never be assigned by the auto-assign algorithm.
+ */
 function allTables(layout: TableLayout): Array<TableObj & { seats: number }> {
   if (!Array.isArray(layout.rooms)) return []
   return layout.rooms.flatMap(r =>
-    Array.isArray(r.tables) ? r.tables.map(t => ({ ...t, seats: t.seats ?? 2 })) : []
+    Array.isArray(r.tables)
+      ? r.tables
+          .filter(t => !t.noReservations)
+          .map(t => ({ ...t, seats: t.seats ?? 2 }))
+      : []
   )
 }
 
@@ -175,7 +186,7 @@ function blockedTableIds(
          WHERE merchant_id = ?
            AND order_type = 'dine_in'
            AND table_label IS NOT NULL
-           AND status NOT IN ('cancelled','picked_up','completed','pos_error','refunded')`
+           AND status NOT IN ('cancelled','picked_up','completed','pos_error','refunded','paid')`
       )
       .all(merchantId)
 
@@ -383,6 +394,7 @@ function getApplianceMerchantConfig(db: ReturnType<typeof getDatabase>): Merchan
               table_layout, reservation_enabled, reservation_slot_minutes,
               reservation_cutoff_minutes, reservation_advance_days,
               reservation_max_party_size, reservation_start_time,
+              reservation_busy_until,
               address, phone_number, receipt_email_from
        FROM merchants WHERE status = 'active' ORDER BY created_at ASC LIMIT 1`
     )
@@ -546,11 +558,18 @@ ${opts.notes ? `<p style="font-size:0.9em;color:#555">Your note: ${esc(opts.note
  * GET /api/store/reservations/config
  * Returns reservation settings for the appliance merchant.
  */
+/** Returns true if the merchant is currently in busy (walk-in only) mode. */
+function isBusyNow(m: MerchantConfig): boolean {
+  if (!m.reservation_busy_until) return false
+  return new Date().toISOString() < m.reservation_busy_until
+}
+
 reservations.get('/api/store/reservations/config', (c) => {
   const db = getDatabase()
   const m = getApplianceMerchantConfig(db)
   if (!m) return c.json({ error: 'Merchant not found' }, 404)
 
+  const busy = isBusyNow(m)
   return c.json({
     enabled: m.reservation_enabled === 1,
     maxPartySize: m.reservation_max_party_size,
@@ -558,6 +577,8 @@ reservations.get('/api/store/reservations/config', (c) => {
     cutoffMinutes: m.reservation_cutoff_minutes,
     slotMinutes: m.reservation_slot_minutes,
     startTime: m.reservation_start_time ?? null,
+    isBusy: busy,
+    busyUntil: busy ? m.reservation_busy_until : null,
   })
 })
 
@@ -578,7 +599,7 @@ reservations.get('/api/store/reservations/slots', (c) => {
 
   const tz = m.timezone || 'America/Los_Angeles'
   const today = todayLocal(tz)
-  const maxDate = addMinutes('00:00', 0) // just use date comparison
+  void addMinutes // available for date math; unused pending range-check expansion
 
   // Validate date range
   if (dateParam < today) return c.json({ slots: [] })
@@ -600,7 +621,7 @@ reservations.get('/api/store/reservations/slots', (c) => {
  * Create a new reservation (customer-facing).
  */
 reservations.post('/api/store/reservations', async (c) => {
-  const ip = (c.get('ipAddress') as string | undefined) ?? 'unknown'
+  const ip = ((c as any).get('ipAddress') as string | undefined) ?? 'unknown'
   if (!rateLimitOk(ip)) {
     return c.json({ error: 'Too many requests. Please try again in 10 minutes.' }, 429)
   }
@@ -609,6 +630,13 @@ reservations.post('/api/store/reservations', async (c) => {
   const m = getApplianceMerchantConfig(db)
   if (!m) return c.json({ error: 'Merchant not found' }, 404)
   if (!m.reservation_enabled) return c.json({ error: 'Reservations not enabled' }, 403)
+  if (isBusyNow(m)) {
+    return c.json({
+      error: "We're not taking reservations right now — walk-ins are welcome! Check back later.",
+      busyMode: true,
+      busyUntil: m.reservation_busy_until,
+    }, 503)
+  }
 
   const tz = m.timezone || 'America/Los_Angeles'
 
@@ -739,12 +767,12 @@ reservations.post('/api/store/reservations', async (c) => {
  * Customer self-cancel using their confirmation code.
  */
 reservations.delete('/api/store/reservations/:id', async (c) => {
-  const ip = (c.get('ipAddress') as string | undefined) ?? 'unknown'
+  const ip = ((c as any).get('ipAddress') as string | undefined) ?? 'unknown'
   if (!rateLimitOk(ip)) {
     return c.json({ error: 'Too many requests. Please try again in 10 minutes.' }, 429)
   }
 
-  const resId = c.req.param('id')
+  const resId = c.req.param('id')!
   const code = c.req.query('code')
 
   if (!code) return c.json({ error: 'Confirmation code required' }, 400)
@@ -761,11 +789,9 @@ reservations.delete('/api/store/reservations/:id', async (c) => {
 
   if (!res) return c.json({ error: 'Reservation not found' }, 404)
   if (res.confirmation_code !== code.toUpperCase()) {
-    logSecurityEvent({
-      type: 'invalid_confirmation_code',
-      severity: 'warning',
+    logSecurityEvent('invalid_confirmation_code', {
       ip,
-      detail: `reservation ${resId}`,
+      extra: { detail: `reservation ${resId}` },
     })
     return c.json({ error: 'Invalid confirmation code' }, 403)
   }
@@ -787,6 +813,69 @@ reservations.delete('/api/store/reservations/:id', async (c) => {
 // ===========================================================================
 
 /**
+ * PATCH /api/merchants/:id/reservations/busy
+ * Set or clear busy (walk-in only) mode.
+ * Body: { busyUntil: "<ISO datetime>" } to activate, or { busyUntil: null } to clear.
+ * busyUntil is capped at midnight of the current day (busy mode always resets overnight).
+ */
+reservations.patch(
+  '/api/merchants/:id/reservations/busy',
+  authenticate,
+  requireOwnMerchant,
+  requireRole('owner', 'manager', 'staff'),
+  async (c: AuthContext) => {
+    try {
+      const merchantId = c.req.param('id')!
+      let body: any
+      try { body = await c.req.json() } catch {
+        return c.json({ error: 'Invalid JSON' }, 400)
+      }
+
+      const db = getDatabase()
+
+      if (body.busyUntil === null || body.busyUntil === undefined) {
+        // Clear busy mode
+        db.query(`UPDATE merchants SET reservation_busy_until = NULL WHERE id = ?`).run(merchantId)
+        return c.json({ busyUntil: null, isBusy: false })
+      }
+
+      // Validate it's a parseable future datetime
+      const until = new Date(body.busyUntil)
+      if (isNaN(until.getTime())) return c.json({ error: 'Invalid busyUntil datetime' }, 400)
+      if (until <= new Date()) return c.json({ error: 'busyUntil must be in the future' }, 400)
+
+      // Cap at end of current local day (23:59:59) using merchant timezone
+      const tz = (db.query<{ timezone: string }, [string]>(
+        `SELECT timezone FROM merchants WHERE id = ?`
+      ).get(merchantId)?.timezone) || 'America/Los_Angeles'
+
+      const now = new Date()
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      })
+      const todayLocal = formatter.format(now)   // YYYY-MM-DD
+      const endOfDay = new Date(`${todayLocal}T23:59:59`)
+      // Convert end-of-day local to UTC for comparison
+      const endOfDayUTC = new Date(
+        new Intl.DateTimeFormat('en-US', {
+          timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        }).format(endOfDay).replace(/(\d+)\/(\d+)\/(\d+),\s*(\d+):(\d+):(\d+)/, '$3-$1-$2T$4:$5:$6')
+      )
+
+      const capped = until < endOfDayUTC ? until : endOfDayUTC
+      const cappedISO = capped.toISOString()
+
+      db.query(`UPDATE merchants SET reservation_busy_until = ? WHERE id = ?`).run(cappedISO, merchantId)
+
+      return c.json({ busyUntil: cappedISO, isBusy: true })
+    } catch (err) {
+      return serverError(c, "[reservations]", err)
+    }
+  }
+)
+
+/**
  * GET /api/merchants/:id/reservations?date=YYYY-MM-DD
  * List reservations for a date (defaults to today).
  */
@@ -797,7 +886,7 @@ reservations.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const db = getDatabase()
 
       const m = db
@@ -857,7 +946,7 @@ reservations.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const db = getDatabase()
 
       const m = db
@@ -917,7 +1006,7 @@ reservations.post(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const db = getDatabase()
 
       let body: any
@@ -971,8 +1060,8 @@ reservations.patch(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
-      const resId = c.req.param('resId')
+      const merchantId = c.req.param('id')!
+      const resId = c.req.param('resId')!
       const db = getDatabase()
 
       const existing = db
@@ -1072,8 +1161,8 @@ reservations.delete(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
-      const resId = c.req.param('resId')
+      const merchantId = c.req.param('id')!
+      const resId = c.req.param('resId')!
       const db = getDatabase()
 
       const existing = db

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Mock OAuth Routes for Development
  * Simulates OAuth flow without real providers
  */
@@ -166,7 +166,7 @@ mockOAuth.get('/api/auth/oauth/facebook', (c) => {
  * Simulates the OAuth provider redirecting back with a code
  */
 mockOAuth.get('/api/auth/oauth/:provider/mock-callback', (c) => {
-  const provider = c.req.param('provider') as 'google' | 'apple' | 'facebook'
+  const provider = c.req.param('provider')! as 'google' | 'apple' | 'facebook'
 
   // Generate a fake code
   const code = `mock_${provider}_${Date.now()}`
@@ -181,7 +181,7 @@ mockOAuth.get('/api/auth/oauth/:provider/mock-callback', (c) => {
  * Exchange mock code for user data
  */
 mockOAuth.post('/api/auth/oauth/:provider/callback', async (c) => {
-  const provider = c.req.param('provider') as 'google' | 'apple' | 'facebook'
+  const provider = c.req.param('provider')! as 'google' | 'apple' | 'facebook'
   const { code } = await c.req.json()
 
   // Verify it's a mock code
@@ -199,7 +199,7 @@ mockOAuth.post('/api/auth/oauth/:provider/callback', async (c) => {
     email: user.email,
     fullName: user.name,
     profileData: {
-      picture: user.picture || null,
+      picture: (user as any).picture || null,
     },
   })
 })

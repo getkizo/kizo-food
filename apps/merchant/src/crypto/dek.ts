@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Data Encryption Key (DEK) management
  * Implements envelope encryption pattern
  *
@@ -31,7 +31,7 @@ import { getMasterKey } from './master-key'
 
 interface DEKRecord {
   merchantId: string
-  encryptedDEK: string
+  encrypted_dek: string
   createdAt: string
   rotatedAt: string | null
 }

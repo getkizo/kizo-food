@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Converge (Elavon) Hosted Payment Page adapter
  *
  * Generates session tokens for the Converge Hosted Payment Page flow.

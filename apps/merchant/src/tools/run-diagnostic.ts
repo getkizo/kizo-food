@@ -1,15 +1,15 @@
-#!/usr/bin/env bun
+﻿#!/usr/bin/env bun
 /**
  * Run printer diagnostic directly from the command line.
  *
  * Usage:
  *   bun run v2/src/tools/run-diagnostic.ts
- *   bun run v2/src/tools/run-diagnostic.ts 192.168.1.179
+ *   bun run v2/src/tools/run-diagnostic.ts 192.168.1.100
  */
 
 import { printDiagnostic } from '../services/printer'
 
-const ip = process.argv[2] || '192.168.1.179'
+const ip = process.argv[2] || '192.168.1.100'
 
 console.log(`\n========================================`)
 console.log(`  Printer Diagnostic — ${ip}`)

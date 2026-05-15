@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Counter WebSocket service
  *
  * Manages the persistent WebSocket connection from the Kizo Counter
@@ -27,7 +27,7 @@
  * | type              | When sent                              | Key fields |
  * |-------------------|----------------------------------------|------------|
  * | `config`          | Immediately on connect                 | restaurantName, finixDeviceId, finixMerchantId, finixUserId, finixPassword, sandbox |
- * | `payment_request` | When cashier initiates card payment    | orderId, amountCents, currency, tipOptions |
+ * | `payment_request` | When cashier initiates card payment    | orderId, amountCents, currency, tipOptions, timeoutSeconds (default 120) |
  * | `cancel_payment`  | When cashier cancels before completion | orderId |
  *
  * ### Counter → Server (inbound)
@@ -65,6 +65,8 @@ import { getAPIKey } from '../crypto/api-keys'
 import { listDevices, checkDeviceConnection } from '../adapters/finix'
 import type { FinixCredentials } from '../adapters/finix'
 import { startTerminalPayment, cancelTerminalPayment } from '../workflows/terminal-payment'
+import { notifyCloverPaymentInitiated } from './clover-reconcile-signal'
+import type { CloverLegPaymentOpts } from '../types/clover'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -106,7 +108,7 @@ export interface CounterPaymentResult {
 
 const VALID_PAYMENT_STATUSES = new Set(['approved', 'declined', 'error', 'cancelled'])
 
-function isPaymentResultMsg(m: Record<string, unknown>): m is PaymentResultMsg {
+function isPaymentResultMsg(m: Record<string, unknown>): m is PaymentResultMsg & Record<string, unknown> {
   return (
     typeof m.orderId === 'string' && m.orderId.length > 0 &&
     typeof m.status === 'string' && VALID_PAYMENT_STATUSES.has(m.status) &&
@@ -118,7 +120,7 @@ function isPaymentResultMsg(m: Record<string, unknown>): m is PaymentResultMsg {
   )
 }
 
-function isReceiptRequestMsg(m: Record<string, unknown>): m is ReceiptRequestMsg {
+function isReceiptRequestMsg(m: Record<string, unknown>): m is ReceiptRequestMsg & Record<string, unknown> {
   return (
     typeof m.orderId === 'string' && m.orderId.length > 0 &&
     typeof m.receiptEmail === 'string' && m.receiptEmail.length > 0
@@ -135,12 +137,22 @@ let _ws: ServerWebSocket<CounterWsData> | null = null
 let _deviceConnected = false
 /** Results keyed by orderId — polled by the cashier's payment modal. */
 const _results = new Map<string, CounterPaymentResult>()
+/** Hard cap: evict oldest entries (Map insertion order) when exceeded. */
+const MAX_RESULTS = 200
 /** Sweep stale payment results every hour; evict entries older than 10 hours. */
 setInterval(() => {
   const cutoff = Date.now() - 10 * 60 * 60_000
   for (const [id, r] of _results) {
     // Evict if timestamp is missing (should not happen) or older than 10 hours
     if (r.timestamp === undefined || r.timestamp < cutoff) _results.delete(id)
+  }
+  // Hard cap: evict oldest entries if the map grew beyond MAX_RESULTS
+  if (_results.size > MAX_RESULTS) {
+    let excess = _results.size - MAX_RESULTS
+    for (const id of _results.keys()) {
+      _results.delete(id)
+      if (--excess === 0) break
+    }
   }
 }, 60 * 60_000)
 /** Server-side ping interval handle (keeps WS alive during long D135 payment flows). */
@@ -182,11 +194,11 @@ export function counterWsOpen(ws: ServerWebSocket<CounterWsData>): void {
 
 export function counterWsMessage(
   ws: ServerWebSocket<CounterWsData>,
-  raw: string | ArrayBuffer,
+  raw: string | ArrayBuffer | Buffer,
 ): void {
   let msg: Record<string, unknown>
   try {
-    const text = typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8')
+    const text = typeof raw === 'string' ? raw : Buffer.from(raw as ArrayBufferLike).toString('utf8')
     msg = JSON.parse(text)
   } catch {
     return // ignore malformed frames
@@ -286,11 +298,14 @@ export function counterWsClose(ws: ServerWebSocket<CounterWsData>): void {
 /**
  * Sends a payment_request to the counter app.
  * Returns an error string if the counter is not connected, or null on success.
+ *
+ * @param timeoutSeconds - D135 payment timeout forwarded to the Android app (default 120s)
  */
 export function sendPaymentRequest(
   orderId: string,
   amountCents: number,
   tipOptions: number[] = [15, 18, 20],
+  timeoutSeconds = 120,
 ): string | null {
   if (!_ws) return 'Counter app is not connected'
 
@@ -304,20 +319,26 @@ export function sendPaymentRequest(
       amountCents,
       currency: 'USD',
       tipOptions,
+      timeoutSeconds,
     }),
   )
-  console.log(`[counter-ws] payment_request → orderId=${orderId} amount=${amountCents}`)
+  console.log(`[counter-ws] payment_request → orderId=${orderId} amount=${amountCents} timeout=${timeoutSeconds}s`)
   return null
 }
 
 /**
- * Sends a cancel_payment to the counter app.
+ * Sends a cancel_payment to the counter app, followed immediately by
+ * payment_received so the app returns to idle without waiting for the
+ * D135 to confirm the cancellation (the device may be slow or mid-tap).
  * No-op if counter is not connected.
  */
 export function sendCancelPayment(orderId: string): void {
-  _results.delete(orderId)
+  _results.set(orderId, { status: 'cancelled', message: 'Payment cancelled', timestamp: Date.now() })
   if (!_ws) return
   _ws.send(JSON.stringify({ type: 'cancel_payment', orderId }))
+  // Immediately follow with payment_received so the app transitions to idle
+  // without needing to complete the D135 cancel flow first.
+  _ws.send(JSON.stringify({ type: 'payment_received', orderId }))
   console.log(`[counter-ws] cancel_payment → orderId=${orderId}`)
 }
 
@@ -401,14 +422,7 @@ export function cancelA920Payment(merchantId: string, orderId: string): void {
 export async function startCloverLegPayment(
   merchantId: string,
   orderId:    string,
-  opts: {
-    legSubtotalCents:    number
-    legTaxCents:         number
-    serviceChargeCents:  number
-    legNumber:           number
-    totalLegs:           number
-    splitMode:           string
-  },
+  opts:       CloverLegPaymentOpts,
 ): Promise<string | null> {
   const client = new CloverOrderClient()
   if (!client.isEnabled()) return 'Clover integration is not configured'
@@ -511,9 +525,29 @@ async function _recordCloverLegPayment(
   )
 
   if (isLastLeg) {
+    // Sum all legs (the row inserted above is already visible) to compute final totals,
+    // matching the same pattern used by the dashboard record-payment endpoint.
+    const totals = db
+      .query<{ total_paid: number; total_tips: number; total_tax: number }, [string]>(
+        `SELECT COALESCE(SUM(amount_cents), 0) AS total_paid,
+                COALESCE(SUM(tip_cents), 0)    AS total_tips,
+                COALESCE(SUM(tax_cents), 0)    AS total_tax
+         FROM payments WHERE order_id = ?`
+      )
+      .get(orderId)
+
+    const finalPaid = totals?.total_paid ?? (opts.legSubtotalCents + opts.legTaxCents + opts.serviceChargeCents)
+    const finalTips = totals?.total_tips ?? opts.serviceChargeCents
+    const finalTax  = totals?.total_tax  ?? opts.legTaxCents
+
     db.run(
-      `UPDATE orders SET status = 'paid', payment_method = 'clover', updated_at = datetime('now') WHERE id = ?`,
-      [orderId]
+      `UPDATE orders
+       SET status = 'paid', payment_method = 'clover',
+           total_cents = ?, paid_amount_cents = ?,
+           tip_cents = ?, tax_cents = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`,
+      [finalPaid, finalPaid, finalTips, finalTax, orderId]
     )
   }
 
@@ -578,9 +612,17 @@ export async function startCloverFullPayment(
         `SELECT tax_rate FROM merchants WHERE id = ? LIMIT 1`
       ).get(merchantId)
 
+      // Match the tax computation in pushOrder: tax on item subtotal (not order.tax_cents,
+      // which may be 0 for dashboard-created orders where tax wasn't pre-computed).
+      const taxRate = merchantRow?.tax_rate ?? 0
+      const cloverTaxCents = taxRate > 0 ? Math.round(orderRow.subtotal_cents * taxRate) : 0
+
+      // Activate fast reconciliation polling (15 s window) now that a payment is in flight
+      notifyCloverPaymentInitiated()
+
       // Push full order to Clover (idempotent — reuses clover_order_id if already set)
       const { cloverOrderId } = await client.pushOrder(
-        { ...orderRow, merchant_id: merchantId, tax_rate: merchantRow?.tax_rate ?? null },
+        { ...orderRow, merchant_id: merchantId, tax_rate: taxRate > 0 ? taxRate : null },
         db
       )
       if (!cloverOrderId) throw new Error('Clover order creation failed')
@@ -589,7 +631,7 @@ export async function startCloverFullPayment(
       const result = await client.waitForPayment(cloverOrderId, { timeoutMs: 10 * 60_000 })
 
       if (result.status === 'paid') {
-        const paymentId = _recordCloverFullPayment(db, merchantId, orderId, orderRow, result)
+        const paymentId = _recordCloverFullPayment(db, merchantId, orderId, orderRow, result, cloverTaxCents)
         _results.set(orderId, { status: 'approved', paymentId, timestamp: Date.now() })
         broadcastToMerchant(merchantId, 'order_updated', { orderId })
       } else if (result.status === 'cancelled') {
@@ -616,19 +658,22 @@ export async function startCloverFullPayment(
 
 /** Records a full-order Clover payment into the `payments` table and marks the order paid. */
 function _recordCloverFullPayment(
-  db:          ReturnType<typeof getDatabase>,
-  merchantId:  string,
-  orderId:     string,
-  orderRow:    { total_cents: number; subtotal_cents: number; service_charge_cents: number },
-  result:      { paymentId: string; totalCents: number; paymentMethod: string },
+  db:             ReturnType<typeof getDatabase>,
+  merchantId:     string,
+  orderId:        string,
+  orderRow:       { total_cents: number; subtotal_cents: number; service_charge_cents: number },
+  result:         { paymentId: string; totalCents: number; paymentMethod: string },
+  cloverTaxCents: number,  // tax amount pushed to Clover as a line item (may differ from order.tax_cents)
 ): string {
   const paymentId = `pay_${randomBytes(16).toString('hex')}`
   const now       = new Date().toISOString().replace('T', ' ').slice(0, 19)
-  // Infer tip from difference between what Clover charged vs Kizo pre-tip total
-  const tipCents  = Math.max(0, result.totalCents - orderRow.total_cents)
-  const taxCents  = Math.max(0,
-    orderRow.total_cents - orderRow.subtotal_cents - orderRow.service_charge_cents
-  )
+  // Customer tip = totalCents charged − (subtotal + tax pushed to Clover + service charge).
+  // We use cloverTaxCents (computed from merchant tax_rate × subtotal) rather than
+  // orderRow.total_cents because dashboard-created orders may have tax_cents = 0
+  // even when the merchant has a tax rate (Clover receives a "Tax" line item instead).
+  const baseCents = orderRow.subtotal_cents + cloverTaxCents + orderRow.service_charge_cents
+  const tipCents  = Math.max(0, result.totalCents - baseCents)
+  const taxCents  = cloverTaxCents
 
   db.run(
     `INSERT INTO payments (
@@ -649,13 +694,18 @@ function _recordCloverFullPayment(
   )
 
   db.run(
-    `UPDATE orders SET status = 'paid', payment_method = 'clover', updated_at = datetime('now') WHERE id = ?`,
-    [orderId]
+    `UPDATE orders
+     SET status = 'paid', payment_method = 'clover',
+         total_cents = ?, paid_amount_cents = ?,
+         tip_cents = ?, tax_cents = ?,
+         updated_at = datetime('now')
+     WHERE id = ?`,
+    [result.totalCents, result.totalCents, tipCents, taxCents, orderId]
   )
 
   console.log(
     `[clover-full] Recorded: order ${orderId} — ${result.totalCents}¢` +
-    ` (tip ~${tipCents}¢) → paid`
+    ` (tax ${taxCents}¢, tip ${tipCents}¢) → paid`
   )
   return paymentId
 }
@@ -795,17 +845,16 @@ async function sendConfig(ws: ServerWebSocket<CounterWsData>): Promise<void> {
               ` Registered devices: ${devices.map(d => d.id).join(', ') || '(none)'}`,
             )
           }
-          // Also check device connection status — tells us if Finix can reach the D135 through the Android SDK
+          // Check device connection status — tells us if Finix can reach the D135 through the Android SDK.
+          // This fires immediately after config is sent, before the Android app has had time to
+          // initialise the SDK and establish the bridge, so `Closed` at this point is expected and
+          // does NOT indicate a problem.  If payments are working, ignore this log line.
           try {
             const conn = await checkDeviceConnection(creds, config.finixDeviceId)
-            console.log(`[counter-ws] Device connection check: enabled=${conn.enabled}, connection=${conn.connection}`)
-            if (conn.connection !== 'CONNECTED') {
-              console.warn(
-                `[counter-ws] ⚠ Device is not CONNECTED (status: ${conn.connection}).` +
-                ' The Finix SDK on the Android app may not be running in bridge mode,' +
-                ' or the D135 is not paired via Bluetooth.',
-              )
-            }
+            console.log(
+              `[counter-ws] Device connection check: enabled=${conn.enabled}, connection=${conn.connection}` +
+              (conn.connection !== 'CONNECTED' ? ' (expected at connect-time — bridge initialises after config is received)' : ''),
+            )
           } catch (connErr) {
             console.warn(`[counter-ws] Device connection check failed: ${(connErr as Error).message ?? connErr}`)
           }
@@ -852,8 +901,22 @@ async function handlePaymentResult(
   // Approved — record in DB
   const db = getDatabase()
   const order = db
-    .query<{ subtotal_cents: number; tax_cents: number; status: string }, [string, string]>(
-      `SELECT subtotal_cents, tax_cents, status FROM orders WHERE id = ? AND merchant_id = ?`,
+    .query<{
+      subtotal_cents: number
+      tax_cents: number
+      total_cents: number
+      discount_cents: number
+      service_charge_cents: number
+      status: string
+      tax_rate: number | null
+    }, [string, string]>(
+      `SELECT o.subtotal_cents, o.tax_cents, o.total_cents,
+              COALESCE(o.discount_cents, 0) AS discount_cents,
+              COALESCE(o.service_charge_cents, 0) AS service_charge_cents,
+              o.status, m.tax_rate
+         FROM orders o
+         JOIN merchants m ON m.id = o.merchant_id
+        WHERE o.id = ? AND o.merchant_id = ?`,
     )
     .get(msg.orderId, merchantId)
 
@@ -872,8 +935,26 @@ async function handlePaymentResult(
   // CRIT-1: Validate payment amounts — integers, non-negative, within a $100,000 ceiling,
   // and within 5% of the order total (prevents rogue/compromised devices from recording
   // fraudulent amounts).
+  //
+  // NOTE: msg.totalCents includes customer tip selected at the D135.  Compare only the
+  // BASE charge (totalCents − tipCents) against the expected order total so that tip
+  // selections don't trigger a false rejection.  The expected total is reconstructed
+  // from components (subtotal − discount + service_charge + tax) rather than relying on
+  // orders.total_cents, which omits tax for locally-created dashboard orders.
   const MAX_PAYMENT_CENTS = 100_000_00 // $100,000
-  const orderTotalCents = order.subtotal_cents + order.tax_cents
+  // Reconstruct the expected pre-tip total from components so the validation works
+  // regardless of whether tax was stored in total_cents at order creation time.
+  // Locally-created orders store total_cents = subtotal_cents (no tax); orders from
+  // external POS (Clover) have tax_cents already embedded.  In both cases we compute:
+  //   taxable = subtotal - discount + service_charge
+  //   effectiveTax = tax_cents > 0 ? tax_cents : round(taxable × merchant.tax_rate)
+  //   expectedTotal = taxable + effectiveTax
+  const taxable = order.subtotal_cents - order.discount_cents + order.service_charge_cents
+  const effectiveTax = order.tax_cents > 0
+    ? order.tax_cents
+    : Math.round(taxable * (order.tax_rate ?? 0))
+  const orderTotalCents = taxable + effectiveTax   // expected pre-tip charge
+  const baseChargeCents = msg.totalCents - msg.tipCents  // pre-tip amount charged by D135
   if (
     !Number.isInteger(msg.totalCents) || msg.totalCents < 0 || msg.totalCents > MAX_PAYMENT_CENTS ||
     !Number.isInteger(msg.tipCents)   || msg.tipCents   < 0 || msg.tipCents   > MAX_PAYMENT_CENTS
@@ -882,9 +963,9 @@ async function handlePaymentResult(
     _results.set(msg.orderId, { status: 'error', message: 'Invalid payment amounts', timestamp: Date.now() })
     return
   }
-  if (orderTotalCents > 0 && Math.abs(msg.totalCents - orderTotalCents) > orderTotalCents * 0.05) {
+  if (orderTotalCents > 0 && Math.abs(baseChargeCents - orderTotalCents) > orderTotalCents * 0.05) {
     console.warn(
-      `[counter-ws] payment_result rejected — totalCents ${msg.totalCents} deviates >5% from order total ${orderTotalCents}`,
+      `[counter-ws] payment_result rejected — base charge ${baseChargeCents} deviates >5% from order total ${orderTotalCents}`,
     )
     _results.set(msg.orderId, { status: 'error', message: 'Payment amount does not match order total', timestamp: Date.now() })
     return
@@ -915,7 +996,7 @@ async function handlePaymentResult(
                  ?, 'finix_counter', null, ?, ?, ?, null, null, null, null, null, ?, ?)`,
       [
         paymentId, msg.orderId, merchantId, msg.totalCents,
-        order.subtotal_cents, order.tax_cents, msg.tipCents,
+        order.subtotal_cents, effectiveTax, msg.tipCents,
         msg.transactionId ?? null,
         finixTransferId,
         msg.signatureBase64 ?? null, signatureCapturedAt,
@@ -940,7 +1021,7 @@ async function handlePaymentResult(
   }
 
   // Store result for cashier modal polling
-  _results.set(msg.orderId, { status: 'approved', paymentId })
+  _results.set(msg.orderId, { status: 'approved', paymentId, timestamp: Date.now() })
 
   // Notify cashier dashboard (order list badge + payment modal poll)
   broadcastToMerchant(merchantId, 'order_updated', { orderId: msg.orderId, status: 'paid' })

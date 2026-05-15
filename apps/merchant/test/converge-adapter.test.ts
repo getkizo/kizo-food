@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Converge (Elavon) adapter tests
  *
  * All external HTTP calls are intercepted via `global.fetch` mock.

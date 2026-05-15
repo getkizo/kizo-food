@@ -1,0 +1,172 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Kizo</title>
+  <link rel="manifest" href="/launch/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kizo">
+  <meta name="theme-color" content="#1a1a2e">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: env(safe-area-inset-top, 20px) 24px env(safe-area-inset-bottom, 20px);
+      gap: 0;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 48px;
+    }
+
+    .brand-logo {
+      width: 72px;
+      height: 72px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+    }
+
+    .brand-name {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: #fff;
+    }
+
+    .brand-sub {
+      font-size: 13px;
+      color: rgba(255,255,255,0.5);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .apps {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 100%;
+      max-width: 360px;
+    }
+
+    .app-card {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      padding: 20px 22px;
+      text-decoration: none;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    .app-card:active {
+      background: rgba(255,255,255,0.13);
+      transform: scale(0.98);
+    }
+
+    .app-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      flex-shrink: 0;
+    }
+
+    .app-icon-store   { background: #e85d04; }
+    .app-icon-pos     { background: #6c63ff; }
+    .app-icon-manager { background: #0ea5e9; }
+
+    .app-text {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .app-name {
+      font-size: 17px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .app-desc {
+      font-size: 13px;
+      color: rgba(255,255,255,0.5);
+      line-height: 1.3;
+    }
+
+    .app-arrow {
+      margin-left: auto;
+      font-size: 18px;
+      color: rgba(255,255,255,0.3);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="brand">
+    <div class="brand-logo">🍜</div>
+    <div class="brand-name">Kizo</div>
+    <div class="brand-sub">Demo Thai Café</div>
+  </div>
+
+  <nav class="apps" aria-label="App launcher">
+
+    <a href="/" class="app-card" target="_blank" rel="noopener" aria-label="Online Ordering — customer store">
+      <div class="app-icon app-icon-store" aria-hidden="true">🛒</div>
+      <div class="app-text">
+        <div class="app-name">Online Ordering</div>
+        <div class="app-desc">Customer-facing store & menu</div>
+      </div>
+      <div class="app-arrow" aria-hidden="true">›</div>
+    </a>
+
+    <a href="/merchant" class="app-card" target="_blank" rel="noopener" aria-label="POS Dashboard — orders and staff">
+      <div class="app-icon app-icon-pos" aria-hidden="true">💼</div>
+      <div class="app-text">
+        <div class="app-name">POS Dashboard</div>
+        <div class="app-desc">Orders, payments & staff</div>
+      </div>
+      <div class="app-arrow" aria-hidden="true">›</div>
+    </a>
+
+    <a href="/manager-app/" class="app-card" target="_blank" rel="noopener" aria-label="Manager — costs and reports">
+      <div class="app-icon app-icon-manager" aria-hidden="true">📊</div>
+      <div class="app-text">
+        <div class="app-name">Manager</div>
+        <div class="app-desc">Costs, receipts & reports</div>
+      </div>
+      <div class="app-arrow" aria-hidden="true">›</div>
+    </a>
+
+  </nav>
+
+</body>
+</html>

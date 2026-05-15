@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Security event logging
  *
  * Records security-relevant events (failed logins, auth failures, rate-limit
@@ -24,6 +24,8 @@ export type SecurityEventType =
   | 'user_logout'       // L-06: session revocation audit
   | 'printer_failure'         // L-05: print job failures for merchant diagnostics
   | 'payment_unmatched'       // Finix reconciliation: local payment has no matching transfer
+  | 'clover_webhook_auth_failure'  // Clover webhook signature validation failed
+  | 'invalid_confirmation_code'   // Reservation cancellation with wrong code
 
 /**
  * Log a security event to the `security_events` table.

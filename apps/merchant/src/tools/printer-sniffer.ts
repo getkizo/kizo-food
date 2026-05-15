@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+﻿#!/usr/bin/env bun
 /**
  * Printer TCP Sniffer / Proxy
  *
@@ -10,12 +10,12 @@
  *   bun run v2/src/tools/printer-sniffer.ts [printer-ip] [listen-port]
  *
  * Defaults:
- *   printer-ip  = 192.168.1.179
+ *   printer-ip  = 192.168.1.100
  *   listen-port = 9100
  *
  * Example:
  *   1. Stop any other service on port 9100
- *   2. bun run v2/src/tools/printer-sniffer.ts 192.168.1.179 9100
+ *   2. bun run v2/src/tools/printer-sniffer.ts 192.168.1.100 9100
  *   3. In Grubhub/Clover, change the printer IP to THIS machine's IP
  *   4. Send a print job from Grubhub/Clover
  *   5. The sniffer logs every byte and forwards to the real printer
@@ -25,10 +25,10 @@
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
-const PRINTER_IP   = process.argv[2] || '192.168.1.179'
+const PRINTER_IP   = process.argv[2] || '192.168.1.100'
 const PRINTER_PORT = 9100
 const LISTEN_PORT  = parseInt(process.argv[3] || '9100', 10)
-const CAPTURE_DIR  = join(import.meta.dir, '..', '..', 'captures')
+const CAPTURE_DIR  = join(__dirname, '..', '..', 'captures')
 
 // Ensure capture directory exists
 try { mkdirSync(CAPTURE_DIR, { recursive: true }) } catch {}
@@ -106,7 +106,8 @@ interface SessionState {
   startMs: number
   sid: number
   clientChunks: Buffer[]
-  printerSocket: ReturnType<typeof Bun.connect> | null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  printerSocket: any | null
 }
 
 const _socketState = new WeakMap<object, SessionState>()
@@ -198,8 +199,6 @@ Bun.listen({
 
       // Track accumulated client data for this session
       const clientChunks: Buffer[] = []
-      let printerConnected = false
-      let printerClosed = false
 
       // Connect to the real printer
       Bun.connect({
@@ -207,7 +206,6 @@ Bun.listen({
         port: PRINTER_PORT,
         socket: {
           open(pSocket) {
-            printerConnected = true
             const elapsed = Date.now() - startMs
             console.log(`  🖨️  [#${sid}] Connected to printer ${PRINTER_IP}:${PRINTER_PORT} (+${elapsed}ms)`)
             session.events.push({
@@ -226,7 +224,7 @@ Bun.listen({
             const state = _socketState.get(clientSocket)
             if (state) state.printerSocket = pSocket
           },
-          data(pSocket, received) {
+          data(_pSocket, received) {
             const elapsed = Date.now() - startMs
             const buf = Buffer.from(received)
             console.log(`  ◀️  [#${sid}] Printer → Client: ${buf.length} bytes (+${elapsed}ms)`)
@@ -241,7 +239,6 @@ Bun.listen({
             try { clientSocket.write(buf) } catch {}
           },
           close() {
-            printerClosed = true
             const elapsed = Date.now() - startMs
             console.log(`  🔒 [#${sid}] Printer connection closed (+${elapsed}ms)`)
             session.events.push({
@@ -252,7 +249,7 @@ Bun.listen({
             saveSession(session)
             try { clientSocket.end() } catch {}
           },
-          error(pSocket, err) {
+          error(_pSocket, err) {
             const elapsed = Date.now() - startMs
             console.error(`  ❌ [#${sid}] Printer error: ${err.message} (+${elapsed}ms)`)
             session.events.push({
@@ -261,7 +258,7 @@ Bun.listen({
               msg: `Printer error: ${err.message}`,
             })
           },
-          connectError(pSocket, err) {
+          connectError(_pSocket, err) {
             const elapsed = Date.now() - startMs
             console.error(`  ❌ [#${sid}] Printer connect error: ${err.message} (+${elapsed}ms)`)
             session.events.push({
@@ -359,7 +356,7 @@ if (process.argv[4] === '--replay') {
           socket.end()
         }, 3000)
       },
-      data(socket, received) {
+      data(_socket, received) {
         const buf = Buffer.from(received)
         console.log(`  ◀️  Printer response: ${buf.length} bytes`)
         console.log(hexDump(buf))
@@ -367,7 +364,7 @@ if (process.argv[4] === '--replay') {
       close() {
         console.log('  Done.')
       },
-      error(socket, err) {
+      error(_socket, err) {
         console.error('  Error:', err.message)
       },
     },

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Manual POS Adapter
  * For merchants without an integrated POS system
  * Orders are manually confirmed/updated through the dashboard
@@ -48,7 +48,7 @@ export class ManualPOSAdapter implements POSAdapter {
     const db = getDatabase()
 
     const order = db
-      .query<{ status: string; completed_at: string | null }, [string]>(
+      .query<{ status: string; completed_at: string | null }, [string, string]>(
         `SELECT status, completed_at FROM orders WHERE id = ? OR pos_order_id = ?`
       )
       .get(posOrderId, posOrderId)
@@ -102,14 +102,17 @@ export class ManualPOSAdapter implements POSAdapter {
       .all()
 
     return {
-      items: dishes.map((d) => ({
+      categories: [],
+      uncategorizedItems: dishes.map((d, i) => ({
         id: d.id,
         name: d.name,
         description: d.description || undefined,
         priceCents: d.base_price_cents,
-        category: d.category || undefined,
-        available: d.is_available === 1,
+        priceType: 'FIXED' as const,
+        isAvailable: d.is_available === 1,
         imageUrl: d.image_url || undefined,
+        sortOrder: i,
+        modifierGroups: [],
       })),
       lastUpdated: new Date().toISOString(),
     }

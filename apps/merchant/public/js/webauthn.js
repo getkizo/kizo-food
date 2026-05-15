@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WebAuthn (Passkey) client — fingerprint / Face ID / Windows Hello login
  *
  * Supports:

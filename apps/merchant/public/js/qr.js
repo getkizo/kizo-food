@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Minimal QR code generator — zero dependencies, pure browser JS.
  *
  * Only supports QR Version 3 (29×29) and below with byte encoding +

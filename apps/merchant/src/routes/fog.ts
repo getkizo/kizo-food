@@ -1,4 +1,4 @@
-/**
+﻿/**
  * F.O.G. (Fats, Oils, Grease) — Grease Trap & Hood Cleaning Log
  *
  * Staff endpoints (authenticated):
@@ -102,7 +102,7 @@ fog.post(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     let body: { cleanedDate?: unknown; cleanedBy?: unknown; greaseGallons?: unknown; solidsGallons?: unknown }
@@ -154,7 +154,7 @@ fog.get(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const entries = db
@@ -186,8 +186,8 @@ fog.delete(
   requireOwnMerchant,
   requireRole('owner'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const entryId = c.req.param('entryId')
+    const merchantId = c.req.param('id')!
+    const entryId = c.req.param('entryId')!
     const db = getDatabase()
 
     const result = db.run(
@@ -221,7 +221,7 @@ fog.post(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     let body: { cleanedDate?: unknown; cleanedBy?: unknown; notes?: unknown }
@@ -267,7 +267,7 @@ fog.get(
   requireOwnMerchant,
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const db = getDatabase()
 
     const entries = db
@@ -299,8 +299,8 @@ fog.delete(
   requireOwnMerchant,
   requireRole('owner'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
-    const entryId = c.req.param('entryId')
+    const merchantId = c.req.param('id')!
+    const entryId = c.req.param('entryId')!
     const db = getDatabase()
 
     const result = db.run(
@@ -325,7 +325,7 @@ fog.delete(
  * authentication required. Only active (non-deleted) entries are shown.
  */
 
-fog.get('/fog-report', (c) => {
+fog.get('/fog-report', (_c) => {
   const merchant = getApplianceMerchant()
   if (!merchant) {
     return new Response('Merchant not configured', {

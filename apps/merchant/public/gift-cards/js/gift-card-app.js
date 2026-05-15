@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Gift Card Store — client-side application
  * @version 2
  *

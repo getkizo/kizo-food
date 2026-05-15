@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Payment record route tests
  *
  * Tests POST /api/merchants/:id/orders/:orderId/record-payment
@@ -29,6 +29,8 @@ function insertOrder(opts: {
   source?:       string
   subtotalCents?: number
   totalCents?:   number
+  taxCents?:     number
+  items?:        unknown[]
 } = {}): string {
   const db = getDatabase()
   const orderId = `ord_${Math.random().toString(36).slice(2, 14)}`
@@ -38,6 +40,8 @@ function insertOrder(opts: {
     source        = 'local',
     subtotalCents = 1000,
     totalCents    = 1088,
+    taxCents      = 88,
+    items         = [],
   } = opts
 
   db.run(
@@ -46,10 +50,20 @@ function insertOrder(opts: {
         status, subtotal_cents, total_cents, tax_cents,
         source, items, created_at, updated_at)
      VALUES (?, ?, 'Test Customer', '555-1234', ?,
-             ?, ?, ?, 88, ?, '[]', datetime('now'), datetime('now'))`,
-    [orderId, merchantId, orderType, status, subtotalCents, totalCents, source]
+             ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+    [orderId, merchantId, orderType, status, subtotalCents, totalCents, taxCents, source, JSON.stringify(items)]
   )
   return orderId
+}
+
+/** Helper: simple item with a dish name and price. */
+function item(dishName: string, priceCents: number, quantity = 1) {
+  return {
+    itemId: `it_${Math.random().toString(36).slice(2, 8)}`,
+    dishName, quantity, priceCents,
+    modifiers: [],
+    lineTotalCents: priceCents * quantity,
+  }
 }
 
 /**
@@ -373,12 +387,14 @@ describe('Split payments (Phase 3)', () => {
   })
 
   test('split metadata is stored on the payment row', async () => {
-    const orderId = insertOrder()
+    const orderId = insertOrder({
+      items: [item('A', 500), item('B', 500), item('C', 500)],
+      subtotalCents: 1500, totalCents: 1656, taxCents: 156,
+    })
     const body = await recordSplitLeg(orderId, {
       splitMode:      'by_items',
       splitLegNumber: 1,
-      splitTotalLegs: 2,
-      splitItemsJson: '[0, 1]',
+      splitItemsJson: '[0,1]',
     })
 
     const db = getDatabase()
@@ -394,8 +410,9 @@ describe('Split payments (Phase 3)', () => {
 
     expect(payment?.split_mode).toBe('by_items')
     expect(payment?.split_leg_number).toBe(1)
-    expect(payment?.split_total_legs).toBe(2)
-    expect(payment?.split_items_json).toBe('[0, 1]')
+    expect(payment?.split_total_legs).toBeNull()       // by_items: total is item-coverage-derived
+    expect(payment?.split_items_json).toBe('[0,1]')
+    expect(body.isLastLeg).toBe(false)                 // 1 of 3 items still unpaid
   })
 
   test('three-leg equal split — only final leg marks order paid', async () => {
@@ -449,6 +466,262 @@ describe('Split payments (Phase 3)', () => {
     // Should be the SUM of both legs, not just the last leg
     expect(order?.paid_amount_cents).toBe(1288 + 1488) // 2776
     expect(order?.tip_cents).toBe(200 + 400)           // 600
+  })
+
+  // ── Tax preservation on final leg (by-items rounding fix) ────────────────
+  // Spec: docs/by-items-tax-rounding-fix.md
+  // Order tax_cents must always be preserved from the original order on the
+  // final-leg record-payment, regardless of split mode. This prevents the ±N¢
+  // drift that by_items splits can introduce when each leg's tax is rounded
+  // independently.
+
+  test('by_items 3-leg drift case preserves orders.tax_cents', async () => {
+    // Order: 3 × $11.10 = $33.30, tax 10.4% → round(3330 × 0.104) = 346
+    // Each leg's tax = round(1110 × 0.104) = round(115.44) = 115
+    // Σ per-leg tax = 345 → 1¢ short of the order's 346.
+    // After fix: orders.tax_cents stays at 346.
+    const orderId = insertOrder({
+      status: 'confirmed', subtotalCents: 3330, totalCents: 3676, taxCents: 346,
+      items: [item('Dish A', 1110), item('Dish B', 1110), item('Dish C', 1110)],
+    })
+    const db = getDatabase()
+
+    for (let leg = 1; leg <= 3; leg++) {
+      const res = await postRecordPayment(orderId, {
+        ...cashPayload({
+          subtotalCents: 1110, taxCents: 115, tipCents: 0, totalCents: 1225,
+        }),
+        splitMode: 'by_items',
+        splitLegNumber: leg,
+        splitItemsJson: JSON.stringify([leg - 1]),  // each leg pays for one item
+      })
+      expect(res.status).toBe(201)
+    }
+
+    const order = db.query<{ tax_cents: number; status: string }, [string]>(
+      `SELECT tax_cents, status FROM orders WHERE id = ?`
+    ).get(orderId)
+    expect(order?.status).toBe('paid')
+    expect(order?.tax_cents).toBe(346)              // preserved from original
+
+    // Per-leg payments are immutable — their sum is the accepted shortfall.
+    const sumRow = db.query<{ s: number }, [string]>(
+      `SELECT COALESCE(SUM(tax_cents), 0) AS s FROM payments WHERE order_id = ?`
+    ).get(orderId)
+    expect(sumRow?.s).toBe(345)                     // Σ leg tax = 345 (1¢ less)
+  })
+
+  // ── by_items variable-leg coverage (Phase 1 fix) ──────────────────────────
+  // Bug history: the modal hardcoded splitTotalLegs=2 for by_items, so leg 2
+  // marked the order paid even when items 3+ were still unassigned. Now the
+  // server derives isLastLeg from cumulative item coverage in splitItemsJson.
+
+  test('by_items 4-leg variable split — only marks paid after all items covered', async () => {
+    const orderId = insertOrder({
+      status: 'confirmed', subtotalCents: 7000, totalCents: 7728, taxCents: 728,
+      items: [
+        item('A', 1000), item('B', 1500), item('C', 500), item('D', 1500),
+        item('E', 800), item('F', 700), item('G', 1000),
+      ],
+    })
+    const db = getDatabase()
+
+    // Leg 1: items [0, 1] — not last
+    const r1 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 2500, taxCents: 260, tipCents: 0, totalCents: 2760 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[0,1]',
+    })
+    expect(r1.status).toBe(201)
+    expect((await r1.json() as { isLastLeg: boolean }).isLastLeg).toBe(false)
+    expect(db.query<{ status: string }, [string]>(
+      `SELECT status FROM orders WHERE id = ?`).get(orderId)?.status).toBe('confirmed')
+
+    // Leg 2: items [2, 3] — still not last (items 4,5,6 unpaid)
+    const r2 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 2000, taxCents: 208, tipCents: 0, totalCents: 2208 }),
+      splitMode: 'by_items', splitLegNumber: 2, splitItemsJson: '[2,3]',
+    })
+    expect(r2.status).toBe(201)
+    expect((await r2.json() as { isLastLeg: boolean }).isLastLeg).toBe(false)
+    expect(db.query<{ status: string }, [string]>(
+      `SELECT status FROM orders WHERE id = ?`).get(orderId)?.status).toBe('confirmed')
+
+    // Leg 3: items [4, 5] — still not last (item 6 unpaid)
+    const r3 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 1500, taxCents: 156, tipCents: 0, totalCents: 1656 }),
+      splitMode: 'by_items', splitLegNumber: 3, splitItemsJson: '[4,5]',
+    })
+    expect(r3.status).toBe(201)
+    expect((await r3.json() as { isLastLeg: boolean }).isLastLeg).toBe(false)
+
+    // Leg 4: item [6] — last leg, all 7 items now paid
+    const r4 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 1000, taxCents: 104, tipCents: 0, totalCents: 1104 }),
+      splitMode: 'by_items', splitLegNumber: 4, splitItemsJson: '[6]',
+    })
+    expect(r4.status).toBe(201)
+    expect((await r4.json() as { isLastLeg: boolean }).isLastLeg).toBe(true)
+    expect(db.query<{ status: string }, [string]>(
+      `SELECT status FROM orders WHERE id = ?`).get(orderId)?.status).toBe('paid')
+  })
+
+  test('by_items: a line with quantity > 1 contributes that many selectable units', async () => {
+    // Order: 1× Pad Thai + 2× Peanut Sauce = 3 selectable units (not 2 lines).
+    // Each unit is independently assignable so two customers can each
+    // claim one Peanut Sauce on different legs.
+    const orderId = insertOrder({
+      status: 'confirmed', subtotalCents: 1800, totalCents: 1987, taxCents: 187,
+      items: [
+        item('Pad Thai',     1400, 1),
+        item('Peanut Sauce',  200, 2),  // 2× $2.00 = $4.00
+      ],
+    })
+    const db = getDatabase()
+
+    // Leg 1: Pad Thai (unit 0)
+    const r1 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 1400, taxCents: 146, tipCents: 0, totalCents: 1546 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[0]',
+    })
+    expect(r1.status).toBe(201)
+    expect((await r1.json() as { isLastLeg: boolean }).isLastLeg).toBe(false)
+
+    // Leg 2: first Peanut Sauce (unit 1) — still not last
+    const r2 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 200, taxCents: 21, tipCents: 0, totalCents: 221 }),
+      splitMode: 'by_items', splitLegNumber: 2, splitItemsJson: '[1]',
+    })
+    expect(r2.status).toBe(201)
+    expect((await r2.json() as { isLastLeg: boolean }).isLastLeg).toBe(false)
+
+    // Leg 3: second Peanut Sauce (unit 2) — last leg
+    const r3 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 200, taxCents: 21, tipCents: 0, totalCents: 221 }),
+      splitMode: 'by_items', splitLegNumber: 3, splitItemsJson: '[2]',
+    })
+    expect(r3.status).toBe(201)
+    expect((await r3.json() as { isLastLeg: boolean }).isLastLeg).toBe(true)
+    expect(db.query<{ status: string }, [string]>(
+      `SELECT status FROM orders WHERE id = ?`).get(orderId)?.status).toBe('paid')
+  })
+
+  test('by_items: index N is valid for a 1×A + 2×B order (3 units, indices 0..2)', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500, 1), item('B', 500, 2)],
+      subtotalCents: 1500, totalCents: 1656, taxCents: 156,
+    })
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[2]',  // 2nd unit of B
+    })
+    expect(r.status).toBe(201)
+  })
+
+  test('by_items: rejects index >= total units (not just line count)', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500, 1), item('B', 500, 2)],   // 3 units; valid range 0..2
+      subtotalCents: 1500, totalCents: 1656, taxCents: 156,
+    })
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[3]',  // out of range
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toMatch(/invalid item index/)
+  })
+
+  test('by_items rejects duplicate item index across legs', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500), item('B', 500), item('C', 500)],
+      subtotalCents: 1500, totalCents: 1656, taxCents: 156,
+    })
+
+    const r1 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[0]',
+    })
+    expect(r1.status).toBe(201)
+
+    // Leg 2 tries to re-pay item 0 — must reject
+    const r2 = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 2, splitItemsJson: '[0]',
+    })
+    expect(r2.status).toBe(409)
+    const body = await r2.json() as { error: string }
+    expect(body.error).toMatch(/already been paid/)
+  })
+
+  test('by_items rejects out-of-range item index', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500), item('B', 500)],
+      subtotalCents: 1000, totalCents: 1104, taxCents: 104,
+    })
+
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[5]',  // index 5 > items.length-1
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toMatch(/invalid item index/)
+  })
+
+  test('by_items rejects duplicate index within a single leg', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500), item('B', 500)],
+      subtotalCents: 1000, totalCents: 1104, taxCents: 104,
+    })
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[0,0]',
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toMatch(/duplicate item index/)
+  })
+
+  test('by_items rejects missing splitItemsJson', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500), item('B', 500)],
+      subtotalCents: 1000, totalCents: 1104, taxCents: 104,
+    })
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1,
+      // no splitItemsJson
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toMatch(/splitItemsJson is required/)
+  })
+
+  test('by_items rejects empty splitItemsJson array', async () => {
+    const orderId = insertOrder({
+      items: [item('A', 500)],
+      subtotalCents: 500, totalCents: 552, taxCents: 52,
+    })
+    const r = await postRecordPayment(orderId, {
+      ...cashPayload({ subtotalCents: 500, taxCents: 52, tipCents: 0, totalCents: 552 }),
+      splitMode: 'by_items', splitLegNumber: 1, splitItemsJson: '[]',
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as { error: string }).error).toMatch(/non-empty array/)
+  })
+
+  test('single-payment flow preserves orders.tax_cents (regression guard)', async () => {
+    // Non-split case: original tax_cents == leg's tax_cents, so preservation
+    // is a no-op. Confirms the change does not regress the common path.
+    const orderId = insertOrder({
+      status: 'confirmed', subtotalCents: 2500, totalCents: 2750, taxCents: 250,
+    })
+    const res = await postRecordPayment(orderId, cashPayload({
+      subtotalCents: 2500, taxCents: 250, tipCents: 0, totalCents: 2750,
+    }))
+    expect(res.status).toBe(201)
+
+    const db = getDatabase()
+    const order = db.query<{ tax_cents: number }, [string]>(
+      `SELECT tax_cents FROM orders WHERE id = ?`
+    ).get(orderId)
+    expect(order?.tax_cents).toBe(250)
   })
 })
 
@@ -639,5 +912,133 @@ describe('POST /api/merchants/:id/payments/:paymentId/receipt', () => {
       }
     ))
     expect(res.status).toBe(401)
+  })
+})
+
+// ── POST /link-transfer — manual Finix transfer → order linking ───────────────
+
+describe('POST /api/merchants/:id/orders/:orderId/link-transfer', () => {
+  // Helper: seed Finix API credentials + merchant sandbox flag so loadFinixCreds succeeds.
+  async function seedFinixCreds(): Promise<void> {
+    const { storeAPIKey } = await import('../src/crypto/api-keys')
+    await storeAPIKey(
+      merchantId, 'payment', 'finix', 'test-api-password',
+      undefined,
+      'USfake000000000000000000:APfake000000000000000000:MUfake000000000000000000',
+    )
+    getDatabase().run(`UPDATE merchants SET finix_sandbox = 1 WHERE id = ?`, [merchantId])
+  }
+
+  async function postLink(
+    orderId: string,
+    transferId: string,
+    token = ownerToken,
+  ): Promise<Response> {
+    return app.fetch(new Request(
+      `http://localhost:3000/api/merchants/${merchantId}/orders/${orderId}/link-transfer`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body:    JSON.stringify({ transferId }),
+      },
+    ))
+  }
+
+  test('links a SUCCEEDED transfer: inserts payments row, marks order paid', async () => {
+    await seedFinixCreds()
+    const orderId = insertOrder({ status: 'received', subtotalCents: 1987, totalCents: 1987 })
+
+    // Stub Finix: the adapter's getTerminalTransferStatus GETs /transfers/:id.
+    const originalFetch = global.fetch
+    global.fetch = (async (url: string) => {
+      if (url.includes('/transfers/TR_LINK_OK')) {
+        return new Response(JSON.stringify({
+          id: 'TR_LINK_OK', state: 'SUCCEEDED', amount: 1987,
+          card_present_details: {
+            brand: 'AMEX',
+            masked_account_number: '0000000000009506',
+            approval_code: 'AUTH01',
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    try {
+      const res = await postLink(orderId, 'TR_LINK_OK')
+      expect(res.status).toBe(200)
+      const body = await res.json() as { paymentId: string; success: boolean }
+      expect(body.success).toBe(true)
+      expect(body.paymentId).toBeTruthy()
+    } finally {
+      global.fetch = originalFetch
+    }
+
+    const db = getDatabase()
+    // payments row with the transfer
+    const pay = db
+      .query<{ amount_cents: number; finix_transfer_id: string; card_last_four: string | null; processor: string | null }, [string]>(
+        `SELECT amount_cents, finix_transfer_id, card_last_four, processor FROM payments WHERE order_id = ?`,
+      )
+      .get(orderId)
+    expect(pay).toBeTruthy()
+    expect(pay!.amount_cents).toBe(1987)
+    expect(pay!.finix_transfer_id).toBe('TR_LINK_OK')
+    expect(pay!.card_last_four).toBe('9506')
+    expect(pay!.processor).toBe('finix')
+
+    // Order flipped to paid
+    const ord = db
+      .query<{ status: string; payment_method: string | null; paid_amount_cents: number }, [string]>(
+        `SELECT status, payment_method, paid_amount_cents FROM orders WHERE id = ?`,
+      )
+      .get(orderId)
+    expect(ord!.status).toBe('paid')
+    expect(ord!.payment_method).toBe('card')
+    expect(ord!.paid_amount_cents).toBe(1987)
+  })
+
+  test('rejects when a payment already exists for the order (409)', async () => {
+    await seedFinixCreds()
+    const orderId = insertOrder({ status: 'received', subtotalCents: 1000, totalCents: 1088 })
+    getDatabase().run(
+      `INSERT INTO payments (id, order_id, merchant_id, payment_type, amount_cents, created_at)
+       VALUES ('pay_existing', ?, ?, 'card', 1000, datetime('now'))`,
+      [orderId, merchantId],
+    )
+
+    const res = await postLink(orderId, 'TR_DOESNT_MATTER')
+    expect(res.status).toBe(409)
+  })
+
+  test('rejects when Finix state is not SUCCEEDED (400)', async () => {
+    await seedFinixCreds()
+    const orderId = insertOrder({ status: 'received', subtotalCents: 1000, totalCents: 1088 })
+
+    const originalFetch = global.fetch
+    global.fetch = (async (url: string) => {
+      if (url.includes('/transfers/TR_PENDING')) {
+        return new Response(JSON.stringify({ id: 'TR_PENDING', state: 'PENDING', amount: 1000 }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+
+    try {
+      const res = await postLink(orderId, 'TR_PENDING')
+      expect(res.status).toBe(400)
+      const body = await res.json() as { error: string }
+      expect(body.error).toMatch(/PENDING|SUCCEEDED/)
+    } finally {
+      global.fetch = originalFetch
+    }
+  })
+
+  test('staff role is denied (400/403)', async () => {
+    await seedFinixCreds()
+    const orderId = insertOrder({ status: 'received' })
+    const res = await postLink(orderId, 'TR_X', staffToken)
+    // requireRole('owner', 'manager') → staff denied
+    expect([401, 403]).toContain(res.status)
   })
 })

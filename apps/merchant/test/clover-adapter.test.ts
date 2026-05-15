@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Clover POS Adapter tests
  * Tests Clover API integration
  */

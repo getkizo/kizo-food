@@ -1,4 +1,4 @@
-/**
+﻿/**
  * store-cart.js — Cart bar + modifier bottom sheet
  *
  * Exposes: window.StoreCart = { renderBar, renderSheet, highlightMissingGroup }
@@ -264,16 +264,98 @@
       })
     }
 
+    // Mirrors server-side TRIGGER_RE — determines when to call parse-instruction
+    const TRIGGER_RE = /\b(extra|add|more|additional|substitute|sub|swap|switch|replace|instead|change|upgrade|with|plus)\b/i
+
     const close = () => window.Store.actions.closeItem()
 
     if (cancelBtn) cancelBtn.addEventListener('click', close)
 
-    // Save name suggestion then dispatch addToCart
+    // Save name suggestion then dispatch addToCart, intercepting kitchen notes
+    // that contain pricing trigger words for AI instruction parsing.
     if (addBtn) {
-      addBtn.addEventListener('click', () => {
+      addBtn.addEventListener('click', async () => {
         const nameInput = document.getElementById('sheet-item-name')
+        const noteInput = document.getElementById('sheet-item-kitchen-note')
         saveNameSuggestion(nameInput?.value)
-        window.Store.actions.addToCart()
+
+        const noteText = noteInput?.value?.trim() || ''
+
+        // No trigger words → add directly, no API call
+        if (!noteText || !TRIGGER_RE.test(noteText)) {
+          window.Store.actions.addToCart()
+          return
+        }
+
+        // Validate required modifier groups BEFORE the async parse so the
+        // customer sees missing-group errors immediately, not after a network round-trip.
+        const model = window.Store.getModel()
+        const item  = model?.selectedItem
+        const groups = item?.modifierGroups || []
+        for (const group of groups) {
+          const selections = model.selectedModifiers?.[group.id] || []
+          if (group.minRequired > 0 && selections.length < group.minRequired) {
+            window.StoreCart?.highlightMissingGroup?.(group.id)
+            return
+          }
+        }
+
+        addBtn.disabled = true
+        try {
+          let parseResult = null
+          let fetchOk = false
+          try {
+            const res = await fetch('/api/store/parse-instruction', {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ note: noteText, itemId: item?.id ?? '' }),
+            })
+            fetchOk = res.ok
+            if (res.ok) parseResult = await res.json()
+          } catch { /* network error */ }
+
+          // Server unavailable (503) or network error — inform customer, add as plain note
+          if (!fetchOk) {
+            const showReview = window.StoreCheckout?.showInstructionReview
+            if (showReview) {
+              await showReview(["Special request pricing is currently unavailable. Your note has been saved and the kitchen will do their best to accommodate it."], 0)
+            }
+            window.Store.actions.addToCart()
+            return
+          }
+
+          // No trigger word recognised server-side → add as plain note silently
+          if (!parseResult || parseResult.outcome === 'no_trigger') {
+            window.Store.actions.addToCart()
+            return
+          }
+
+          // Show instruction review sheet (exposed from store-checkout.js)
+          const showReview = window.StoreCheckout?.showInstructionReview
+          if (!showReview) {
+            // store-checkout.js not yet loaded — add as plain note
+            window.Store.actions.addToCart()
+            return
+          }
+
+          const accepted = await showReview(parseResult.messages, parseResult.surchargeCents ?? 0)
+
+          if (parseResult.outcome === 'surcharge') {
+            if (accepted) {
+              window.Store.actions.addToCart({
+                instructionToken:          parseResult.token,
+                instructionPerUnitCents:   parseResult.perUnitSurchargeCents ?? 0,
+                instructionPerEntryCents:  (parseResult.surchargeCents ?? 0) - (parseResult.perUnitSurchargeCents ?? 0),
+              })
+            }
+            // Declined: leave sheet open so customer can edit the note
+          } else {
+            // no_charge / unfulfillable / jailbreak: always add (messages already shown)
+            window.Store.actions.addToCart()
+          }
+        } finally {
+          addBtn.disabled = false
+        }
       })
     }
 

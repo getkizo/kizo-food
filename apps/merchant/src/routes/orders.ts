@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Legacy order routes (v1-era file — partially superseded by store.ts and dashboard-orders.ts).
  *
  * Endpoints in this file:
@@ -73,7 +73,7 @@ const orders = new Hono<{ Variables: Variables }>()
  * Place a new order
  */
 orders.post('/:merchantSlug/orders', async (c) => {
-  const slug = c.req.param('merchantSlug')
+  const slug = c.req.param('merchantSlug')!
 
   try {
     const body = await c.req.json()
@@ -201,7 +201,7 @@ orders.post('/:merchantSlug/orders', async (c) => {
     })
 
     // Create SAM workflow (this will auto-submit via NAP)
-    const workflow = createOrderWorkflow(orderId, orderData, adapter, merchant.id)
+    createOrderWorkflow(orderId, orderData, adapter, merchant.id)
 
     // fire-and-forget: order already committed; push errors logged only
     const itemSummary = enrichedItems
@@ -235,7 +235,7 @@ orders.post('/:merchantSlug/orders', async (c) => {
  * Get order details
  */
 orders.get('/api/orders/:orderId', authenticate, async (c) => {
-  const orderId = c.req.param('orderId')
+  const orderId = c.req.param('orderId')!
   const requestingMerchantId = c.get('merchantId')
 
   try {

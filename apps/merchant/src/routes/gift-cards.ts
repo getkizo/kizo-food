@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Gift Card Store API
  *
  * Public endpoints (customer-facing, no auth):
@@ -58,7 +58,6 @@ import { authenticate, requireOwnMerchant, requireRole } from '../middleware/aut
 import type { AuthContext } from '../middleware/auth'
 import { broadcastToMerchant } from '../services/sse'
 import { printGiftCardReceipt } from '../services/printer'
-import nodemailer from 'nodemailer'
 import { buildSmtpTransport } from '../services/smtp'
 import { randomInt } from 'node:crypto'
 import { generateId } from '../utils/id'
@@ -237,7 +236,7 @@ giftCards.post('/api/store/gift-cards/purchase', async (c) => {
   const merchant = getApplianceMerchant()
   if (!merchant) return c.json({ error: 'Merchant not found' }, 404)
 
-  const ip = c.get('ipAddress') as string ?? 'unknown'
+  const ip = ((c as any).get('ipAddress') as string | undefined) ?? 'unknown'
   if (!checkRateLimit(ip)) {
     return c.json({ error: 'Too many requests. Please wait a moment and try again.' }, 429)
   }
@@ -301,7 +300,7 @@ giftCards.post('/api/store/gift-cards/purchases/:id/pay', async (c) => {
   const merchant = getApplianceMerchant()
   if (!merchant) return c.json({ error: 'Merchant not found' }, 404)
 
-  const purchaseId = c.req.param('id')
+  const purchaseId = c.req.param('id')!
   const db = getDatabase()
 
   const purchase = db
@@ -461,7 +460,7 @@ giftCards.post('/api/store/gift-cards/purchases/:id/payment-result', async (c) =
   const merchant = getApplianceMerchant()
   if (!merchant) return c.json({ error: 'Merchant not found' }, 404)
 
-  const purchaseId = c.req.param('id')
+  const purchaseId = c.req.param('id')!
   const db = getDatabase()
 
   const purchase = db
@@ -543,6 +542,8 @@ giftCards.post('/api/store/gift-cards/purchases/:id/payment-result', async (c) =
 
       let transferId: string | null = null
       let formState = 'UNKNOWN'
+
+      // Phase 1: up to 3 fast attempts (1.5s apart)
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const result = await getTransferIdFromCheckoutForm(creds, purchase.payment_checkout_form_id)
@@ -552,8 +553,31 @@ giftCards.post('/api/store/gift-cards/purchases/:id/payment-result', async (c) =
           return serverError(c, '[gift-cards] Finix verification', err, 'Payment verification failed — please retry', 502)
         }
         if (transferId) break
-        if (formState === 'COMPLETED') break
         if (attempt < 3) await new Promise(r => setTimeout(r, 1500))
+      }
+
+      // Phase 2: form reports COMPLETED but transfer ID still not visible —
+      // Finix occasionally lags populating _embedded.transfers / _links.transfers.
+      // Give it 3 more slower attempts before giving up.
+      if (!transferId && formState === 'COMPLETED') {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          await new Promise(r => setTimeout(r, 2000))
+          try {
+            const result = await getTransferIdFromCheckoutForm(creds, purchase.payment_checkout_form_id)
+            transferId = result.transferId
+            formState  = result.state
+          } catch { /* ignore — we already know form is COMPLETED, keep retrying */ }
+          if (transferId) break
+        }
+        if (!transferId) {
+          // Payment succeeded but Finix API didn't expose the transfer ID.
+          // Issue the gift card (customer paid), but log loudly for manual reconciliation.
+          console.error(
+            `[gift-cards] WARNING: checkout form ${purchase.payment_checkout_form_id} is COMPLETED ` +
+            `but transfer ID not retrieved for purchase ${purchaseId}. ` +
+            `payment_transfer_id will be NULL — requires manual reconciliation.`
+          )
+        }
       }
 
       if (!transferId && formState !== 'COMPLETED') {
@@ -607,11 +631,9 @@ giftCards.post('/api/store/gift-cards/purchases/:id/payment-result', async (c) =
           if (convergeParts.length === 2) {
             const [sslMerchantId, sslUserId] = convergeParts
             const sandbox = (merchant.converge_sandbox ?? 1) !== 0
-            const expectedAmount = (purchase.total_cents / 100).toFixed(2)
             await verifyConvergeTransaction(
               { sslMerchantId, sslUserId, sslPin: pin, sandbox },
               sslTxnId,
-              expectedAmount
             )
           }
         }
@@ -646,7 +668,8 @@ giftCards.post('/api/store/gift-cards/purchases/:id/payment-result', async (c) =
     let lineItems: LineItem[] = []
     try {
       lineItems = JSON.parse(purchase.line_items_json)
-    } catch {
+    } catch (err) {
+      console.error('[gift-cards] Failed to parse line_items_json for purchase', purchase.id, err)
       lineItems = []
     }
 
@@ -706,7 +729,7 @@ giftCards.get('/api/store/gift-cards/purchases/:id', async (c) => {
   const merchant = getApplianceMerchant()
   if (!merchant) return c.json({ error: 'Merchant not found' }, 404)
 
-  const purchaseId = c.req.param('id')
+  const purchaseId = c.req.param('id')!
   const db = getDatabase()
 
   const purchase = db
@@ -920,7 +943,7 @@ giftCards.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const db = getDatabase()
 
       const status = c.req.query('status') ?? ''
@@ -1091,7 +1114,7 @@ giftCards.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const suffix = (c.req.query('suffix') ?? '').trim().toUpperCase()
 
       if (suffix.length !== 4 || !/^[A-Z0-9]+$/.test(suffix)) {
@@ -1152,8 +1175,8 @@ giftCards.post(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
-      const cardId     = c.req.param('cardId')
+      const merchantId = c.req.param('id')!
+      const cardId     = c.req.param('cardId')!
       const db         = getDatabase()
 
       const row = db
@@ -1232,7 +1255,7 @@ giftCards.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId = c.req.param('id')
+      const merchantId = c.req.param('id')!
       const db = getDatabase()
 
       const nowMs        = Date.now()
@@ -1316,8 +1339,8 @@ giftCards.get(
   requireRole('owner', 'manager', 'staff'),
   async (c: AuthContext) => {
     try {
-      const merchantId  = c.req.param('id')
-      const purchaseId  = c.req.param('purchaseId')
+      const merchantId  = c.req.param('id')!
+      const purchaseId  = c.req.param('purchaseId')!
       const db = getDatabase()
 
       const row = db

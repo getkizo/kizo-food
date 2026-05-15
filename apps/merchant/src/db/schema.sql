@@ -1,4 +1,4 @@
--- Merchant Appliance Database Schema
+﻿-- Merchant Appliance Database Schema
 -- SQLite 3 with WAL mode
 -- Version: 2.0.0
 --
@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS merchants (
   address TEXT,
   status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'inactive')) DEFAULT 'active',
   receipt_email_from TEXT,                -- Gmail address for sending customer email receipts (App Password stored in api_keys)
+  ga_tag_id TEXT,                         -- Google Analytics measurement ID, e.g. G-XXXXXXXXXX
+  dine_in_provider TEXT NOT NULL DEFAULT 'clover', -- 'finix' | 'clover' — which terminal handles dine-in card payments
+  counter_provider TEXT NOT NULL DEFAULT 'finix',  -- 'finix' | 'clover' — which terminal handles counter card payments
+  finix_webhook_secret_enc TEXT,                   -- AES-256-GCM encrypted HMAC shared secret for Finix webhooks
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -59,7 +63,7 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,                  -- Format: u_abc123xyz
   merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
-  password_hash TEXT,                   -- bcrypt hash (NULL for OAuth users)
+  password_hash TEXT,                   -- argon2id hash (Bun.password.hash, NULL for OAuth users)
   full_name TEXT NOT NULL,
   role TEXT NOT NULL CHECK(role IN ('owner', 'manager', 'staff')) DEFAULT 'staff',
   is_active INTEGER NOT NULL DEFAULT 1, -- Boolean (0 or 1)
@@ -197,6 +201,7 @@ CREATE TABLE IF NOT EXISTS modifier_groups (
   max_allowed INTEGER,                  -- NULL = unlimited
   is_mandatory INTEGER NOT NULL DEFAULT 0, -- 1 = must select before adding item to order
   input_order INTEGER NOT NULL DEFAULT 0,  -- display order when filling out modifiers (lower = first)
+  print_first INTEGER NOT NULL DEFAULT 0,  -- 1 = print this group before all others on kitchen/counter tickets
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -244,6 +249,7 @@ CREATE TABLE IF NOT EXISTS orders (
   subtotal_cents INTEGER NOT NULL,
   tax_cents INTEGER NOT NULL DEFAULT 0,
   total_cents INTEGER NOT NULL,
+  special_instruction_surcharge_cents INTEGER NOT NULL DEFAULT 0,
 
   -- SAM FSM state
   status TEXT NOT NULL CHECK(status IN (
@@ -258,7 +264,7 @@ CREATE TABLE IF NOT EXISTS orders (
   pos_provider TEXT,                    -- 'square', 'toast', etc.
 
   -- Pickup/delivery
-  order_type TEXT NOT NULL CHECK(order_type IN ('pickup', 'delivery', 'dine_in')) DEFAULT 'pickup',
+  order_type TEXT NOT NULL CHECK(order_type IN ('pickup', 'delivery', 'dine_in', 'catering')) DEFAULT 'pickup',
   pickup_code TEXT,                     -- 4-char code: A7K2
   pickup_time TEXT,                     -- ISO timestamp
   estimated_ready_at TEXT,              -- ISO timestamp: when merchant expects order to be ready
@@ -557,6 +563,8 @@ CREATE TABLE IF NOT EXISTS pending_course_fires (
   printer_ip       TEXT NOT NULL,
   printer_protocol TEXT NOT NULL DEFAULT 'star-line',
   print_language   TEXT DEFAULT 'en',
+  print_status     TEXT NOT NULL DEFAULT 'pending',  -- 'pending'|'sent'|'failed'
+  ticket_type      TEXT NOT NULL DEFAULT 'course_2', -- 'course_2'|'non_gf'
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -587,6 +595,7 @@ CREATE TABLE IF NOT EXISTS payments (
   transaction_id        TEXT,
   processor             TEXT,                           -- 'clover'|'square'|'cash'|etc.
   auth_code             TEXT,
+  finix_transfer_id     TEXT,                           -- Finix transfer ID for card-present payments
 
   -- Signature
   signature_base64      TEXT,                           -- data:image/png;base64,...
@@ -612,6 +621,11 @@ CREATE INDEX IF NOT EXISTS idx_payments_merchant ON payments(merchant_id, create
 -- Composite index covers both the WHERE order_id = ? and ORDER BY created_at DESC
 -- used by "SELECT id FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1".
 CREATE INDEX IF NOT EXISTS idx_payments_order_created ON payments (order_id, created_at DESC);
+-- Prevents duplicate payment rows for the same (order, Finix transfer) pair.
+-- SQLite UNIQUE indexes allow multiple NULLs (NULL != NULL), so cash/manual rows
+-- with finix_transfer_id IS NULL are not affected by this constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_order_transfer_unique
+  ON payments(order_id, finix_transfer_id);
 
 -- ============================================================================
 -- Feedback (customer ratings + per-dish thumbs)
@@ -626,6 +640,7 @@ CREATE TABLE IF NOT EXISTS feedback (
   type          TEXT NOT NULL CHECK(type IN ('app', 'order')),
   stars         INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
   comment       TEXT,
+  manager_note  TEXT,  -- private note to kitchen/manager, not shown publicly
   dish_ratings  TEXT,  -- JSON: [{ name, thumbs: 'up'|'down' }]  (order type only)
   contact       TEXT,  -- optional email or phone
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
@@ -633,6 +648,203 @@ CREATE TABLE IF NOT EXISTS feedback (
 
 CREATE INDEX IF NOT EXISTS idx_feedback_merchant ON feedback(merchant_id, created_at);
 
+-- ============================================================================
+-- System Metrics (COSA monitoring — Phase D)
+-- Rolling 24-hour window of hourly req_per_min samples.
+-- Used by GET /api/status to compute baseline_req_per_min for anomaly detection.
+-- One row per UTC hour per metric; INSERT OR REPLACE keeps it idempotent.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS system_metrics (
+  sampled_at TEXT NOT NULL,   -- UTC hour boundary: 'YYYY-MM-DD HH:00:00'
+  metric     TEXT NOT NULL,   -- e.g. 'req_per_min'
+  value      REAL NOT NULL,
+  PRIMARY KEY (sampled_at, metric)
+);
+
+-- ============================================================================
+-- Payment Error Log (COSA monitoring — Phase C)
+-- One row per terminal/processor payment failure.
+-- Populated by logPaymentError() in services/payment-error-log.ts.
+-- Queried by GET /api/status for hardware.payments.recent_errors and terminal_errors_24h.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS payment_errors (
+  id            TEXT PRIMARY KEY DEFAULT ('perr_' || lower(hex(randomblob(8)))),
+  merchant_id   TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  order_id      TEXT REFERENCES orders(id) ON DELETE SET NULL,  -- null for reconcile_gap
+  occurred_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  error_type    TEXT NOT NULL CHECK(error_type IN (
+                   'terminal_timeout',
+                   'terminal_declined',
+                   'terminal_cancelled',
+                   'terminal_error',
+                   'reconcile_gap',
+                   'auth_failed',
+                   'network_error',
+                   'unknown'
+                 )),
+  detail        TEXT NOT NULL DEFAULT '',
+  superseded_at TEXT  -- set when a later successful payment on the same order marks this error as retry noise
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_errors_merchant_time
+  ON payment_errors(merchant_id, occurred_at DESC);
+
+-- ============================================================================
+-- Extra Ingredients (Special Instructions — merchant-managed price catalog)
+-- One row per ingredient the kitchen can add or substitute.
+-- Referenced by instruction-parser.ts to price add/substitute operations.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS extra_ingredients (
+  id           TEXT PRIMARY KEY DEFAULT ('ingr_' || lower(hex(randomblob(6)))),
+  merchant_id  TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,            -- canonical lowercase: "chicken", "broccoli"
+  display_name TEXT,                     -- customer-facing (falls back to name if null)
+  category     TEXT NOT NULL DEFAULT 'other',
+                 -- 'protein' | 'vegetable' | 'sauce' | 'spice' | 'dairy' | 'other'
+  price_cents  INTEGER NOT NULL DEFAULT 0,
+  is_available INTEGER NOT NULL DEFAULT 1,
+  charge_type  TEXT NOT NULL DEFAULT 'per_entry'
+                 CHECK(charge_type IN ('per_unit', 'per_entry')),
+               -- 'per_unit'  = surcharge multiplied by item qty (e.g. extra shrimp)
+               -- 'per_entry' = flat one-time surcharge regardless of qty (e.g. extra spicy)
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(merchant_id, name)
+);
+
+-- ============================================================================
+-- Ingredient Aliases (Special Instructions — common customer terms)
+-- Maps what customers type ("chili oil") to canonical ingredients or a
+-- suggestion ("dry chili flakes or sriracha sauce") when unavailable.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS ingredient_aliases (
+  id              TEXT PRIMARY KEY DEFAULT ('alia_' || lower(hex(randomblob(6)))),
+  merchant_id     TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  alias_text      TEXT NOT NULL,        -- customer term: "chili oil"
+  ingredient_id   TEXT REFERENCES extra_ingredients(id) ON DELETE SET NULL,
+    -- null = ingredient not available at all
+  suggestion_text TEXT,                 -- preset message when null: "dry chili flakes or sriracha sauce"
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(merchant_id, alias_text)
+);
+
+-- ============================================================================
+-- Special Instruction Log (COSA monitoring — Special Instructions feature)
+-- One row per parse call. Tracks accepted, unfulfillable, and
+-- jailbreak outcomes for algorithm debugging via GET /api/status.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS special_instruction_log (
+  id               TEXT PRIMARY KEY DEFAULT ('sil_' || lower(hex(randomblob(6)))),
+  merchant_id      TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  order_id         TEXT REFERENCES orders(id) ON DELETE SET NULL,
+  item_id          TEXT,
+  instruction_text TEXT NOT NULL,
+  outcome          TEXT NOT NULL CHECK(outcome IN (
+    'accepted', 'no_charge', 'unfulfillable', 'jailbreak', 'too_long', 'error'
+  )),
+  surcharge_cents  INTEGER NOT NULL DEFAULT 0,
+  occurred_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sil_merchant_time
+  ON special_instruction_log(merchant_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sil_merchant_outcome_time
+  ON special_instruction_log(merchant_id, outcome, occurred_at DESC);
+
+-- ============================================================================
+-- OOS Ingredient Shortcuts
+-- Named "86 buttons" (Avocado, Broccoli, Duck…) that bulk-toggle all linked
+-- dishes + modifier options OOS/back-in-stock in one tap or voice command.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS oos_ingredients (
+  id          TEXT PRIMARY KEY DEFAULT ('oosi_' || lower(hex(randomblob(6)))),
+  merchant_id TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  is_out      INTEGER NOT NULL DEFAULT 0,  -- 1 = currently 86'd
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(merchant_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS oos_ingredient_items (
+  ingredient_id TEXT NOT NULL REFERENCES oos_ingredients(id) ON DELETE CASCADE,
+  item_id       TEXT NOT NULL REFERENCES menu_items(id)      ON DELETE CASCADE,
+  PRIMARY KEY (ingredient_id, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS oos_ingredient_modifiers (
+  ingredient_id TEXT NOT NULL REFERENCES oos_ingredients(id) ON DELETE CASCADE,
+  modifier_id   TEXT NOT NULL REFERENCES modifiers(id)       ON DELETE CASCADE,
+  PRIMARY KEY (ingredient_id, modifier_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_oos_ingredients_merchant
+  ON oos_ingredients(merchant_id, sort_order);
+
+-- Advance Orders — pre-paid orders placed days/weeks in advance
+CREATE TABLE IF NOT EXISTS advance_orders (
+  id                  TEXT PRIMARY KEY DEFAULT ('ao_' || lower(hex(randomblob(8)))),
+  merchant_id         TEXT NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+  customer_name       TEXT NOT NULL,
+  customer_phone      TEXT,
+  scheduled_for       TEXT NOT NULL,              -- ISO UTC datetime
+  items               TEXT NOT NULL DEFAULT '[]', -- JSON: [{qty, description}]
+  notes               TEXT,
+  status              TEXT NOT NULL DEFAULT 'pending'
+                      CHECK(status IN ('pending', 'ready', 'cancelled')),
+  reminder_24h_fired  INTEGER NOT NULL DEFAULT 0,
+  reminder_day_fired  INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_advance_orders_merchant_sched
+  ON advance_orders(merchant_id, scheduled_for);
+
+-- Coupon hash redemptions — privacy-preserving per-customer redemption tracking
+CREATE TABLE IF NOT EXISTS coupon_hash_redemptions (
+  id              TEXT PRIMARY KEY DEFAULT ('chr_' || lower(hex(randomblob(6)))),
+  campaign_id     INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  identifier_hash TEXT NOT NULL,
+  identifier_type TEXT NOT NULL CHECK(identifier_type IN ('email', 'phone')),
+  order_id        TEXT REFERENCES orders(id) ON DELETE SET NULL,
+  redeemed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(campaign_id, identifier_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_chr_campaign ON coupon_hash_redemptions(campaign_id);
+
+-- Coupon scan instances — one row per QR scan; prevents coupon URL sharing
+-- scan_token is returned to the client at scan time and required on order submit.
+-- expires_at = 6 months; lazy-deleted by campaign-instance endpoint on each call.
+CREATE TABLE IF NOT EXISTS coupon_instances (
+  id          TEXT    PRIMARY KEY DEFAULT ('ci_' || lower(hex(randomblob(8)))),
+  campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  scan_token  TEXT    NOT NULL UNIQUE,
+  scanned_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  expires_at  TEXT    NOT NULL,
+  redeemed    INTEGER NOT NULL DEFAULT 0,
+  order_id    TEXT    REFERENCES orders(id) ON DELETE SET NULL,
+  redeemed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ci_scan_token ON coupon_instances(scan_token);
+CREATE INDEX IF NOT EXISTS idx_ci_campaign   ON coupon_instances(campaign_id);
+
+-- OAuth CSRF state — survives server restarts; pruned on redemption + by TTL
+CREATE TABLE IF NOT EXISTS oauth_states (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+-- OAuth short-lived sessions — redeemed once by the browser for real JWTs
+CREATE TABLE IF NOT EXISTS oauth_sessions (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
 -- Store current schema version
-INSERT OR REPLACE INTO system_metadata (key, value) VALUES ('schema_version', '2.10.0');
+INSERT OR REPLACE INTO system_metadata (key, value) VALUES ('schema_version', '2.15.0');
 INSERT OR REPLACE INTO system_metadata (key, value) VALUES ('initialized_at', datetime('now'));

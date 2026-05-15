@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Push notification routes and dispatcher
  *
  * Implements Web Push (RFC 8030) with VAPID authentication (RFC 8292).
@@ -54,7 +54,7 @@ export function loadVapidKeys(): void {
     console.log('✅ VAPID keys loaded')
 
     if (!process.env.VAPID_SUBJECT) {
-      console.warn('⚠️  VAPID_SUBJECT not set — push notifications will advertise dev@kizo.app as contact.')
+      console.warn('⚠️  VAPID_SUBJECT not set — push notifications will advertise dev@kizo.example as contact.')
       console.warn('   Set VAPID_SUBJECT=mailto:your@domain.com in production.')
     }
   } catch (err) {
@@ -287,7 +287,7 @@ async function sendWebPush(
     throw new Error('VAPID keys not loaded')
   }
 
-  const subject = process.env.VAPID_SUBJECT || 'mailto:dev@kizo.app'
+  const subject = process.env.VAPID_SUBJECT || 'mailto:dev@kizo.example'
   const audience = new URL(subscription.endpoint).origin
 
   // 1. Build VAPID JWT header + claims

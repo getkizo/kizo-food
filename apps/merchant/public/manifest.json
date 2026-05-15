@@ -1,6 +1,7 @@
-{
-  "name": "Kizo Register",
+﻿{
+  "name": "Kizo Merchant",
   "short_name": "Merchant",
+  "id": "/merchant",
   "description": "Manage orders, menu, and your restaurant profile",
   "start_url": "/merchant",
   "display": "standalone",

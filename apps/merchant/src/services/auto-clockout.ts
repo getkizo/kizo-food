@@ -1,12 +1,12 @@
-/**
+﻿/**
  * Auto clock-out service
  *
  * When an employee forgets to clock out, this service automatically closes
  * their shift at the scheduled end time defined in their weekly schedule.
  *
  * Rules:
- *  - Only runs 1 hour after the employee's scheduled end time, so employees
- *    who legitimately stay late are not cut off prematurely.
+ *  - Only closes shifts whose date is before today (local date), so employees
+ *    working late are never auto-clocked out mid-shift.
  *  - Sets clock_out to the scheduled end time (not the time the check runs).
  *  - Marks auto_clocked_out = 1 and records scheduled_end for audit trail.
  *  - Skips employees with no schedule, or no end time for that day.
@@ -54,23 +54,38 @@ function localDatetime(date: string, hhmm: string): Date | null {
 }
 
 /**
- * Run one pass: find all open shifts whose scheduled end was more than 1 hour
- * ago and close them at the scheduled end time.
+ * Return today's local date as a YYYY-MM-DD string.
+ */
+function localToday(): string {
+  const d = new Date()
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+/**
+ * Run one pass: find all open shifts from a previous day whose scheduled end
+ * has passed and close them at the scheduled end time.
+ *
+ * Only shifts whose date is before today are eligible — this prevents
+ * auto-closing a shift while the employee may still be working late.
  *
  * @returns number of shifts that were auto-closed
  */
 export function runAutoClockOut(): number {
   const db = getDatabase()
-  const now = new Date()
+  const today = localToday()
 
   const openShifts = db
-    .query<OpenShift, []>(
+    .query<OpenShift, [string]>(
       `SELECT ts.id, ts.employee_id, ts.date, e.schedule
        FROM timesheets ts
        JOIN employees e ON e.id = ts.employee_id
-       WHERE ts.clock_out IS NULL`
+       WHERE ts.clock_out IS NULL
+         AND ts.date < ?`
     )
-    .all()
+    .all(today)
 
   let closed = 0
 
@@ -95,12 +110,6 @@ export function runAutoClockOut(): number {
     const scheduledEnd = localDatetime(shift.date, daySchedule.end)
     if (!scheduledEnd) continue
 
-    // Only apply auto clock-out if now is >= scheduledEnd + 1 hour
-    const cutoff = new Date(scheduledEnd.getTime() + 60 * 60 * 1000)
-    if (now < cutoff) continue
-
-    // Store clock_out as ISO UTC (consistent with manual clock-out) but
-    // the time value it represents is the local scheduled end.
     const clockOutISO = scheduledEnd.toISOString()
 
     db.run(

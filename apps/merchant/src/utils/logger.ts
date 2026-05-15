@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Structured logging utility.
  *
  * Emits JSON lines to stdout (info/debug/warn) or stderr (error).

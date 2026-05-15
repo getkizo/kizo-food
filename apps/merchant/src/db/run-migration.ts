@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Run database migration
  * Usage: bun run src/db/run-migration.ts <migration-file>
  */

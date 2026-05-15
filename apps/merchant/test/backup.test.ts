@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Backup, restore, and wipe route tests
  * Tests GET /backup, POST /restore, POST /wipe, GET/PUT/DELETE /s3-config
  */

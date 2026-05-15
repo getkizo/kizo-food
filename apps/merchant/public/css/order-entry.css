@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Order Entry Tab — two-column landscape layout for tablet
  * ┌─────────────────────────────────────────────────────────┐
  * │  [Dine-in] [Takeout] [EN][ES] [Room1][Room2] [Edit #X]  │  ← oe-top-bar
@@ -82,6 +82,18 @@
   color: #fff;
 }
 
+/* Online Orders pause pill */
+.oe-online-pause-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+.oe-online-pause-btn.paused {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
+}
+
 /* Room pills — fills remaining space between type bar and edit banner */
 .oe-room-pills {
   display: flex;
@@ -126,6 +138,38 @@
 }
 .oe-edit-cancel-btn:hover {
   background: rgba(234, 179, 8, 0.15);
+}
+
+.oe-stash-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  padding: 0.2rem 0.6rem 0.2rem 0.75rem;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1.5px solid rgba(59, 130, 246, 0.35);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: #1e40af;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.oe-stash-banner[hidden] { display: none !important; }
+
+.oe-stash-banner-text { font-weight: 500; }
+
+.oe-stash-resume-btn {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.55rem;
+  border: 1.5px solid rgba(59, 130, 246, 0.4);
+  border-radius: 6px;
+  background: transparent;
+  color: #1e40af;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.oe-stash-resume-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
 }
 
 /* ============================================================
@@ -270,20 +314,20 @@
 
 .oe-cat-tab {
   padding: 0.35rem 0.9rem;
-  border: 2px solid var(--color-gray-200);
+  border: 2px solid var(--cat-border, var(--color-gray-200));
   border-radius: 99px;
-  background: #fff;
+  background: var(--cat-bg, #fff);
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
-  color: var(--color-gray-600);
+  color: var(--cat-text, var(--color-gray-700));
   transition: border-color 0.12s, background 0.12s, color 0.12s;
   white-space: nowrap;
 }
 
 .oe-cat-tab.active {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
+  border-color: var(--cat-active, var(--color-primary));
+  background: var(--cat-active, var(--color-primary));
   color: #fff;
 }
 
@@ -350,6 +394,31 @@
   font-weight: 500;
 }
 
+/* Drink vessel icon + brand dot */
+.oe-drink-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  line-height: 1;
+}
+.oe-vessel-wrap {
+  display: inline-flex;
+  align-items: center;
+  color: #6b7280;
+}
+.oe-vessel-icon { display: block; }
+.oe-brand-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.oe-brand-dot--singha    { background: #c8960a; }
+.oe-brand-dot--sapporo   { background: #c0392b; }
+.oe-brand-dot--heineken  { background: #007a3d; }
+.oe-brand-dot--space-dust{ background: #1c2f52; }
+
 .oe-items-empty {
   width: 100%;
   padding: 2rem;
@@ -373,6 +442,12 @@
   /* no overflow:hidden — .oe-right-col already clips */
 }
 
+/* Takeout tint — items area + footer only, header stays white */
+.oe-order-panel--takeout .oe-order-items,
+.oe-order-panel--takeout .oe-order-footer {
+  background: #e8f4fd;
+}
+
 .oe-order-header {
   display: flex;
   align-items: center;
@@ -387,7 +462,50 @@
   font-weight: 700;
   color: var(--color-gray-800);
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
+
+.oe-order-title-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.oe-order-title-badge--takeout {
+  background: #b3e5fc;
+  color: #0277bd;
+}
+
+.oe-order-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.oe-move-table-btn {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-primary, #6c63ff);
+  background: none;
+  border: 1.5px solid rgba(108, 99, 255, 0.4);
+  cursor: pointer;
+  padding: 0.25rem 0.65rem;
+  border-radius: 8px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.oe-move-table-btn:hover {
+  background: rgba(108, 99, 255, 0.08);
+  border-color: var(--color-primary, #6c63ff);
+}
+
+.oe-move-table-btn[hidden] { display: none !important; }
 
 .oe-order-clear-btn {
   font-size: 0.8rem;
@@ -790,8 +908,8 @@
   background: #fff;
   border-radius: 16px;
   width: 100%;
-  max-width: 520px;
-  max-height: 88vh;
+  max-width: 1040px;
+  max-height: 72vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 16px 64px rgba(0,0,0,0.2);
@@ -807,30 +925,30 @@
 }
 
 .oe-modal-item-img {
-  width: 72px;
-  height: 54px;
+  width: 94px;
+  height: 70px;
   object-fit: cover;
-  border-radius: 8px;
+  border-radius: 10px;
   flex-shrink: 0;
 }
 
 .oe-modal-item-info { flex: 1; min-width: 0; }
 
 .oe-modal-item-name {
-  font-size: 1.05rem;
+  font-size: 1.37rem;
   font-weight: 700;
   color: var(--color-gray-900);
   margin: 0 0 0.2rem;
 }
 
 .oe-modal-item-desc {
-  font-size: 0.8125rem;
+  font-size: 1.06rem;
   color: var(--color-gray-500);
   margin: 0;
 }
 
 .oe-modal-item-price {
-  font-size: 0.875rem;
+  font-size: 1.14rem;
   font-weight: 600;
   color: var(--color-primary);
   margin: 0.2rem 0 0;
@@ -838,13 +956,13 @@
 
 .oe-modal-close {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: 42px;
+  height: 42px;
   border: none;
   border-radius: 50%;
   background: var(--color-gray-100);
   color: var(--color-gray-600);
-  font-size: 1.2rem;
+  font-size: 1.56rem;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -862,8 +980,8 @@
 .oe-mod-group--error {
   padding: 0.5rem 0.6rem;
   border-radius: 0.5rem;
-  background: #fff0f0;
-  border: 1px solid #f87171;
+  background: #ffe0e0;
+  border: 1.5px solid #c83232;
   margin-bottom: 1rem;
 }
 
@@ -874,7 +992,7 @@
 }
 
 .oe-mod-group-name {
-  font-size: 0.75rem;
+  font-size: 0.975rem;
   font-weight: 700;
   color: var(--color-gray-700);
   margin-bottom: 0.4rem;
@@ -882,14 +1000,44 @@
   letter-spacing: 0.04em;
 }
 
+/* Required modifier groups — pastel pill label, matching selected-option tint */
+.oe-mod-group--required .oe-mod-group-name {
+  display: inline-flex;
+  align-items: center;
+  background: var(--mod-bg);
+  border: 1.5px solid var(--mod-border);
+  color: #333;
+  border-radius: 99px;
+  padding: 0.15rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.oe-mod-group--required .oe-mod-required {
+  color: inherit;
+  opacity: 0.7;
+}
+
+.oe-mod-group--required .oe-mod-option.selected {
+  border-color: var(--mod-active);
+  background: var(--mod-active);
+  color: #fff;
+}
+
+/* Missing required — pill turns darker red */
+.oe-mod-group--error.oe-mod-group--required .oe-mod-group-name {
+  background: #ffd0d0;
+  border-color: #c03030;
+  color: #7a0000;
+}
+
 .oe-mod-options { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 
 .oe-mod-option {
-  padding: 0.35rem 0.75rem;
+  padding: 0.45rem 1rem;
   border: 2px solid var(--color-gray-200);
   border-radius: 99px;
   background: #fff;
-  font-size: 0.8125rem;
+  font-size: 1.06rem;
   cursor: pointer;
   color: var(--color-gray-700);
   transition: border-color 0.12s, background 0.12s, color 0.12s;
@@ -904,7 +1052,7 @@
 .oe-mod-option.unavailable { opacity: 0.4; cursor: default; pointer-events: none; }
 
 .oe-modal-note-label {
-  font-size: 0.8125rem;
+  font-size: 1.06rem;
   font-weight: 600;
   color: var(--color-gray-700);
   display: block;
@@ -922,12 +1070,12 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.25rem 0.625rem;
+  padding: 0.35rem 0.85rem;
   border: 1.5px solid var(--color-gray-300);
   border-radius: 999px;
   background: white;
   color: var(--color-gray-700);
-  font-size: 0.8rem;
+  font-size: 1.04rem;
   font-family: inherit;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s, color 0.12s;
@@ -953,10 +1101,10 @@
 
 .oe-modal-note {
   width: 100%;
-  padding: 0.5rem 0.75rem;
+  padding: 0.65rem 1rem;
   border: 1px solid var(--color-gray-300);
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: 1.14rem;
   resize: none;
   font-family: inherit;
   color: var(--color-gray-800);
@@ -966,7 +1114,7 @@
 .oe-course-section { margin-top: 0.75rem; }
 
 .oe-course-label {
-  font-size: 0.8125rem;
+  font-size: 1.06rem;
   font-weight: 600;
   color: var(--color-gray-700);
   display: block;
@@ -977,11 +1125,11 @@
 
 .oe-course-btn {
   flex: 1;
-  padding: 0.4rem 0.5rem;
+  padding: 0.5rem 0.65rem;
   border: 2px solid var(--color-gray-200);
   border-radius: 8px;
   background: #fff;
-  font-size: 0.8rem;
+  font-size: 1.04rem;
   font-weight: 600;
   cursor: pointer;
   color: var(--color-gray-600);

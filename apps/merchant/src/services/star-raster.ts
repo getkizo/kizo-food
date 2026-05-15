@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Star Graphic Mode (raster) receipt rendering via receiptline v4 + sharp
  *
  * The TSP100/TSP143 III has NO device font ROM — text commands (Star Line Mode,
@@ -50,7 +50,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { sortItemsByCourse, kitchenItems } from '../utils/course-items'
 import { LANG, type Lang } from './print-lang'
-import type { PrintItem, KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions, GiftCardReceiptOptions } from './print-types'
+import type { KitchenTicketOptions, CounterTicketOptions, CustomerReceiptOptions, CustomerBillOptions, TestPageOptions, GiftCardReceiptOptions, CouponTicketOptions } from './print-types'
+import { logger } from '../utils/logger'
 
 /** Options for the SVG render step (text → vector). */
 const SVG_RENDER_OPTIONS = {
@@ -100,21 +101,20 @@ const SHARP_TIMEOUT_MS = 30_000
 export async function buildStarGraphicBytes(markup: string, cpl = 42): Promise<Buffer> {
   // NF-4.1: Guard against pathologically large markup
   if (markup.length > MAX_MARKUP_BYTES) {
-    console.warn(`[star-raster] markup too large (${markup.length} chars > ${MAX_MARKUP_BYTES}), refusing to rasterize`)
+    logger.warn('[star-raster]', 'Markup too large, refusing to rasterize', { length: markup.length, limit: MAX_MARKUP_BYTES })
     throw new Error(`Receipt markup exceeds size limit (${markup.length} chars)`)
   }
 
   // Full markup dump — only when DEBUG_PRINT_MARKUP is set (can be verbose / PII-sensitive)
   if (process.env.DEBUG_PRINT_MARKUP) {
-    console.log('[star-raster] markup ─────────────────────────────────────')
-    console.log(markup)
-    console.log('[star-raster] ─────────────────────────────────────────────')
+    logger.debug('[star-raster]', 'markup', { markup })
   }
 
   // Step 1: render markup to SVG
   const svgOptions = cpl === 42 ? SVG_RENDER_OPTIONS : { ...SVG_RENDER_OPTIONS, cpl }
-  const svg = receiptline.transform(markup, svgOptions)
-  console.log(`[star-raster] SVG length: ${svg.length} chars`)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const svg = receiptline.transform(markup, svgOptions as any)
+  logger.debug('[star-raster]', 'SVG rendered', { svgLength: svg.length })
 
   // Step 2: rasterize SVG to PNG via sharp (librsvg, ARM-safe, no headless browser).
   // Resize to PRINTER_DOT_WIDTH wide, preserving aspect ratio (height adjusts to
@@ -140,10 +140,10 @@ export async function buildStarGraphicBytes(markup: string, cpl = 42): Promise<B
   try {
     meta = await sharp(png).metadata()
   } catch (err) {
-    console.error(`[star-raster] PNG metadata read failed (SVG length=${svg.length}):`, err)
+    logger.error('[star-raster]', 'PNG metadata read failed — SVG may be empty or corrupt', { svgLength: svg.length, err: String(err) })
     throw new Error('[star-raster] PNG metadata read failed — SVG may be empty or corrupt')
   }
-  console.log(`[star-raster] PNG ${meta.width}×${meta.height} px, ${png.length} bytes`)
+  logger.debug('[star-raster]', 'PNG rasterized', { width: meta.width, height: meta.height, bytes: png.length })
   const base64 = png.toString('base64')
 
   // Step 3: encode PNG as Star Graphic Mode bytes.
@@ -156,11 +156,12 @@ export async function buildStarGraphicBytes(markup: string, cpl = 42): Promise<B
   // The `{cut}` in the per-ticket markup becomes a scissors icon in the SVG
   // (visual only).  The `\n{cut}` here generates the actual paper-cut command
   // in the Star Graphic byte stream.
-  const result = receiptline.transform(`{i:${base64}}\n{cut}`, STAR_GRAPHIC_OPTIONS)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = receiptline.transform(`{i:${base64}}\n{cut}`, STAR_GRAPHIC_OPTIONS as any)
   // NF-4.4: receiptline stargraphic returns a Latin-1 encoded string (byte-per-char).
   // 'latin1' is the explicit alias for this encoding; 'binary' is a deprecated alias.
   const bytes = Buffer.from(result, 'latin1')
-  console.log(`[star-raster] stargraphic bytes: ${bytes.length}`)
+  logger.debug('[star-raster]', 'Star Graphic encoded', { bytes: bytes.length })
   return bytes
 }
 
@@ -181,8 +182,8 @@ const LOGO_SM  = loadLogoB64('logo-sm-b64.txt')
 /** Inverted logo, white on black — for takeout bag header */
 const LOGO_INV = loadLogoB64('logo-inv-b64.txt')
 
-if (!LOGO_SM)  console.warn('[star-raster] logo-sm-b64.txt not found — receipts will print without logo')
-if (!LOGO_INV) console.warn('[star-raster] logo-inv-b64.txt not found — takeout tickets will print without logo')
+if (!LOGO_SM)  logger.warn('[star-raster]', 'logo-sm-b64.txt not found — receipts will print without logo')
+if (!LOGO_INV) logger.warn('[star-raster]', 'logo-inv-b64.txt not found — takeout tickets will print without logo')
 
 /**
  * Returns a receiptline `{i:base64}` image line, or empty string if the logo
@@ -196,6 +197,11 @@ function logoBlock(useInverted = false): string {
 // ---------------------------------------------------------------------------
 // Escape helpers
 // ---------------------------------------------------------------------------
+
+/** Strip parenthetical annotations like "(Vegetarian)" from printed labels. */
+function stripParens(s: string): string {
+  return s.replace(/\s*\([^)]*\)/g, '').trim()
+}
 
 /** Escape receiptline special characters in raw text content. */
 function rl(s: string): string {
@@ -258,8 +264,10 @@ function parseDate(iso?: string | null): Date {
   return new Date(iso)
 }
 
-function fmtTime(iso?: string | null): string {
-  return parseDate(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+function fmtTime(iso?: string | null, timezone?: string | null): string {
+  const fmt: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
+  if (timezone) fmt.timeZone = timezone
+  return parseDate(iso).toLocaleTimeString('en-US', fmt)
 }
 
 function fmtDate(iso?: string | null): string {
@@ -298,17 +306,27 @@ export function buildKitchenTicketMarkup(opts: KitchenTicketOptions): string {
     opts.orderType === 'dine_in'  ? L.dineIn   :
     opts.orderType === 'delivery' ? L.delivery  : L.takeout
 
-  const lines: string[] = [
-    '',
+  const lines: string[] = []
+
+  if (opts.showGlutenFreeBanner) {
+    lines.push(
+      '{align:center}',
+      '=',
+      `^^^${bold('GLUTEN FREE')}`,
+      '=',
+      '{align:left}',
+    )
+  }
+
+  lines.push(
     // Property MUST be on its own line — inline `{property}text` is silently
     // discarded by receiptline.  Bold uses the `"text"` decorator; scale uses
     // `^` prefixes (^^^= roughly triple-height on the printer image).
     '{align:center}',
     `^^^${bold(rl(typeLabel))}`,
     '{align:left}',
-    '=',
     row(`#${shortId}`, time, 'size:2'),
-  ]
+  )
 
   const locParts: string[] = []
   if (opts.roomLabel)  locParts.push(rl(opts.roomLabel))
@@ -324,12 +342,22 @@ export function buildKitchenTicketMarkup(opts: KitchenTicketOptions): string {
 
   lines.push('=')
 
+  if (opts.scheduledFor) {
+    lines.push(
+      '{align:center}',
+      `\`SCHEDULED ORDER\``,
+      `^^${bold('Ready at ' + fmtTime(opts.scheduledFor, opts.timezone))}`,
+      '{align:left}',
+      '=',
+    )
+  }
+
   for (const item of sortedItems) {
-    lines.push(`^^${bold(` ${item.quantity}  ${rl(item.dishName)}`)}`)
+    lines.push(`^^${bold(` ${item.quantity} X ${rl(stripParens(item.dishName))}`)}`)
     if ((item.modifiers?.length ?? 0) > 0) {
       for (const mod of item.modifiers!) {
         // Inverted (white on black) for high kitchen visibility
-        lines.push(`^^   \`${rl(mod.name)}\``)
+        lines.push(`^^^   \`${rl(stripParens(mod.name))}\``)
       }
     }
 
@@ -350,9 +378,9 @@ export function buildKitchenTicketMarkup(opts: KitchenTicketOptions): string {
     )
   }
 
-  // 12 blank lines (~240px @ cpl=42/~20px per line) clears the TSP100 III
+  // 10 blank lines (reduced from 12) clears the TSP100 III
   // platen-to-cutter gap (~30mm / 240 dots) before the cut fires.
-  lines.push('', '', '', '', '', '', '', '', '', '', '', '')
+  lines.push('', '', '', '', '', '', '', '', '', '')
   lines.push('{align:left}')
   lines.push(margin())
   return lines.join('\n')
@@ -400,7 +428,7 @@ function buildStandardCounterMarkup(opts: CounterTicketOptions): string {
   const locationLine = locParts.length > 0
     ? `${rl(typeLabelMixed)} -- ${locParts.join(' / ')}`
     : rl(typeLabelMixed)
-  lines.push(`^^${bold(locationLine)}`)
+  lines.push(`^^^${bold(locationLine)}`)
 
   if (opts.customerName && opts.orderType !== 'dine_in' && opts.customerName !== 'Dine-in') {
     lines.push(`^^^${bold(rl(opts.customerName))}`)
@@ -413,23 +441,33 @@ function buildStandardCounterMarkup(opts: CounterTicketOptions): string {
     lines.push('-')
   }
 
+  if (opts.scheduledFor) {
+    lines.push(
+      '{align:center}',
+      `\`SCHEDULED ORDER\``,
+      `^^^${bold('Ready at ' + fmtTime(opts.scheduledFor, opts.timezone))}`,
+      '{align:left}',
+      '=',
+    )
+  }
+
   for (const item of opts.items) {
-    lines.push(`^^${bold(` ${item.quantity}  ${rl(item.dishName)}`)}`)
+    lines.push(`^^^${bold(` ${item.quantity} X ${rl(stripParens(item.dishName))}`)}`)
     if ((item.modifiers?.length ?? 0) > 0) {
       for (const mod of item.modifiers!) {
         // Inverted for easy scanning when packing the order
-        lines.push(`^^   \`${rl(mod.name)}\``)
+        lines.push(`^^^   \`${rl(stripParens(mod.name))}\``)
       }
     }
 
     if (item.dishLabel) {
-      lines.push(`^^   ${bold(rl(item.dishLabel))}`)
+      lines.push(`^^^   ${bold(rl(item.dishLabel))}`)
     }
     if (item.specialInstructions) {
-      lines.push(`^^   ${bold('>> ' + rl(item.specialInstructions))}`)
+      lines.push(`^^^   ${bold('>> ' + rl(item.specialInstructions))}`)
     }
     if (item.serverNotes) {
-      lines.push(`^^   ${bold('* ' + rl(item.serverNotes))}`)
+      lines.push(`^^^   ${bold('* ' + rl(item.serverNotes))}`)
     }
   }
 
@@ -437,18 +475,18 @@ function buildStandardCounterMarkup(opts: CounterTicketOptions): string {
 
   if (opts.notes) {
     lines.push(
-      `^^${bold(rl(L.note))}: ${rl(opts.notes)}`,
+      `^^^${bold(rl(L.note))}: ${rl(opts.notes)}`,
       '-',
     )
   }
 
   if (opts.utensilsNeeded) {
-    lines.push(`^^${bold(rl(L.utensils))}`, '-')
+    lines.push(`^^^${bold(rl(L.utensils))}`, '-')
   }
 
-  // 12 blank lines (~240px @ cpl=42/~20px per line) clears the TSP100 III
+  // 14 blank lines (increased from 12) clears the TSP100 III
   // platen-to-cutter gap (~30mm / 240 dots) before the cut fires.
-  lines.push('', '', '', '', '', '', '', '', '', '', '', '')
+  lines.push('', '', '', '', '', '', '', '', '', '', '', '', '', '')
   lines.push('{align:left}')
   lines.push(margin())
   return lines.join('\n')
@@ -495,21 +533,30 @@ function buildTakeoutBagMarkup(opts: CounterTicketOptions & { subtotalCents: num
     lines.push(`^^^${bold('CODE: ' + rl(opts.pickupCode))}`)
   }
   lines.push('-')
+
+  if (opts.scheduledFor) {
+    lines.push(
+      '{align:center}',
+      `\`SCHEDULED ORDER\``,
+      `^^${bold('Ready at ' + fmtTime(opts.scheduledFor, opts.timezone))}`,
+      '{align:left}',
+      '-',
+    )
+  }
+
   lines.push('')
 
   // Items with prices
   for (const item of opts.items) {
     const lineTotal = item.lineTotalCents ?? (item.priceCents * item.quantity)
-    lines.push(row(` ${item.quantity}x  ${item.dishName}`, fmtCents(lineTotal)))
+    lines.push(row(` ${item.quantity}x  ${stripParens(item.dishName)}`, fmtCents(lineTotal)))
     if (item.quantity > 1) {
       lines.push(`        @ ${fmtCents(item.priceCents)} each`)
     }
     for (const mod of item.modifiers ?? []) {
       if (mod.priceCents !== 0) {
         const sign = mod.priceCents > 0 ? '+' : '-'
-        lines.push(row(`        ${mod.name}`, `${sign}${fmtCents(Math.abs(mod.priceCents))}`))
-      } else {
-        lines.push(`        ${rl(mod.name)}`)
+        lines.push(row(`        ${stripParens(mod.name)}`, `${sign}${fmtCents(Math.abs(mod.priceCents))}`))
       }
     }
 
@@ -617,8 +664,6 @@ export function buildCustomerReceiptMarkup(opts: CustomerReceiptOptions): string
       if (mod.priceCents !== 0) {
         const sign = mod.priceCents > 0 ? '+' : '-'
         lines.push(row(`       ${mod.name}`, `${sign}${fmtCents(Math.abs(mod.priceCents))}`))
-      } else {
-        lines.push(`       ${rl(mod.name)}`)
       }
     }
   }
@@ -731,8 +776,6 @@ export function buildCustomerBillMarkup(opts: CustomerBillOptions): string {
       if (mod.priceCents !== 0) {
         const sign = mod.priceCents > 0 ? '+' : '-'
         lines.push(row(`       ${mod.name}`, `${sign}${fmtCents(Math.abs(mod.priceCents))}`))
-      } else {
-        lines.push(`       ${rl(mod.name)}`)
       }
     }
   }
@@ -770,7 +813,7 @@ export function buildCustomerBillMarkup(opts: CustomerBillOptions): string {
       '',
     )
     for (const pct of tipPcts) {
-      const tipAmt       = Math.round(opts.subtotalCents * pct / 100)
+      const tipAmt       = Math.round(totalCents * pct / 100)
       const totalWithTip = totalCents + tipAmt
       lines.push(rl(`${pct}%  •  ${fmtCents(tipAmt)}  →  ${fmtCents(totalWithTip)}`))
     }
@@ -788,6 +831,18 @@ export function buildCustomerBillMarkup(opts: CustomerBillOptions): string {
     )
   } else {
     lines.push('', '')
+  }
+
+  // Feedback QR
+  if (opts.feedbackUrl) {
+    lines.push(
+      '{align:center}',
+      `^^${bold(rl('Your feedback matters to us!'))}`,
+      '',
+      `{code:${opts.feedbackUrl};option:qrcode,2,M}`,
+      '',
+      '{align:left}',
+    )
   }
 
   // Footer
@@ -914,4 +969,111 @@ export function buildGiftCardReceiptMarkup(opts: GiftCardReceiptOptions): string
 
 export function buildGiftCardReceiptRaster(opts: GiftCardReceiptOptions): Promise<Buffer> {
   return buildStarGraphicBytes(buildGiftCardReceiptMarkup(opts))
+}
+
+// ---------------------------------------------------------------------------
+// Coupon ticket — marketing coupon with QR code, printed to counter printer
+// ---------------------------------------------------------------------------
+
+function selectCouponHeader(fulfillmentRestriction?: string | null): string {
+  if (fulfillmentRestriction === 'takeout') return 'Order online & save!'
+  const headers = ['Thank you for dining with us!', 'A special offer just for you!', 'Come back & save!']
+  return headers[Math.floor(Math.random() * headers.length)]
+}
+
+function formatScheduleForPrint(scheduleJson?: string | null): string | null {
+  if (!scheduleJson) return null
+  try {
+    const s = JSON.parse(scheduleJson) as { days?: number[]; windows?: { start: string; end: string }[] }
+    const parts: string[] = []
+    const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    if (s.days?.length) {
+      if (s.days.length === 7) {
+        parts.push('Daily')
+      } else {
+        const sorted = [...s.days].sort((a, b) => a - b)
+        const consecutive = sorted.every((d, i) => i === 0 || d === sorted[i - 1] + 1)
+        if (consecutive && sorted.length > 2) {
+          parts.push(`${DAY_ABBR[sorted[0]]}–${DAY_ABBR[sorted[sorted.length - 1]]}`)
+        } else {
+          parts.push(sorted.map(d => DAY_ABBR[d]).join(', '))
+        }
+      }
+    }
+    if (s.windows?.length) {
+      const fmtTime = (t: string) => {
+        const [h, m] = t.split(':').map(Number)
+        const suffix = h >= 12 ? 'pm' : 'am'
+        const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+        return m === 0 ? `${h12}${suffix}` : `${h12}:${String(m).padStart(2, '0')}${suffix}`
+      }
+      parts.push(s.windows.map(w => `${fmtTime(w.start)}–${fmtTime(w.end)}`).join(', '))
+    }
+    return parts.length ? parts.join(' ') : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build receiptline markup for a marketing coupon ticket.
+ *
+ * Printed to the counter printer on demand from the dashboard Orders tab.
+ * Shows merchant branding, a randomly chosen header, the campaign name +
+ * discount label, and a QR code linking to the marketing engine offer page.
+ */
+export function buildCouponTicketMarkup(opts: CouponTicketOptions): string {
+  const qrUrl = `https://qr.kizo.example/c/${opts.campaignSlug}`
+  const header = selectCouponHeader(opts.fulfillmentRestriction)
+  const displayUrl = qrUrl.replace(/^https?:\/\//, '')
+
+  const logo = logoBlock(false)
+
+  const lines: string[] = [margin()]
+
+  // Header — logo + merchant name + contact
+  lines.push('{align:center}')
+  if (logo) lines.push(logo)
+  lines.push(bold(rl(opts.merchantName)))
+  if (opts.address)     lines.push(rl(opts.address))
+  if (opts.phoneNumber) lines.push(rl(opts.phoneNumber))
+  if (opts.website) {
+    const siteUrl = opts.website.replace(/^https?:\/\//, '')
+    lines.push(rl(siteUrl))
+  }
+
+  lines.push('-')
+  lines.push(`^^${bold(rl(header))}`)
+  lines.push('-')
+
+  // Campaign offer
+  lines.push(`^^${rl(opts.campaignName)}`)
+  lines.push('')
+  lines.push(rl(opts.discountLabel))
+
+  const scheduleText = formatScheduleForPrint(opts.scheduleJson)
+  if (scheduleText) {
+    lines.push('')
+    lines.push(rl(`Valid: ${scheduleText}`))
+  }
+
+  lines.push('-')
+
+  // QR code
+  lines.push(`{code:${qrUrl};option:qrcode,6,M}`)
+  lines.push('')
+  lines.push(rl(displayUrl))
+
+  // Footer
+  lines.push(
+    '', '', '', '', '', '', '', '', '',
+    '{align:left}',
+    margin(),
+  )
+
+  return lines.join('\n')
+}
+
+export function buildCouponTicketRaster(opts: CouponTicketOptions): Promise<Buffer> {
+  return buildStarGraphicBytes(buildCouponTicketMarkup(opts))
 }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Backup, Restore, Wipe, and S3-config endpoints.
  *
  * Backup types:  menu | orders | employees | profile | full
@@ -560,7 +560,7 @@ backup.get(
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
 
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     // M-10: Rate-limit backup generation (1 per minute per merchant)
     if (!checkBackupRateLimit(backupLastRun, merchantId)) {
@@ -602,7 +602,7 @@ backup.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     // M-10: Rate-limit restore operations (1 per minute per merchant)
     if (!checkBackupRateLimit(restoreLastRun, merchantId)) {
@@ -678,7 +678,7 @@ backup.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     let body: { type?: string; confirm?: boolean }
     try { body = await c.req.json() } catch { return c.json({ error: 'Invalid JSON body' }, 400) }
 
@@ -742,7 +742,7 @@ backup.get(
   '/api/merchants/:id/s3-config',
   authenticate,
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const cfg = await getS3Config(merchantId)
     if (!cfg) return c.json({ configured: false })
     return c.json({ configured: true, bucket: cfg.bucket, region: cfg.region })
@@ -759,7 +759,7 @@ backup.put(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     let body: { accessKeyId?: string; secretAccessKey?: string; bucket?: string; region?: string }
     try { body = await c.req.json() } catch { return c.json({ error: 'Invalid JSON body' }, 400) }
 
@@ -793,7 +793,7 @@ backup.delete(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const ipAddress  = c.get('ipAddress') ?? ''
     try {
       await deleteAPIKey(merchantId, 'cloud', 's3', ipAddress)
@@ -813,7 +813,7 @@ backup.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
     const cfg = await getS3Config(merchantId)
     if (!cfg) return c.json({ error: 'S3 not configured' }, 400)
 
@@ -839,7 +839,7 @@ backup.post(
   authenticate,
   requireRole('owner', 'manager'),
   async (c: AuthContext) => {
-    const merchantId = c.req.param('id')
+    const merchantId = c.req.param('id')!
 
     let body: { key?: string }
     try {

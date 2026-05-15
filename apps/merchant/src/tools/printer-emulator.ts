@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Printer Emulator — TCP/9100 + WebPRNT/9101 + Web UI/9200
  *
  * Intercepts print jobs so you can debug the full print pipeline at your desk.
@@ -345,7 +345,7 @@ Bun.listen({
       }
     },
 
-    error(socket, err) {
+    error(_socket, err) {
       console.error(`[emulator] TCP error:`, err.message)
     },
   },
