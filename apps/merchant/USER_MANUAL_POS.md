@@ -231,7 +231,7 @@ The header has back / forward arrows to step through days, a **Today** button, a
 
 A complete view of every gift card the restaurant has issued.
 
-![Gift Cards](screenshots/Screenshot%202026-05-15%20140427.png)
+![Gift Cards](screenshots/Screenshot%202026-05-15%20140416.png)
 
 A four-card stats strip across the top shows the count of Active, Depleted, and Expired cards plus the total Outstanding Balance — the dollar amount of cards still on the books that customers can still spend. The filter chips below the strip let you scope the table to one of those four statuses, and the search box accepts either a code or a buyer's email.
 
@@ -243,7 +243,7 @@ The table itself lists each card with its code (monospace), face value, remainin
 
 The 86'd screen is the kitchen's "what's out right now" panel.
 
-![86'd / Out of Stock](screenshots/Screenshot%202026-05-15%20140416.png)
+![86'd / Out of Stock](screenshots/Screenshot%202026-05-15%20140427.png)
 
 Three stacked cards:
 
